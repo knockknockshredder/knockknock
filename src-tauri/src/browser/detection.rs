@@ -1,6 +1,6 @@
 // src-tauri/src/browser/detection.rs
 
-use crate::browser::paths::{get_browser_base_paths, BROWSER_PATHS};
+use crate::browser::paths::{find_browser_profiles, get_browser_base_paths, BROWSER_PATHS};
 use crate::browser::process::is_browser_running;
 use crate::browser::types::*;
 use std::path::Path;
@@ -10,20 +10,31 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
     let mut browsers = Vec::new();
 
     for browser_path in BROWSER_PATHS {
-        let paths = get_browser_base_paths(browser_path);
+        let base_paths = get_browser_base_paths(browser_path);
 
-        for path in paths {
-            if path.exists() {
-                let is_running = is_browser_running(browser_path.name);
-                let size = estimate_directory_size(&path);
+        for base_path in base_paths {
+            if base_path.exists() {
+                // Find all profiles in this browser
+                let profiles = find_browser_profiles(&base_path, browser_path.profile_glob);
 
-                browsers.push(DetectedBrowser {
-                    name: browser_path.name.to_string(),
-                    profile_path: path.to_string_lossy().to_string(),
-                    is_running,
-                    data_types: detect_data_types(&path),
-                    estimated_size_bytes: size,
-                });
+                for profile_path in profiles {
+                    if profile_path.exists() {
+                        let is_running = is_browser_running(
+                            browser_path.process_names,
+                            &base_path,
+                            browser_path.lock_file_pattern,
+                        );
+                        let size = estimate_directory_size(&profile_path);
+
+                        browsers.push(DetectedBrowser {
+                            name: browser_path.name.to_string(),
+                            profile_path: profile_path.to_string_lossy().to_string(),
+                            is_running,
+                            data_types: detect_data_types(&profile_path),
+                            estimated_size_bytes: size,
+                        });
+                    }
+                }
 
                 break; // Found this browser, move to next
             }
@@ -37,12 +48,14 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
 pub fn detect_data_types(profile_path: &Path) -> Vec<BrowserDataType> {
     let mut types = Vec::new();
 
-    if profile_path.exists() {
-        types.push(BrowserDataType::Profile);
+    if !profile_path.exists() {
+        return types;
     }
 
+    types.push(BrowserDataType::Profile);
+
     // Check for cache
-    let cache_names = ["Cache", "cache2", "Code Cache"];
+    let cache_names = ["Cache", "cache2", "Code Cache", "GPUCache", "OfflineCache"];
     for name in &cache_names {
         if profile_path.join(name).exists() {
             types.push(BrowserDataType::Cache);
@@ -51,7 +64,12 @@ pub fn detect_data_types(profile_path: &Path) -> Vec<BrowserDataType> {
     }
 
     // Check for cookies
-    let cookie_files = ["Cookies", "cookies.sqlite"];
+    let cookie_files = [
+        "Cookies",
+        "cookies.sqlite",
+        "cookies.txt",
+        "Network/Cookies",
+    ];
     for name in &cookie_files {
         if profile_path.join(name).exists() {
             types.push(BrowserDataType::Cookies);
@@ -60,7 +78,7 @@ pub fn detect_data_types(profile_path: &Path) -> Vec<BrowserDataType> {
     }
 
     // Check for history
-    let history_files = ["History", "places.sqlite"];
+    let history_files = ["History", "places.sqlite", "Favicons"];
     for name in &history_files {
         if profile_path.join(name).exists() {
             types.push(BrowserDataType::History);
@@ -69,7 +87,7 @@ pub fn detect_data_types(profile_path: &Path) -> Vec<BrowserDataType> {
     }
 
     // Check for passwords
-    let password_files = ["Login Data", "logins.json"];
+    let password_files = ["Login Data", "logins.json", "signons.sqlite"];
     for name in &password_files {
         if profile_path.join(name).exists() {
             types.push(BrowserDataType::Passwords);

@@ -23,9 +23,9 @@ mod tests {
     #[test]
     fn test_safari_only_has_macos() {
         let safari = BROWSER_PATHS.iter().find(|b| b.name == "Safari").unwrap();
-        assert!(safari.windows.is_none());
-        assert!(safari.linux.is_none());
-        assert!(safari.macos.is_some());
+        assert!(safari.windows_paths.is_empty());
+        assert!(safari.linux_paths.is_empty());
+        assert!(!safari.macos_paths.is_empty());
     }
 
     #[test]
@@ -119,12 +119,15 @@ mod tests {
         // Random junk browser name should not match any real process.
         // We don't assert a specific boolean — just that it doesn't panic
         // and returns a bool.
-        let _: bool = is_browser_running("definitely_not_a_real_browser_xyz_zzz");
+        let tmp = TempDir::new().unwrap();
+        let _: bool =
+            is_browser_running(&["definitely_not_a_real_browser_xyz_zzz"], tmp.path(), "");
     }
 
     #[test]
-    fn test_is_browser_running_handles_empty_string() {
-        // Empty browser name should not panic.
-        let _: bool = is_browser_running("");
+    fn test_is_browser_running_handles_empty_strings() {
+        // Empty inputs should not panic.
+        let tmp = TempDir::new().unwrap();
+        let _: bool = is_browser_running(&[""], tmp.path(), "");
     }
 }

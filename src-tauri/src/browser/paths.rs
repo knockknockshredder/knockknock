@@ -4,53 +4,113 @@ use std::path::PathBuf;
 
 pub struct BrowserPath {
     pub name: &'static str,
-    pub windows: Option<&'static str>,
-    pub macos: Option<&'static str>,
-    pub linux: Option<&'static str>,
+    pub process_names: &'static [&'static str], // Process names to check
+    pub windows_paths: &'static [&'static str], // Windows paths (can have multiple)
+    pub macos_paths: &'static [&'static str],   // macOS paths
+    pub linux_paths: &'static [&'static str],   // Linux paths
+    pub lock_file_pattern: &'static str,        // Glob pattern for lock file
+    pub profile_glob: &'static str,             // Glob pattern for profiles
 }
 
 pub const BROWSER_PATHS: &[BrowserPath] = &[
     BrowserPath {
         name: "Chrome",
-        windows: Some("Google\\Chrome\\User Data"),
-        macos: Some("Google/Chrome"),
-        linux: Some("google-chrome"),
+        process_names: &["chrome", "chrome.exe"],
+        windows_paths: &[
+            "Google\\Chrome\\User Data",
+            "Google\\Chrome Beta\\User Data",
+            "Google\\Chrome SxS\\User Data", // Chrome Canary
+        ],
+        macos_paths: &[
+            "Google/Chrome",
+            "Google/Chrome Beta",
+            "Google/Chrome Canary",
+        ],
+        linux_paths: &[
+            "google-chrome",
+            "google-chrome-beta",
+            "google-chrome-unstable",
+        ],
+        lock_file_pattern: "SingletonLock",
+        profile_glob: "Default",
     },
     BrowserPath {
         name: "Firefox",
-        windows: Some("Mozilla\\Firefox\\Profiles"),
-        macos: Some("Firefox/Profiles"),
-        linux: Some(".mozilla/firefox"),
+        process_names: &["firefox", "firefox.exe"],
+        windows_paths: &["Mozilla\\Firefox"],
+        macos_paths: &["Firefox"],
+        linux_paths: &[
+            ".mozilla/firefox",
+            "snap/firefox/common/.mozilla/firefox", // Snap
+            ".var/app/org.mozilla.firefox/.mozilla/firefox", // Flatpak
+        ],
+        lock_file_pattern: "*.default*/lock",
+        profile_glob: "*.default*",
     },
     BrowserPath {
         name: "Edge",
-        windows: Some("Microsoft\\Edge\\User Data"),
-        macos: Some("Microsoft Edge"),
-        linux: Some("microsoft-edge"),
+        process_names: &["msedge", "msedge.exe"],
+        windows_paths: &[
+            "Microsoft\\Edge\\User Data",
+            "Microsoft\\Edge Beta\\User Data",
+        ],
+        macos_paths: &["Microsoft Edge", "Microsoft Edge Beta"],
+        linux_paths: &[
+            "microsoft-edge",
+            "microsoft-edge-beta",
+            "microsoft-edge-dev",
+        ],
+        lock_file_pattern: "SingletonLock",
+        profile_glob: "Default",
     },
     BrowserPath {
         name: "Brave",
-        windows: Some("BraveSoftware\\Brave-Browser\\User Data"),
-        macos: Some("BraveSoftware/Brave-Browser"),
-        linux: Some("BraveSoftware/Brave-Browser"),
+        process_names: &["brave", "brave.exe"],
+        windows_paths: &[
+            "BraveSoftware\\Brave-Browser\\User Data",
+            "BraveSoftware\\Brave-Browser-Beta\\User Data",
+        ],
+        macos_paths: &[
+            "BraveSoftware/Brave-Browser",
+            "BraveSoftware/Brave-Browser-Beta",
+        ],
+        linux_paths: &[
+            "BraveSoftware/Brave-Browser",
+            "BraveSoftware/Brave-Browser-Beta",
+            "snap/brave/current/.config/BraveSoftware/Brave-Browser", // Snap
+        ],
+        lock_file_pattern: "SingletonLock",
+        profile_glob: "Default",
     },
     BrowserPath {
         name: "Opera",
-        windows: Some("Opera Software\\Opera Stable"),
-        macos: Some("com.operasoftware.Opera"),
-        linux: Some("opera"),
+        process_names: &["opera", "opera.exe"],
+        windows_paths: &[
+            "Opera Software\\Opera Stable",
+            "Opera Software\\Opera Next", // Opera Beta
+        ],
+        macos_paths: &["com.operasoftware.Opera"],
+        linux_paths: &["opera", "opera-beta", "opera-developer"],
+        lock_file_pattern: "lock",
+        profile_glob: "Default",
     },
     BrowserPath {
         name: "Vivaldi",
-        windows: Some("Vivaldi\\User Data"),
-        macos: Some("Vivaldi"),
-        linux: Some("vivaldi"),
+        process_names: &["vivaldi", "vivaldi.exe"],
+        windows_paths: &["Vivaldi\\User Data"],
+        macos_paths: &["Vivaldi"],
+        linux_paths: &["vivaldi", "vivaldi-snapshot"],
+        lock_file_pattern: "SingletonLock",
+        profile_glob: "Default",
     },
     BrowserPath {
         name: "Safari",
-        windows: None,
-        macos: Some("Safari"),
-        linux: None,
+        process_names: &["Safari"],
+        windows_paths: &[], // Safari not on Windows
+        macos_paths: &["Safari"],
+        linux_paths: &[], // Safari not on Linux
+        lock_file_pattern: "",
+        profile_glob: "",
     },
 ];
 
@@ -59,13 +119,11 @@ pub fn get_browser_base_paths(browser: &BrowserPath) -> Vec<PathBuf> {
 
     #[cfg(windows)]
     {
-        if let Some(local) = std::env::var("LOCALAPPDATA").ok() {
-            if let Some(win_path) = browser.windows {
+        for win_path in browser.windows_paths {
+            if let Some(local) = std::env::var("LOCALAPPDATA").ok() {
                 paths.push(PathBuf::from(local).join(win_path));
             }
-        }
-        if let Some(roaming) = std::env::var("APPDATA").ok() {
-            if let Some(win_path) = browser.windows {
+            if let Some(roaming) = std::env::var("APPDATA").ok() {
                 paths.push(PathBuf::from(roaming).join(win_path));
             }
         }
@@ -74,7 +132,7 @@ pub fn get_browser_base_paths(browser: &BrowserPath) -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         if let Some(home) = std::env::var("HOME").ok() {
-            if let Some(mac_path) = browser.macos {
+            for mac_path in browser.macos_paths {
                 paths.push(
                     PathBuf::from(home)
                         .join("Library/Application Support")
@@ -86,13 +144,61 @@ pub fn get_browser_base_paths(browser: &BrowserPath) -> Vec<PathBuf> {
 
     #[cfg(target_os = "linux")]
     {
-        if let Some(home) = std::env::var("HOME").ok() {
-            if let Some(linux_path) = browser.linux {
-                paths.push(PathBuf::from(home).join(".config").join(linux_path));
-                paths.push(PathBuf::from(home).join(linux_path));
+        let config_home = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_default();
+            format!("{}/.config", home)
+        });
+
+        for linux_path in browser.linux_paths {
+            if linux_path.starts_with('.') {
+                // Relative to HOME (e.g. ~/.mozilla/firefox)
+                if let Some(home) = std::env::var("HOME").ok() {
+                    paths.push(PathBuf::from(home).join(linux_path));
+                }
+            } else if linux_path.starts_with("snap/") || linux_path.starts_with(".var/") {
+                // Snap or Flatpak paths (e.g. ~/snap/firefox/...)
+                if let Some(home) = std::env::var("HOME").ok() {
+                    paths.push(PathBuf::from(home).join(linux_path));
+                }
+            } else {
+                // Relative to XDG_CONFIG_HOME (e.g. $XDG_CONFIG_HOME/google-chrome)
+                paths.push(PathBuf::from(&config_home).join(linux_path));
             }
         }
     }
 
     paths
+}
+
+/// Find all profile directories for a browser
+pub fn find_browser_profiles(base_path: &PathBuf, profile_glob: &str) -> Vec<PathBuf> {
+    let mut profiles = Vec::new();
+
+    if !base_path.exists() {
+        return profiles;
+    }
+
+    // Look for profile directories
+    if let Ok(entries) = std::fs::read_dir(base_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                // Check if matches profile pattern
+                if name == "Default"
+                    || name.starts_with("Profile ")
+                    || (profile_glob.contains('*') && name.contains("default"))
+                {
+                    profiles.push(path);
+                }
+            }
+        }
+    }
+
+    // If no profiles found, use base path itself
+    if profiles.is_empty() {
+        profiles.push(base_path.clone());
+    }
+
+    profiles
 }
