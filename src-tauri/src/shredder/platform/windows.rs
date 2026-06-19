@@ -26,7 +26,6 @@ impl PlatformIo for WindowsIo {
     fn open_for_shred(&self, path: &Path) -> Result<File, ShredError> {
         OpenOptions::new()
             .write(true)
-            .custom_flags(FILE_FLAG_WRITE_THROUGH)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
             .open(path)
             .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))

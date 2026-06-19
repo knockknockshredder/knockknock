@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 pub struct Dod522022M;
 
-const BUFFER_SIZE: usize = 65536;
+const BUFFER_SIZE: usize = 256 * 1024; // 256 KB
 
 fn dod_pass_pattern(pass: u32) -> PatternType {
     match pass % 3 {
@@ -52,6 +52,8 @@ impl ShredAlgorithm for Dod522022M {
         let start = std::time::Instant::now();
         let mut total_written = 0u64;
         let mut buffer = vec![0u8; BUFFER_SIZE];
+        let mut last_progress_bytes = 0u64;
+        const PROGRESS_INTERVAL: u64 = 1024 * 1024; // 1 MB
 
         for pass in 0..passes {
             let pass_pattern = dod_pass_pattern(pass);
@@ -71,12 +73,15 @@ impl ShredAlgorithm for Dod522022M {
             let mut remaining = file_size;
             while remaining > 0 {
                 let to_write = std::cmp::min(remaining, buffer.len() as u64) as usize;
-                let written = file
-                    .write(&buffer[..to_write])
+                file.write_all(&buffer[..to_write])
                     .map_err(|e| ShredError::from_io_error(PathBuf::from("<file>"), e))?;
-                total_written += written as u64;
-                remaining -= written as u64;
-                progress.on_progress(total_written, file_size * passes as u64);
+                total_written += to_write as u64;
+                remaining -= to_write as u64;
+
+                if total_written - last_progress_bytes >= PROGRESS_INTERVAL {
+                    progress.on_progress(total_written, file_size * passes as u64);
+                    last_progress_bytes = total_written;
+                }
             }
 
             progress.on_pass_complete(pass + 1, passes);
