@@ -1,0 +1,120 @@
+// src-tauri/src/shredder/types.rs
+
+use crate::shredder::errors::ShredError;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::time::Duration;
+
+/// Byte patterns for overwriting
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PatternType {
+    Random,
+    Zeros,
+    Ones,
+}
+
+impl PatternType {
+    pub fn byte_value(&self) -> Option<u8> {
+        match self {
+            PatternType::Zeros => Some(0x00),
+            PatternType::Ones => Some(0xFF),
+            PatternType::Random => None,
+        }
+    }
+}
+
+/// Media type for SSD-aware shredding
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaType {
+    Hdd,
+    Ssd,
+    Unknown,
+}
+
+/// Status of a shredding operation
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum ShredStatus {
+    Shredding,
+    Verifying,
+    Renaming,
+    Truncating,
+    Deleting,
+    Complete,
+    Error { message: String },
+}
+
+/// Result of a single file shredding operation
+#[derive(Debug)]
+pub struct ShredResult {
+    pub success: bool,
+    pub passes_completed: u32,
+    pub bytes_written: u64,
+    pub verification_passed: bool,
+    pub errors: Vec<ShredError>,
+    pub duration: Duration,
+}
+
+/// Result of verification
+#[derive(Debug)]
+pub struct VerificationResult {
+    pub passed: bool,
+    pub blocks_checked: usize,
+    pub mismatches: usize,
+}
+
+/// Information about a hard link
+#[derive(Debug)]
+pub struct HardLinkInfo {
+    pub path: PathBuf,
+    pub link_count: u32,
+    pub warning: Option<String>,
+}
+
+/// Information about a process holding a file lock
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+}
+
+/// Summary report after batch shredding
+#[derive(Debug, Serialize)]
+pub struct ShredReport {
+    pub total_files: usize,
+    pub successful: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub errors: Vec<ShredReportError>,
+    pub total_bytes_shredded: u64,
+    pub duration_secs: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ShredReportError {
+    pub path: String,
+    pub error: String,
+}
+
+/// Progress event sent to frontend
+#[derive(Debug, Clone, Serialize)]
+pub struct ProgressEvent {
+    pub file_path: String,
+    pub file_size: u64,
+    pub bytes_written: u64,
+    pub current_pass: u32,
+    pub total_passes: u32,
+    pub speed_bytes_per_sec: u64,
+    pub estimated_time_remaining_secs: u64,
+    pub status: ShredStatus,
+}
+
+/// Verification levels (user-configurable)
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VerificationLevel {
+    None,
+    Sample,
+    Full,
+}
