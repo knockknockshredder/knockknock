@@ -31,5 +31,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "RWRu7NH+sZIhV4OSqVQ0o6Y8npa2wmNKrUbQSvaI3iAwPp/+AwHo1pz9",
+      "endpoints": [
+        "https://releases.knockknock.app/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
