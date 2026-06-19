@@ -11,6 +11,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::shred::shred_files,
             commands::shred::get_algorithms,
+            commands::shred::validate_paths,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

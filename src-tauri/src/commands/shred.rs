@@ -68,3 +68,47 @@ pub fn get_algorithms() -> Vec<AlgorithmInfo> {
         })
         .collect()
 }
+
+#[derive(serde::Serialize)]
+pub struct FileMetadata {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+}
+
+#[tauri::command]
+pub fn validate_paths(paths: Vec<String>) -> Result<Vec<FileMetadata>, String> {
+    let mut valid = Vec::new();
+    for path_str in paths {
+        let path = std::path::Path::new(&path_str);
+
+        // Check if file exists
+        if !path.exists() {
+            continue;
+        }
+
+        // Check if it's a file (not directory)
+        if !path.is_file() {
+            continue;
+        }
+
+        // Get metadata
+        let metadata = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        // Get filename
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        valid.push(FileMetadata {
+            path: path_str,
+            name,
+            size: metadata.len(),
+        });
+    }
+    Ok(valid)
+}
