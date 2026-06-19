@@ -1,5 +1,6 @@
 // src-tauri/src/shredder/algorithms/mod.rs
 
+pub mod common;
 pub mod dod_522022m;
 pub mod nist_clear;
 pub mod random_only;

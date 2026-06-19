@@ -42,6 +42,7 @@ pub enum ShredStatus {
     Truncating,
     Deleting,
     Complete,
+    Warning { message: String },
     Error { message: String },
 }
 
