@@ -14,5 +14,4 @@ mod tests;
 
 pub use errors::ShredError;
 pub use traits::{PlatformIo, ProgressReporter, ShredAlgorithm, VerificationStrategy};
-pub use types::*;
-pub use verification::VerificationLevel;
+pub use types::{HardLinkInfo, MediaType, PatternType, ProcessInfo, ProgressEvent, ShredReport, ShredReportError, ShredResult, ShredStatus, VerificationLevel, VerificationResult};

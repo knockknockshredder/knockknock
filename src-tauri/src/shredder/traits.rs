@@ -54,7 +54,7 @@ pub trait PlatformIo: Send + Sync {
     fn write_data(&self, file: &mut File, data: &[u8]) -> Result<usize, ShredError>;
     fn sync_to_disk(&self, file: &mut File) -> Result<(), ShredError>;
     fn rename_random(&self, path: &Path) -> Result<std::path::PathBuf, ShredError>;
-    fn truncate(&self, file: &mut File) -> Result<(), ShredError>;
+    fn truncate_to_zero(&self, file: &mut File) -> Result<(), ShredError>;
     fn delete(&self, path: &Path) -> Result<(), ShredError>;
     fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError>;
 
@@ -67,7 +67,11 @@ pub trait PlatformIo: Send + Sync {
     }
 
     fn find_locking_processes(&self, _path: &Path) -> Result<Vec<ProcessInfo>, ShredError> {
-        Ok(vec![])
+        Err(ShredError::IoError {
+            path: _path.to_path_buf(),
+            kind: "Unsupported".to_string(),
+            message: "Process lock detection not supported on this platform".to_string(),
+        })
     }
 
     fn issue_trim(&self, _path: &Path) -> Result<(), ShredError> {
