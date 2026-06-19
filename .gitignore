@@ -12,6 +12,7 @@ dist-ssr/
 *.AppImage
 *.deb
 *.rpm
+*.pkg
 
 # Logs
 *.log
@@ -40,3 +41,29 @@ Cargo.lock
 
 # OS
 desktop.ini
+
+# Developer docs (not app code)
+AGENTS.md
+docs/
+*.md
+!README.md
+!LICENSE
+!SECURITY.md
+!CONTRIBUTING.md
+
+# AI agent artifacts
+.scripts/
+*.pyc
+__pycache__/
+
+# Testing
+coverage/
+test-results/
+playwright-report/
+
+# Misc
+*.bak
+*.tmp
+*.temp
+*.cache
+.local_cache/
