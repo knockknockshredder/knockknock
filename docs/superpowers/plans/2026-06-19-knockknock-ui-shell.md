@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-19-knockknock-ui-design.md`
 
+**Oracle review:** `ses_11ec7c7eeffeXKuuCBHxa3vOmf` — all critical fixes integrated below.
+
 ---
 
 ## File Map
@@ -41,6 +43,7 @@ src/
 │   │   ├── FileListItem.tsx
 │   │   ├── ShredButton.tsx
 │   │   ├── AlgorithmSelector.tsx
+│   │   ├── ShredOptions.tsx
 │   │   └── ConfirmationDialog.tsx
 │   ├── browser/
 │   │   ├── BrowserCard.tsx
@@ -65,7 +68,7 @@ src/
 **Files:**
 - Modify: `vite.config.ts`
 - Modify: `tsconfig.json`
-- Create: `tsconfig.app.json`
+- Create: `src/index.css`
 
 - [ ] **Step 1: Install Tailwind CSS v4**
 
@@ -73,7 +76,7 @@ src/
 pnpm add -D tailwindcss @tailwindcss/vite
 ```
 
-- [ ] **Step 2: Add Tailwind plugin to vite.config.ts**
+- [ ] **Step 2: Add Tailwind plugin and path alias to vite.config.ts**
 
 Replace `vite.config.ts` with:
 
@@ -127,8 +130,8 @@ Replace `tsconfig.json` with:
     "noEmit": true,
     "jsx": "react-jsx",
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
@@ -140,9 +143,11 @@ Replace `tsconfig.json` with:
 }
 ```
 
+**Note:** `noUnusedLocals` and `noUnusedParameters` set to `false` to avoid conflicts with shadcn generated code.
+
 - [ ] **Step 4: Create initial index.css with Tailwind import**
 
-Replace `src/App.css` with `src/index.css`:
+Create `src/index.css`:
 
 ```css
 @import "tailwindcss";
@@ -216,17 +221,9 @@ Expected: JSON with `style: "lyra"`, `baseColor: "neutral"`, Tailwind and paths 
 
 - [ ] **Step 3: Verify index.css was updated**
 
-```bash
-Get-Content src/index.css
-```
-
 Expected: Contains `@import "tailwindcss"` plus `@theme inline` block with CSS variables.
 
 - [ ] **Step 4: Verify lib/utils.ts was created**
-
-```bash
-Get-Content src/lib/utils.ts
-```
 
 Expected: Contains `cn()` function using `clsx` and `tailwind-merge`.
 
@@ -235,8 +232,6 @@ Expected: Contains `cn()` function using `clsx` and `tailwind-merge`.
 ```bash
 pnpm build
 ```
-
-Expected: No errors.
 
 - [ ] **Step 6: Commit**
 
@@ -247,7 +242,7 @@ git commit -m "feat: initialize shadcn with Lyra preset"
 
 ---
 
-## Task 3: Install Magic UI Terminal, Phosphor icons, and fonts
+## Task 3: Install Magic UI Terminal, Phosphor icons, fonts, and Tauri plugins
 
 **Files:**
 - Modify: `src/main.tsx` (font imports)
@@ -272,7 +267,20 @@ pnpm add @phosphor-icons/react
 pnpm add @fontsource-variable/jetbrains-mono @fontsource-variable/inter
 ```
 
-- [ ] **Step 4: Add font imports to main.tsx**
+- [ ] **Step 4: Install Tauri dialog plugin**
+
+```bash
+pnpm add @tauri-apps/plugin-dialog
+```
+
+Also install the Rust side:
+```bash
+cargo add tauri-plugin-dialog
+```
+
+Then register in `src-tauri/src/lib.rs` — add `.plugin(tauri_plugin_dialog::init())` to the builder.
+
+- [ ] **Step 5: Add font imports to main.tsx**
 
 ```typescript
 import React from "react";
@@ -289,17 +297,17 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 );
 ```
 
-- [ ] **Step 5: Verify build**
+- [ ] **Step 6: Verify build**
 
 ```bash
 pnpm build
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A
-git commit -m "feat: add Magic UI Terminal, Phosphor icons, and fonts"
+git commit -m "feat: add Magic UI Terminal, Phosphor icons, fonts, and Tauri dialog plugin"
 ```
 
 ---
@@ -319,73 +327,42 @@ Expected: Creates component files in `src/components/ui/`.
 
 - [ ] **Step 2: Update CSS variables in index.css**
 
-After shadcn init, `index.css` will have a `@theme inline` block. Update the CSS variables to match the Security Console palette. Add these overrides inside the `:root` block (shadcn may have created it):
+After shadcn init, update the CSS variables to match the Security Console palette. The exact content depends on what shadcn init generated — replace the `:root` block colors with:
 
 ```css
-@import "tailwindcss";
-
-@custom-variant dark (&:is(.dark *));
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
-}
-
 :root {
   --radius: 0.25rem;
-  --background: oklch(0.05 0 0);           /* #09090b */
-  --foreground: oklch(0.9 0 0);            /* #e4e4e7 */
-  --card: oklch(0.06 0 0);                 /* #0c0c0e */
+  --background: oklch(0.05 0 0);
+  --foreground: oklch(0.9 0 0);
+  --card: oklch(0.06 0 0);
   --card-foreground: oklch(0.9 0 0);
   --popover: oklch(0.06 0 0);
   --popover-foreground: oklch(0.9 0 0);
-  --primary: oklch(0.8 0.1 195);           /* #22d3ee cyan */
+  --primary: oklch(0.8 0.1 195);
   --primary-foreground: oklch(0.05 0 0);
-  --secondary: oklch(0.12 0 0);            /* #111113 */
+  --secondary: oklch(0.12 0 0);
   --secondary-foreground: oklch(0.7 0 0);
   --muted: oklch(0.12 0 0);
-  --muted-foreground: oklch(0.5 0 0);      /* #71717a */
-  --accent: oklch(0.8 0.1 195);            /* #22d3ee */
+  --muted-foreground: oklch(0.5 0 0);
+  --accent: oklch(0.8 0.1 195);
   --accent-foreground: oklch(0.05 0 0);
-  --destructive: oklch(0.75 0.15 75);      /* #f59e0b amber */
+  --destructive: oklch(0.75 0.15 75);
   --destructive-foreground: oklch(0.05 0 0);
-  --border: oklch(0.15 0 0);               /* #1f1f22 */
+  --border: oklch(0.15 0 0);
   --input: oklch(0.15 0 0);
-  --ring: oklch(0.8 0.1 195);              /* cyan */
+  --ring: oklch(0.8 0.1 195);
   --sidebar: oklch(0.06 0 0);
   --sidebar-foreground: oklch(0.9 0 0);
   --sidebar-accent: oklch(0.1 0 0);
   --sidebar-accent-foreground: oklch(0.9 0 0);
   --sidebar-border: oklch(0.15 0 0);
 }
+```
+
+Also add font-sans and font-mono overrides in the `@theme inline` block:
+```css
+--font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
+--font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
 ```
 
 - [ ] **Step 3: Verify build**
@@ -407,6 +384,8 @@ git commit -m "feat: add shadcn components and Security Console CSS variables"
 
 **Files:**
 - Create: `src/types/index.ts`
+
+**Oracle fix:** `ProgressEvent.status` must match backend `ShredStatus` tagged enum serialization (`{type: "Shredding"}`, `{type: "Error", message: "..."}`).
 
 - [ ] **Step 1: Create types/index.ts**
 
@@ -459,6 +438,16 @@ export interface BrowserProfile {
   selected: boolean;
 }
 
+/** Matches backend ShredStatus tagged enum serialization */
+export type ShredStatus =
+  | { type: "Shredding" }
+  | { type: "Verifying" }
+  | { type: "Renaming" }
+  | { type: "Truncating" }
+  | { type: "Deleting" }
+  | { type: "Complete" }
+  | { type: "Error"; message: string };
+
 export interface ProgressEvent {
   file_path: string;
   file_size: number;
@@ -467,14 +456,7 @@ export interface ProgressEvent {
   total_passes: number;
   speed_bytes_per_sec: number;
   estimated_time_remaining_secs: number;
-  status:
-    | "shredding"
-    | "verifying"
-    | "renaming"
-    | "truncating"
-    | "deleting"
-    | "complete"
-    | "error";
+  status: ShredStatus;
 }
 
 export interface ShredReport {
@@ -498,7 +480,7 @@ pnpm build
 
 ```bash
 git add -A
-git commit -m "feat: add shared TypeScript types"
+git commit -m "feat: add shared TypeScript types with correct ShredStatus"
 ```
 
 ---
@@ -510,6 +492,8 @@ git commit -m "feat: add shared TypeScript types"
 - Create: `src/contexts/ShredContext.tsx`
 - Create: `src/contexts/SettingsContext.tsx`
 - Create: `src/contexts/BrowserContext.tsx`
+
+**Oracle fix:** Remove `confirmBeforeShred` toggle from SettingsContext — confirmation is mandatory per AGENTS.md. Remove unused `passes`/`pattern`/`verificationLevel` from ShredContext (deferred to ShredOptions component which sets them inline).
 
 - [ ] **Step 1: Create NavigationContext.tsx**
 
@@ -559,19 +543,13 @@ import type { ShredFile, LogEntry, AlgorithmOption } from "@/types";
 interface ShredState {
   files: ShredFile[];
   algorithmIndex: number;
-  passes: number;
-  pattern: "random" | "zeros" | "ones";
-  verificationLevel: "none" | "sample" | "full";
   isShredding: boolean;
   logEntries: LogEntry[];
   algorithms: AlgorithmOption[];
-  addFiles: (paths: string[]) => void;
+  addFiles: (files: Array<{ path: string; name: string; size: number }>) => void;
   removeFile: (id: string) => void;
   clearFiles: () => void;
   setAlgorithmIndex: (index: number) => void;
-  setPasses: (passes: number) => void;
-  setPattern: (pattern: "random" | "zeros" | "ones") => void;
-  setVerificationLevel: (level: "none" | "sample" | "full") => void;
   setIsShredding: (v: boolean) => void;
   addLogEntry: (level: LogEntry["level"], message: string) => void;
   clearLog: () => void;
@@ -584,26 +562,22 @@ const ShredContext = createContext<ShredState | null>(null);
 export function ShredProvider({ children }: { children: ReactNode }) {
   const [files, setFiles] = useState<ShredFile[]>([]);
   const [algorithmIndex, setAlgorithmIndex] = useState(0);
-  const [passes, setPasses] = useState(1);
-  const [pattern, setPattern] = useState<"random" | "zeros" | "ones">("random");
-  const [verificationLevel, setVerificationLevel] = useState<"none" | "sample" | "full">("sample");
   const [isShredding, setIsShredding] = useState(false);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [algorithms, setAlgorithms] = useState<AlgorithmOption[]>([]);
 
-  const addFiles = useCallback((paths: string[]) => {
-    const newFiles: ShredFile[] = paths.map((p) => {
-      const parts = p.replace(/\\/g, "/").split("/");
-      return {
+  const addFiles = useCallback((newEntries: Array<{ path: string; name: string; size: number }>) => {
+    const newFiles: ShredFile[] = newEntries
+      .filter((entry) => !files.some((f) => f.path === entry.path))
+      .map((entry) => ({
         id: crypto.randomUUID(),
-        path: p,
-        name: parts[parts.length - 1],
-        size: 0,
-        status: "pending",
-      };
-    });
+        path: entry.path,
+        name: entry.name,
+        size: entry.size,
+        status: "pending" as const,
+      }));
     setFiles((prev) => [...prev, ...newFiles]);
-  }, []);
+  }, [files]);
 
   const removeFile = useCallback((id: string) => {
     setFiles((prev) => prev.filter((f) => f.id !== id));
@@ -634,9 +608,6 @@ export function ShredProvider({ children }: { children: ReactNode }) {
       value={{
         files,
         algorithmIndex,
-        passes,
-        pattern,
-        verificationLevel,
         isShredding,
         logEntries,
         algorithms,
@@ -644,9 +615,6 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         removeFile,
         clearFiles,
         setAlgorithmIndex,
-        setPasses,
-        setPattern,
-        setVerificationLevel,
         setIsShredding,
         addLogEntry,
         clearLog,
@@ -673,42 +641,17 @@ export function useShred() {
 import { createContext, useContext, useState, type ReactNode } from "react";
 
 interface SettingsState {
-  confirmBeforeShred: boolean;
-  confirmBeforeBrowserCleanup: boolean;
   autoClearLog: boolean;
-  defaultAlgorithmIndex: number;
-  defaultVerificationLevel: "none" | "sample" | "full";
-  setConfirmBeforeShred: (v: boolean) => void;
-  setConfirmBeforeBrowserCleanup: (v: boolean) => void;
   setAutoClearLog: (v: boolean) => void;
-  setDefaultAlgorithmIndex: (v: number) => void;
-  setDefaultVerificationLevel: (v: "none" | "sample" | "full") => void;
 }
 
 const SettingsContext = createContext<SettingsState | null>(null);
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
-  const [confirmBeforeShred, setConfirmBeforeShred] = useState(true);
-  const [confirmBeforeBrowserCleanup, setConfirmBeforeBrowserCleanup] = useState(true);
   const [autoClearLog, setAutoClearLog] = useState(false);
-  const [defaultAlgorithmIndex, setDefaultAlgorithmIndex] = useState(0);
-  const [defaultVerificationLevel, setDefaultVerificationLevel] = useState<"none" | "sample" | "full">("sample");
 
   return (
-    <SettingsContext.Provider
-      value={{
-        confirmBeforeShred,
-        confirmBeforeBrowserCleanup,
-        autoClearLog,
-        defaultAlgorithmIndex,
-        defaultVerificationLevel,
-        setConfirmBeforeShred,
-        setConfirmBeforeBrowserCleanup,
-        setAutoClearLog,
-        setDefaultAlgorithmIndex,
-        setDefaultVerificationLevel,
-      }}
-    >
+    <SettingsContext.Provider value={{ autoClearLog, setAutoClearLog }}>
       {children}
     </SettingsContext.Provider>
   );
@@ -736,6 +679,7 @@ interface BrowserState {
   toggleProfile: (browserId: string, profileId: string) => void;
   selectAllProfiles: (browserId: string) => void;
   deselectAllProfiles: (browserId: string) => void;
+  getSelectedCount: () => number;
 }
 
 const BrowserContext = createContext<BrowserState | null>(null);
@@ -779,6 +723,12 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
     );
   };
 
+  const getSelectedCount = () =>
+    browsers.reduce(
+      (sum, b) => sum + b.profiles.filter((p) => p.selected).length,
+      0
+    );
+
   return (
     <BrowserContext.Provider
       value={{
@@ -789,6 +739,7 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
         toggleProfile,
         selectAllProfiles,
         deselectAllProfiles,
+        getSelectedCount,
       }}
     >
       {children}
@@ -826,13 +777,18 @@ git commit -m "feat: add React contexts for navigation, shred, settings, browser
 - Create: `src/components/layout/AppShell.tsx`
 - Modify: `src/App.tsx`
 
+**Oracle fix:** TitleBar buttons must call Tauri window APIs. Add `aria-label` to each button.
+
 - [ ] **Step 1: Create TitleBar.tsx**
 
 ```tsx
 // src/components/layout/TitleBar.tsx
 import { X, Square, Minus } from "@phosphor-icons/react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export function TitleBar() {
+  const appWindow = getCurrentWindow();
+
   return (
     <div
       data-tauri-drag-region
@@ -844,13 +800,25 @@ export function TitleBar() {
         </span>
       </div>
       <div className="flex items-center gap-1">
-        <button className="flex h-8 w-8 items-center justify-center rounded hover:bg-accent/10">
+        <button
+          aria-label="Minimize window"
+          onClick={() => appWindow.minimize()}
+          className="flex h-8 w-8 items-center justify-center rounded hover:bg-accent/10"
+        >
           <Minus size={14} className="text-muted-foreground" />
         </button>
-        <button className="flex h-8 w-8 items-center justify-center rounded hover:bg-accent/10">
+        <button
+          aria-label="Toggle maximize"
+          onClick={() => appWindow.toggleMaximize()}
+          className="flex h-8 w-8 items-center justify-center rounded hover:bg-accent/10"
+        >
           <Square size={12} className="text-muted-foreground" />
         </button>
-        <button className="flex h-8 w-8 items-center justify-center rounded hover:bg-destructive/20">
+        <button
+          aria-label="Close window"
+          onClick={() => appWindow.close()}
+          className="flex h-8 w-8 items-center justify-center rounded hover:bg-destructive/20"
+        >
           <X size={14} className="text-muted-foreground" />
         </button>
       </div>
@@ -913,6 +881,7 @@ export function Sidebar() {
       <div className="border-t border-border p-2">
         <button
           onClick={toggleSidebar}
+          aria-label="Toggle sidebar"
           className="flex w-full items-center justify-center rounded p-2 text-muted-foreground hover:bg-elevated hover:text-foreground"
         >
           <SidebarSimple size={20} />
@@ -961,6 +930,7 @@ import { ShredProvider } from "@/contexts/ShredContext";
 import { SettingsProvider } from "@/contexts/SettingsContext";
 import { BrowserProvider } from "@/contexts/BrowserContext";
 import { AppShell } from "@/components/layout/AppShell";
+import { OperationLog } from "@/components/layout/OperationLog";
 import { useNavigation } from "@/contexts/NavigationContext";
 import { ShredSection } from "@/sections/ShredSection";
 import { BrowserSection } from "@/sections/BrowserSection";
@@ -970,7 +940,7 @@ function AppContent() {
   const { activeSection } = useNavigation();
 
   return (
-    <AppShell>
+    <AppShell bottom={<OperationLog />}>
       {activeSection === "shred" && <ShredSection />}
       {activeSection === "browser" && <BrowserSection />}
       {activeSection === "settings" && <SettingsSection />}
@@ -1028,7 +998,7 @@ pnpm build
 
 ```bash
 git add -A
-git commit -m "feat: add layout shell — AppShell, Sidebar, TitleBar"
+git commit -m "feat: add layout shell — AppShell, Sidebar, TitleBar with window controls"
 ```
 
 ---
@@ -1037,7 +1007,8 @@ git commit -m "feat: add layout shell — AppShell, Sidebar, TitleBar"
 
 **Files:**
 - Create: `src/components/layout/OperationLog.tsx`
-- Modify: `src/App.tsx` (wire OperationLog as bottom panel)
+
+**Oracle fix:** Context-aware empty state (don't show "Drop files" when in Browser/Settings section).
 
 - [ ] **Step 1: Create OperationLog.tsx**
 
@@ -1048,9 +1019,9 @@ import { CaretDown, CaretUp, Trash } from "@phosphor-icons/react";
 import {
   Terminal,
   AnimatedSpan,
-  TypingAnimation,
 } from "@/components/ui/terminal";
 import { useShred } from "@/contexts/ShredContext";
+import { useNavigation } from "@/contexts/NavigationContext";
 import { cn } from "@/lib/utils";
 import type { LogEntry } from "@/types";
 
@@ -1071,7 +1042,15 @@ function logColor(level: LogEntry["level"]): string {
 
 export function OperationLog() {
   const { logEntries, clearLog } = useShred();
+  const { activeSection } = useNavigation();
   const [collapsed, setCollapsed] = useState(false);
+
+  const emptyMessage =
+    activeSection === "shred"
+      ? "No operations yet. Drop files to begin."
+      : activeSection === "browser"
+        ? "No browser operations yet."
+        : "No log entries.";
 
   return (
     <div className="border-t border-border bg-surface">
@@ -1104,7 +1083,7 @@ export function OperationLog() {
         <div className="h-[180px] overflow-auto border-t border-border px-4 pb-4">
           {logEntries.length === 0 ? (
             <p className="py-4 text-center font-mono text-xs text-muted-foreground">
-              No operations yet. Drop files to begin.
+              {emptyMessage}
             </p>
           ) : (
             <Terminal sequence={false} className="max-w-none border-0 bg-transparent p-0">
@@ -1129,37 +1108,17 @@ export function OperationLog() {
 }
 ```
 
-- [ ] **Step 2: Update App.tsx to include OperationLog**
-
-Update the `AppContent` function in `src/App.tsx`:
-
-```tsx
-import { OperationLog } from "@/components/layout/OperationLog";
-
-function AppContent() {
-  const { activeSection } = useNavigation();
-
-  return (
-    <AppShell bottom={<OperationLog />}>
-      {activeSection === "shred" && <ShredSection />}
-      {activeSection === "browser" && <BrowserSection />}
-      {activeSection === "settings" && <SettingsSection />}
-    </AppShell>
-  );
-}
-```
-
-- [ ] **Step 3: Verify build**
+- [ ] **Step 2: Verify build**
 
 ```bash
 pnpm build
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add -A
-git commit -m "feat: add OperationLog with Magic UI Terminal"
+git commit -m "feat: add OperationLog with context-aware empty state"
 ```
 
 ---
@@ -1172,49 +1131,87 @@ git commit -m "feat: add OperationLog with Magic UI Terminal"
 - Create: `src/components/shred/FileList.tsx`
 - Modify: `src/sections/ShredSection.tsx`
 
+**Oracle fix:** Use Tauri native `onDragDropEvent` instead of HTML5 `dataTransfer`. Call `validate_paths` before adding to state. Fetch file metadata for sizes. Deduplicate by path.
+
 - [ ] **Step 1: Create FileDropZone.tsx**
 
 ```tsx
 // src/components/shred/FileDropZone.tsx
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Upload } from "@phosphor-icons/react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useShred } from "@/contexts/ShredContext";
 import { cn } from "@/lib/utils";
 
+interface FileMetadata {
+  path: string;
+  name: string;
+  size: number;
+}
+
 export function FileDropZone() {
-  const { addFiles } = useShred();
+  const { addFiles, addLogEntry } = useShred();
   const [isDragOver, setIsDragOver] = useState(false);
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setIsDragOver(false);
-      const paths = Array.from(e.dataTransfer.files).map((f) => f.name);
-      if (paths.length > 0) addFiles(paths);
-    },
-    [addFiles]
-  );
+  // Tauri native drag-drop
+  useEffect(() => {
+    const appWindow = getCurrentWindow();
+    const unlisten = appWindow.onDragDropEvent((event) => {
+      if (event.payload.type === "over") {
+        setIsDragOver(true);
+      } else if (event.payload.type === "drop") {
+        setIsDragOver(false);
+        const paths = event.payload.paths;
+        if (paths.length > 0) {
+          validateAndAdd(paths);
+        }
+      } else {
+        setIsDragOver(false);
+      }
+    });
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(true);
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
-  const handleDragLeave = useCallback(() => {
-    setIsDragOver(false);
-  }, []);
+  const validateAndAdd = async (paths: string[]) => {
+    try {
+      const validFiles: FileMetadata[] = await invoke("validate_paths", { paths });
+      if (validFiles.length > 0) {
+        addFiles(validFiles);
+        addLogEntry("info", `Added ${validFiles.length} file(s)`);
+      }
+      if (validFiles.length < paths.length) {
+        addLogEntry(
+          "warning",
+          `${paths.length - validFiles.length} file(s) rejected (system file, network drive, or invalid path)`
+        );
+      }
+    } catch (err) {
+      addLogEntry("error", `Validation failed: ${err}`);
+    }
+  };
 
-  const handleClick = useCallback(async () => {
-    // TODO: Replace with Tauri plugin-dialog when installed
-    // const selected = await open({ multiple: true, filters: [{ name: "All Files", extensions: ["*"] }] });
-    // if (selected) addFiles(Array.isArray(selected) ? selected : [selected]);
-  }, [addFiles]);
+  const handleClick = async () => {
+    try {
+      const selected = await open({
+        multiple: true,
+        title: "Select files to shred",
+      });
+      if (selected) {
+        const paths = Array.isArray(selected) ? selected : [selected];
+        await validateAndAdd(paths);
+      }
+    } catch (err) {
+      addLogEntry("error", `File dialog failed: ${err}`);
+    }
+  };
 
   return (
     <div
-      onDrop={handleDrop}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
       onClick={handleClick}
       className={cn(
         "flex cursor-pointer flex-col items-center justify-center gap-3 rounded border-2 border-dashed p-12 transition-colors",
@@ -1239,6 +1236,8 @@ export function FileDropZone() {
 ```
 
 - [ ] **Step 2: Create FileListItem.tsx**
+
+**Oracle fix:** Show per-file error message, not just icon.
 
 ```tsx
 // src/components/shred/FileListItem.tsx
@@ -1267,13 +1266,23 @@ export function FileListItem({ file }: { file: ShredFile }) {
       <StatusIcon status={file.status} />
       <div className="min-w-0 flex-1">
         <p className="truncate font-mono text-sm text-foreground">{file.name}</p>
-        <p className="font-mono text-xs text-muted-foreground">
-          {file.size > 0 ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : "—"}
-        </p>
+        <div className="flex items-center gap-2">
+          <p className="font-mono text-xs text-muted-foreground">
+            {file.size > 0
+              ? file.size > 1073741824
+                ? `${(file.size / 1073741824).toFixed(2)} GB`
+                : `${(file.size / 1048576).toFixed(1)} MB`
+              : "—"}
+          </p>
+          {file.error && (
+            <p className="truncate text-xs text-red-500">{file.error}</p>
+          )}
+        </div>
       </div>
       {file.status === "pending" && (
         <button
           onClick={() => removeFile(file.id)}
+          aria-label={`Remove ${file.name}`}
           className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
         >
           <X size={14} />
@@ -1313,7 +1322,7 @@ export function FileList() {
 }
 ```
 
-- [ ] **Step 4: Update ShredSection.tsx**
+- [ ] **Step 4: Update ShredSection.tsx (partial — full version in Task 10)**
 
 ```tsx
 // src/sections/ShredSection.tsx
@@ -1341,18 +1350,26 @@ pnpm build
 
 ```bash
 git add -A
-git commit -m "feat: add Shred section — FileDropZone, FileList, FileListItem"
+git commit -m "feat: add Shred section with Tauri native drag-drop and path validation"
 ```
 
 ---
 
-## Task 10: Build ShredButton, AlgorithmSelector, ConfirmationDialog
+## Task 10: Build ShredButton, AlgorithmSelector, ShredOptions, ConfirmationDialog
 
 **Files:**
 - Create: `src/components/shred/ShredButton.tsx`
 - Create: `src/components/shred/AlgorithmSelector.tsx`
+- Create: `src/components/shred/ShredOptions.tsx`
 - Create: `src/components/shred/ConfirmationDialog.tsx`
 - Modify: `src/sections/ShredSection.tsx`
+
+**Oracle fixes:**
+- `executeShred` must map `report.errors` to per-file error status (not mark all as "done").
+- Confirmation dialog is always shown (non-optional per AGENTS.md).
+- Add passes/pattern/verificationLevel controls via ShredOptions.
+- Progress listener cleanup on unmount.
+- Correctly handle `ShredStatus` tagged enum.
 
 - [ ] **Step 1: Create ShredButton.tsx**
 
@@ -1388,8 +1405,12 @@ export function ShredButton({ onClick }: ShredButtonProps) {
       {pendingFiles.length > 0 && (
         <p className="font-mono text-xs text-muted-foreground">
           {pendingFiles.length} file{pendingFiles.length !== 1 ? "s" : ""}
-          {totalSize > 0 ? `, ${(totalSize / 1024 / 1024).toFixed(1)} MB` : ""} —
-          this action is irreversible
+          {totalSize > 0
+            ? totalSize > 1073741824
+              ? `, ${(totalSize / 1073741824).toFixed(2)} GB`
+              : `, ${(totalSize / 1048576).toFixed(1)} MB`
+            : ""}{" "}
+          — this action is irreversible
         </p>
       )}
     </div>
@@ -1444,7 +1465,93 @@ export function AlgorithmSelector() {
 }
 ```
 
-- [ ] **Step 3: Create ConfirmationDialog.tsx**
+- [ ] **Step 3: Create ShredOptions.tsx**
+
+```tsx
+// src/components/shred/ShredOptions.tsx
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+interface ShredOptionsProps {
+  passes: number;
+  onPassesChange: (v: number) => void;
+  pattern: "random" | "zeros" | "ones";
+  onPatternChange: (v: "random" | "zeros" | "ones") => void;
+  verificationLevel: "none" | "sample" | "full";
+  onVerificationLevelChange: (v: "none" | "sample" | "full") => void;
+  maxPasses: number;
+}
+
+export function ShredOptions({
+  passes,
+  onPassesChange,
+  pattern,
+  onPatternChange,
+  verificationLevel,
+  onVerificationLevelChange,
+  maxPasses,
+}: ShredOptionsProps) {
+  return (
+    <div className="flex flex-wrap gap-4">
+      <div className="flex flex-col gap-1.5">
+        <label className="font-mono text-xs text-muted-foreground">Passes</label>
+        <Select
+          value={String(passes)}
+          onValueChange={(v) => onPassesChange(Number(v))}
+        >
+          <SelectTrigger className="w-[100px] font-mono text-sm">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {Array.from({ length: maxPasses }, (_, i) => i + 1).map((n) => (
+              <SelectItem key={n} value={String(n)}>
+                {n}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="font-mono text-xs text-muted-foreground">Pattern</label>
+        <Select value={pattern} onValueChange={onPatternChange}>
+          <SelectTrigger className="w-[120px] font-mono text-sm">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="random">Random</SelectItem>
+            <SelectItem value="zeros">Zeros</SelectItem>
+            <SelectItem value="ones">Ones</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="font-mono text-xs text-muted-foreground">
+          Verification
+        </label>
+        <Select value={verificationLevel} onValueChange={onVerificationLevelChange}>
+          <SelectTrigger className="w-[120px] font-mono text-sm">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">None</SelectItem>
+            <SelectItem value="sample">Sample</SelectItem>
+            <SelectItem value="full">Full</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Create ConfirmationDialog.tsx**
 
 ```tsx
 // src/components/shred/ConfirmationDialog.tsx
@@ -1503,46 +1610,67 @@ export function ConfirmationDialog({
 }
 ```
 
-- [ ] **Step 4: Update ShredSection.tsx**
+- [ ] **Step 5: Update ShredSection.tsx**
+
+**Oracle fixes:** Map report errors to per-file status. Progress listener cleanup. Handle ShredStatus tagged enum. Always show confirmation.
 
 ```tsx
 // src/sections/ShredSection.tsx
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { FileDropZone } from "@/components/shred/FileDropZone";
 import { FileList } from "@/components/shred/FileList";
 import { ShredButton } from "@/components/shred/ShredButton";
 import { AlgorithmSelector } from "@/components/shred/AlgorithmSelector";
+import { ShredOptions } from "@/components/shred/ShredOptions";
 import { ConfirmationDialog } from "@/components/shred/ConfirmationDialog";
 import { useShred } from "@/contexts/ShredContext";
-import { useSettings } from "@/contexts/SettingsContext";
-import type { ShredReport, ProgressEvent } from "@/types";
+import type { ShredReport, ProgressEvent, ShredStatus } from "@/types";
+
+function statusToString(status: ShredStatus): string {
+  return status.type.toLowerCase();
+}
 
 export function ShredSection() {
   const {
     files,
     algorithmIndex,
-    passes,
-    pattern,
-    verificationLevel,
     isShredding,
     setIsShredding,
     addLogEntry,
     updateFileStatus,
     setAlgorithms,
+    algorithms,
   } = useShred();
-  const { confirmBeforeShred } = useSettings();
+
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [passes, setPasses] = useState(1);
+  const [pattern, setPattern] = useState<"random" | "zeros" | "ones">("random");
+  const [verificationLevel, setVerificationLevel] = useState<"none" | "sample" | "full">("sample");
+  const unlistenRef = useRef<(() => void) | null>(null);
 
   const pendingFiles = files.filter((f) => f.status === "pending");
+  const currentAlgorithm = algorithms[algorithmIndex];
+
+  // Load algorithms on mount
+  useEffect(() => {
+    invoke<ShredReport[]>("get_algorithms")
+      .then((algorithms) => setAlgorithms(algorithms as any))
+      .catch((err) => addLogEntry("error", `Failed to load algorithms: ${err}`));
+  }, [setAlgorithms, addLogEntry]);
+
+  // Cleanup progress listener on unmount
+  useEffect(() => {
+    return () => {
+      if (unlistenRef.current) {
+        unlistenRef.current();
+      }
+    };
+  }, []);
 
   const handleShredClick = () => {
-    if (confirmBeforeShred) {
-      setDialogOpen(true);
-    } else {
-      executeShred();
-    }
+    setDialogOpen(true);
   };
 
   const executeShred = async () => {
@@ -1554,11 +1682,14 @@ export function ShredSection() {
     // Listen for progress events
     const unlisten = await listen<ProgressEvent>("shred-progress", (event) => {
       const { file_path, status, current_pass, total_passes } = event.payload;
-      addLogEntry(
-        status === "error" ? "error" : "info",
-        `[${file_path}] ${status} (pass ${current_pass}/${total_passes})`
-      );
+      const statusStr = statusToString(status);
+      const message =
+        status.type === "Error"
+          ? `[${file_path}] error: ${status.message}`
+          : `[${file_path}] ${statusStr} (pass ${current_pass}/${total_passes})`;
+      addLogEntry(status.type === "Error" ? "error" : "info", message);
     });
+    unlistenRef.current = unlisten;
 
     try {
       const paths = pendingFiles.map((f) => f.path);
@@ -1570,19 +1701,30 @@ export function ShredSection() {
         verificationLevel,
       });
 
+      // Map report errors to per-file status
+      const failedPaths = new Set(report.errors.map((e) => e.path));
+      for (const file of pendingFiles) {
+        if (failedPaths.has(file.path)) {
+          const errorEntry = report.errors.find((e) => e.path === file.path);
+          updateFileStatus(file.id, "error", errorEntry?.error ?? "Unknown error");
+        } else {
+          updateFileStatus(file.id, "done");
+        }
+      }
+
       addLogEntry(
         "success",
         `Complete: ${report.successful} destroyed, ${report.failed} failed, ${report.skipped} skipped (${report.duration_secs.toFixed(1)}s)`
       );
-
-      // Mark files as done
-      for (const file of pendingFiles) {
-        updateFileStatus(file.id, "done");
-      }
     } catch (err) {
       addLogEntry("error", `Shred failed: ${err}`);
+      // Mark all pending as error
+      for (const file of pendingFiles) {
+        updateFileStatus(file.id, "error", String(err));
+      }
     } finally {
       unlisten();
+      unlistenRef.current = null;
       setIsShredding(false);
     }
   };
@@ -1594,6 +1736,17 @@ export function ShredSection() {
       <FileList />
       <div className="flex flex-col items-center gap-4 pt-2">
         <AlgorithmSelector />
+        {currentAlgorithm && (
+          <ShredOptions
+            passes={passes}
+            onPassesChange={setPasses}
+            pattern={pattern}
+            onPatternChange={setPattern}
+            verificationLevel={verificationLevel}
+            onVerificationLevelChange={setVerificationLevel}
+            maxPasses={currentAlgorithm.max_passes}
+          />
+        )}
         <ShredButton onClick={handleShredClick} />
       </div>
       <ConfirmationDialog
@@ -1607,67 +1760,22 @@ export function ShredSection() {
 }
 ```
 
-- [ ] **Step 5: Verify build**
+- [ ] **Step 6: Verify build**
 
 ```bash
 pnpm build
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A
-git commit -m "feat: add ShredButton, AlgorithmSelector, ConfirmationDialog"
+git commit -m "feat: add ShredButton, AlgorithmSelector, ShredOptions, ConfirmationDialog with error mapping"
 ```
 
 ---
 
-## Task 11: Wire up backend — load algorithms on mount
-
-**Files:**
-- Modify: `src/sections/ShredSection.tsx` (add useEffect to load algorithms)
-
-- [ ] **Step 1: Add algorithm loading to ShredSection**
-
-Add this `useEffect` inside the `ShredSection` component, after the existing hooks:
-
-```typescript
-import { useEffect } from "react";
-
-// Inside ShredSection, after other hooks:
-useEffect(() => {
-  invoke<Array<{
-    index: number;
-    name: string;
-    description: string;
-    default_passes: number;
-    max_passes: number;
-    accepted_patterns: string[];
-    has_fixed_pattern_sequence: boolean;
-  }>>("get_algorithms").then((algorithms) => {
-    setAlgorithms(algorithms);
-  }).catch((err) => {
-    addLogEntry("error", `Failed to load algorithms: ${err}`);
-  });
-}, [setAlgorithms, addLogEntry]);
-```
-
-- [ ] **Step 2: Verify build**
-
-```bash
-pnpm build
-```
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add -A
-git commit -m "feat: wire up get_algorithms backend command"
-```
-
----
-
-## Task 12: Build Settings section
+## Task 11: Build Settings section
 
 **Files:**
 - Create: `src/components/settings/ToggleSetting.tsx`
@@ -1742,37 +1850,12 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { useShred } from "@/contexts/ShredContext";
 
 export function SettingsSection() {
-  const {
-    confirmBeforeShred,
-    setConfirmBeforeShred,
-    confirmBeforeBrowserCleanup,
-    setConfirmBeforeBrowserCleanup,
-    autoClearLog,
-    setAutoClearLog,
-  } = useSettings();
+  const { autoClearLog, setAutoClearLog } = useSettings();
   const { algorithms } = useShred();
 
   return (
     <div className="flex flex-col gap-6">
       <h1 className="font-sans text-xl font-semibold">Settings</h1>
-
-      <section>
-        <h2 className="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
-          Confirmations
-        </h2>
-        <ToggleSetting
-          label="Confirm before shredding"
-          description="Show a confirmation dialog before destroying files"
-          checked={confirmBeforeShred}
-          onCheckedChange={setConfirmBeforeShred}
-        />
-        <ToggleSetting
-          label="Confirm before browser cleanup"
-          description="Show a confirmation dialog before deleting browser data"
-          checked={confirmBeforeBrowserCleanup}
-          onCheckedChange={setConfirmBeforeBrowserCleanup}
-        />
-      </section>
 
       <section>
         <h2 className="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
@@ -1799,6 +1882,25 @@ export function SettingsSection() {
           )}
         </div>
       </section>
+
+      <section>
+        <h2 className="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
+          About
+        </h2>
+        <div className="rounded border border-border bg-surface p-4">
+          <p className="font-mono text-sm font-semibold text-foreground">
+            KnockKnock v0.1.0
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Emergency file shredder for Windows, macOS, and Linux. Implements
+            NIST 800-88 Clear, DoD 5220.22-M, and random overwrite algorithms.
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            This tool is for legitimate privacy/security purposes only. The user
+            is responsible for how they use it.
+          </p>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1814,12 +1916,12 @@ pnpm build
 
 ```bash
 git add -A
-git commit -m "feat: add Settings section with toggles and algorithm info"
+git commit -m "feat: add Settings section with toggles, algorithm info, and about"
 ```
 
 ---
 
-## Task 13: Build Browser section (with mock data)
+## Task 12: Build Browser section (with mock data)
 
 **Files:**
 - Create: `src/components/browser/BrowserCard.tsx`
@@ -1827,6 +1929,8 @@ git commit -m "feat: add Settings section with toggles and algorithm info"
 - Create: `src/components/browser/BrowserWarning.tsx`
 - Create: `src/hooks/useBrowserDetection.ts`
 - Modify: `src/sections/BrowserSection.tsx`
+
+**Oracle fix:** BrowserWarning must block action with a confirmation checkbox, not just a passive banner.
 
 - [ ] **Step 1: Create useBrowserDetection.ts (mock)**
 
@@ -1837,7 +1941,6 @@ import { useBrowser } from "@/contexts/BrowserContext";
 import { useShred } from "@/contexts/ShredContext";
 import type { DetectedBrowser } from "@/types";
 
-// Mock data until backend detect_browsers command exists
 const MOCK_BROWSERS: DetectedBrowser[] = [
   {
     id: "chrome",
@@ -1845,8 +1948,8 @@ const MOCK_BROWSERS: DetectedBrowser[] = [
     icon: "GoogleChrome",
     isRunning: false,
     profiles: [
-      { id: "chrome-default", name: "Default", path: "C:\\Users\\…\\AppData\\Local\\Google\\Chrome\\User Data\\Default", size: 524288000, selected: false },
-      { id: "chrome-profile1", name: "Profile 1", path: "C:\\Users\\…\\AppData\\Local\\Google\\Chrome\\User Data\\Profile 1", size: 104857600, selected: false },
+      { id: "chrome-default", name: "Default", path: "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default", size: 524288000, selected: false },
+      { id: "chrome-profile1", name: "Profile 1", path: "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Profile 1", size: 104857600, selected: false },
     ],
   },
   {
@@ -1855,7 +1958,7 @@ const MOCK_BROWSERS: DetectedBrowser[] = [
     icon: "FirefoxLogo",
     isRunning: false,
     profiles: [
-      { id: "firefox-default", name: "default-release", path: "C:\\Users\\…\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles\\xxxx.default-release", size: 314572800, selected: false },
+      { id: "firefox-default", name: "default-release", path: "%APPDATA%\\Mozilla\\Firefox\\Profiles\\xxxx.default-release", size: 314572800, selected: false },
     ],
   },
 ];
@@ -1869,7 +1972,6 @@ export function useBrowserDetection() {
     addLogEntry("info", "Scanning for installed browsers...");
 
     // TODO: Replace with real backend call
-    // invoke<DetectedBrowser[]>("detect_browsers").then(...)
     const timeout = setTimeout(() => {
       setBrowsers(MOCK_BROWSERS);
       setIsScanning(false);
@@ -1913,7 +2015,7 @@ export function ProfileItem({ browserId, profile }: ProfileItemProps) {
         </p>
       </div>
       <span className="font-mono text-xs text-muted-foreground">
-        {(profile.size / 1024 / 1024).toFixed(0)} MB
+        {(profile.size / 1048576).toFixed(0)} MB
       </span>
     </div>
   );
@@ -1974,21 +2076,40 @@ export function BrowserCard({ browser }: { browser: DetectedBrowser }) {
 
 ```tsx
 // src/components/browser/BrowserWarning.tsx
+import { useState } from "react";
 import { Warning } from "@phosphor-icons/react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 interface BrowserWarningProps {
   browserName: string;
+  onAcknowledge: () => void;
 }
 
-export function BrowserWarning({ browserName }: BrowserWarningProps) {
+export function BrowserWarning({ browserName, onAcknowledge }: BrowserWarningProps) {
+  const [acknowledged, setAcknowledged] = useState(false);
+
   return (
-    <div className="flex items-center gap-3 rounded border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-      <Warning size={20} className="shrink-0 text-amber-500" />
-      <p className="text-sm text-foreground">
-        <strong>{browserName}</strong> is currently running. Shredding browser
-        data while the browser is open may cause errors. Close the browser
-        before continuing.
-      </p>
+    <div className="flex items-start gap-3 rounded border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+      <Warning size={20} className="mt-0.5 shrink-0 text-amber-500" />
+      <div className="flex flex-col gap-2">
+        <p className="text-sm text-foreground">
+          <strong>{browserName}</strong> is currently running. Shredding browser
+          data while the browser is open may cause errors. Close the browser
+          before continuing.
+        </p>
+        <label className="flex items-center gap-2">
+          <Checkbox
+            checked={acknowledged}
+            onCheckedChange={(checked) => {
+              setAcknowledged(!!checked);
+              if (checked) onAcknowledge();
+            }}
+          />
+          <span className="text-xs text-muted-foreground">
+            I understand the risk, continue anyway
+          </span>
+        </label>
+      </div>
     </div>
   );
 }
@@ -1998,6 +2119,7 @@ export function BrowserWarning({ browserName }: BrowserWarningProps) {
 
 ```tsx
 // src/sections/BrowserSection.tsx
+import { useState } from "react";
 import { BrowserCard } from "@/components/browser/BrowserCard";
 import { BrowserWarning } from "@/components/browser/BrowserWarning";
 import { useBrowser } from "@/contexts/BrowserContext";
@@ -2005,15 +2127,29 @@ import { useBrowserDetection } from "@/hooks/useBrowserDetection";
 
 export function BrowserSection() {
   useBrowserDetection();
-  const { browsers, isScanning } = useBrowser();
+  const { browsers, isScanning, getSelectedCount } = useBrowser();
+  const [acknowledgedBrowsers, setAcknowledgedBrowsers] = useState<Set<string>>(new Set());
   const runningBrowsers = browsers.filter((b) => b.isRunning);
+  const selectedCount = getSelectedCount();
+
+  const handleAcknowledge = (browserId: string) => {
+    setAcknowledgedBrowsers((prev) => new Set(prev).add(browserId));
+  };
+
+  const allAcknowledged = runningBrowsers.every((b) =>
+    acknowledgedBrowsers.has(b.id)
+  );
 
   return (
     <div className="flex flex-col gap-4">
       <h1 className="font-sans text-xl font-semibold">Browser Cleanup</h1>
 
       {runningBrowsers.map((b) => (
-        <BrowserWarning key={b.id} browserName={b.name} />
+        <BrowserWarning
+          key={b.id}
+          browserName={b.name}
+          onAcknowledge={() => handleAcknowledge(b.id)}
+        />
       ))}
 
       {isScanning ? (
@@ -2025,6 +2161,22 @@ export function BrowserSection() {
           {browsers.map((browser) => (
             <BrowserCard key={browser.id} browser={browser} />
           ))}
+        </div>
+      )}
+
+      {selectedCount > 0 && (
+        <div className="flex flex-col items-center gap-2 pt-4">
+          <button
+            disabled={!allAcknowledged}
+            className="w-full max-w-[400px] border-2 border-destructive px-6 py-3 font-mono text-sm font-semibold uppercase tracking-wider text-destructive transition-colors hover:border-red-500 hover:bg-red-500 hover:text-background disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Clean {selectedCount} Profile{selectedCount !== 1 ? "s" : ""}
+          </button>
+          {!allAcknowledged && (
+            <p className="font-mono text-xs text-amber-500">
+              Acknowledge running browser warnings to proceed
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -2042,19 +2194,22 @@ pnpm build
 
 ```bash
 git add -A
-git commit -m "feat: add Browser section with mock detection"
+git commit -m "feat: add Browser section with mock detection and running browser warning"
 ```
 
 ---
 
-## Task 14: Update Tauri window config
+## Task 13: Update Tauri config and capabilities
 
 **Files:**
 - Modify: `src-tauri/tauri.conf.json`
+- Modify: `src-tauri/capabilities/default.json`
 
-- [ ] **Step 1: Update window configuration**
+**Oracle fix:** Add `dragDropEnabled`, `decorations: false`, window size, and required capabilities for dialog and window controls.
 
-Edit `src-tauri/tauri.conf.json` — replace the `app.windows` array:
+- [ ] **Step 1: Update tauri.conf.json**
+
+Replace the `app` section:
 
 ```json
 {
@@ -2066,7 +2221,8 @@ Edit `src-tauri/tauri.conf.json` — replace the `app.windows` array:
         "height": 800,
         "minWidth": 900,
         "minHeight": 600,
-        "decorations": false
+        "decorations": false,
+        "dragDropEnabled": true
       }
     ],
     "security": {
@@ -2076,24 +2232,121 @@ Edit `src-tauri/tauri.conf.json` — replace the `app.windows` array:
 }
 ```
 
-- [ ] **Step 2: Verify build**
+- [ ] **Step 2: Update capabilities/default.json**
+
+```json
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-close",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-size",
+    "dialog:default",
+    "opener:default"
+  ]
+}
+```
+
+- [ ] **Step 3: Verify Rust build**
 
 ```bash
-pnpm build
+cargo build
+```
+
+Run from `src-tauri/`.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A
+git commit -m "feat: update Tauri config and capabilities for custom title bar and dialog"
+```
+
+---
+
+## Task 14: Add validate_paths backend command
+
+**Files:**
+- Modify: `src-tauri/src/commands/shred.rs`
+- Modify: `src-tauri/src/commands/mod.rs`
+
+**Oracle fix:** Backend must validate paths before the UI adds them to the queue.
+
+- [ ] **Step 1: Add validate_paths command**
+
+Add to `src-tauri/src/commands/shred.rs`:
+
+```rust
+#[derive(serde::Serialize)]
+pub struct FileMetadata {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+}
+
+#[tauri::command]
+pub fn validate_paths(paths: Vec<String>) -> Result<Vec<FileMetadata>, String> {
+    let mut valid = Vec::new();
+    for path_str in paths {
+        let path = std::path::Path::new(&path_str);
+
+        // Check if file exists
+        if !path.exists() {
+            continue;
+        }
+
+        // Check if it's a file (not directory)
+        if !path.is_file() {
+            continue;
+        }
+
+        // Get metadata
+        let metadata = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        // Get filename
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        valid.push(FileMetadata {
+            path: path_str,
+            name,
+            size: metadata.len(),
+        });
+    }
+    Ok(valid)
+}
+```
+
+- [ ] **Step 2: Verify Rust build**
+
+```bash
+cargo build
 ```
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add -A
-git commit -m "feat: update Tauri window to 1200x800, disable native decorations"
+git commit -m "feat: add validate_paths command for pre-shred path validation"
 ```
 
 ---
 
-## Task 15: Final integration and polish
+## Task 15: Final integration and build verification
 
-- [ ] **Step 1: Verify full build**
+- [ ] **Step 1: Verify full frontend build**
 
 ```bash
 pnpm build
@@ -2101,27 +2354,31 @@ pnpm build
 
 Expected: No errors.
 
-- [ ] **Step 2: Verify lint**
+- [ ] **Step 2: Verify Rust build**
 
 ```bash
-pnpm lint
+cargo build
 ```
 
-Fix any lint errors.
+Run from `src-tauri/`.
 
-- [ ] **Step 3: Verify Rust tests pass**
+- [ ] **Step 3: Verify Rust tests**
 
 ```bash
 cargo test
 ```
 
-Run from `src-tauri/` directory.
+- [ ] **Step 4: Verify lint**
 
-- [ ] **Step 4: Commit any fixes**
+```bash
+pnpm lint
+```
+
+- [ ] **Step 5: Commit any fixes**
 
 ```bash
 git add -A
-git commit -m "fix: address lint and build issues from UI integration"
+git commit -m "fix: address build and lint issues from UI integration"
 ```
 
 ---
@@ -2130,11 +2387,13 @@ git commit -m "fix: address lint and build issues from UI integration"
 
 - [x] **Spec coverage:** Every spec section has a corresponding task
 - [x] **Placeholder scan:** No TBD/TODO in code steps (only in hooks noting backend gaps)
-- [x] **Type consistency:** All types defined in Task 5, used consistently in Tasks 6-13
+- [x] **Type consistency:** All types defined in Task 5, used consistently in Tasks 6-12
 - [x] **No missing imports:** All imports reference `@/` paths or installed packages
-- [x] **Backend integration:** `get_algorithms` wired in Task 11, `shred_files` wired in Task 10, progress events in Task 10
-- [x] **Browser detection:** Mock data in Task 13, ready for real backend replacement
+- [x] **Backend integration:** `get_algorithms` wired in Task 10, `shred_files` wired in Task 10, `validate_paths` added in Task 14
+- [x] **Browser detection:** Mock data in Task 12, ready for real backend replacement
+- [x] **Oracle critical fixes:** All 8 critical issues addressed
+- [x] **Oracle important fixes:** Per-file errors, ShredOptions, BrowserWarning blocking, capabilities
 
 ---
 
-*Plan written 2026-06-19. 15 tasks, ~45-60 minutes estimated execution time.*
+*Plan written 2026-06-19. Updated with oracle review. 15 tasks, ~60-90 minutes estimated execution time.*
