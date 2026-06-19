@@ -36,8 +36,14 @@ pub fn validate_path(path: &Path) -> Result<(), ShredError> {
     let canonical = std::fs::canonicalize(path)
         .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
 
+    // Strip UNC prefix on Windows for system path comparison
+    let canonical_str = canonical.to_string_lossy();
+    let canonical_normalized = canonical_str
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&canonical_str);
+
     for sys_path in SYSTEM_PATHS {
-        if canonical.starts_with(sys_path) {
+        if canonical_normalized.starts_with(sys_path) {
             return Err(ShredError::SystemFile(canonical));
         }
     }
