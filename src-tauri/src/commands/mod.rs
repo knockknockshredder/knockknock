@@ -2,3 +2,4 @@
 
 pub mod browser;
 pub mod shred;
+pub mod tray;
