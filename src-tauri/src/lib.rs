@@ -2,6 +2,7 @@
 
 mod browser;
 mod commands;
+mod pin;
 mod shredder;
 mod tray;
 mod updater;
@@ -26,6 +27,10 @@ pub fn run() {
             commands::tray::minimize_to_tray,
             commands::updater::check_update,
             commands::updater::install_update,
+            commands::pin::set_pin,
+            commands::pin::verify_pin,
+            commands::pin::is_pin_enabled,
+            commands::pin::disable_pin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
