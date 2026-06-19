@@ -48,7 +48,22 @@ impl PlatformIo for MacOsIo {
 
     fn rename_random(&self, path: &Path) -> Result<PathBuf, ShredError> {
         let parent = path.parent().unwrap_or(Path::new("."));
-        let new_path = parent.join(generate_random_name());
+        let mut new_path;
+        let mut attempts = 0;
+        loop {
+            new_path = parent.join(generate_random_name());
+            if !new_path.exists() {
+                break;
+            }
+            attempts += 1;
+            if attempts > 100 {
+                return Err(ShredError::IoError {
+                    path: path.to_path_buf(),
+                    kind: "RenameCollision".to_string(),
+                    message: "Failed to generate unique random name after 100 attempts".to_string(),
+                });
+            }
+        }
         std::fs::rename(path, &new_path)
             .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
         Ok(new_path)

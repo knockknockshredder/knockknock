@@ -81,8 +81,19 @@ impl ProgressReporter for TauriProgressReporter {
     }
 
     fn on_progress(&self, bytes_written: u64, total: u64) {
-        let state = self.state.lock().unwrap();
-        let elapsed = state.pass_start.elapsed().as_secs_f64();
+        let (file_path, file_size, current_pass, total_passes, pass_start) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.current_file.clone(),
+                state.current_file_size,
+                state.current_pass,
+                state.total_passes,
+                state.pass_start,
+            )
+        };
+        // Lock dropped here
+
+        let elapsed = pass_start.elapsed().as_secs_f64();
         let speed = if elapsed > 0.0 {
             (bytes_written as f64 / elapsed) as u64
         } else {
@@ -95,11 +106,11 @@ impl ProgressReporter for TauriProgressReporter {
         };
 
         self.emit_throttled(ProgressEvent {
-            file_path: state.current_file.clone(),
-            file_size: state.current_file_size,
+            file_path,
+            file_size,
             bytes_written,
-            current_pass: state.current_pass,
-            total_passes: state.total_passes,
+            current_pass,
+            total_passes,
             speed_bytes_per_sec: speed,
             estimated_time_remaining_secs: remaining,
             status: ShredStatus::Shredding,
@@ -155,8 +166,8 @@ impl ProgressReporter for TauriProgressReporter {
                 total_passes: 0,
                 speed_bytes_per_sec: 0,
                 estimated_time_remaining_secs: 0,
-                status: ShredStatus::Error {
-                    message: format!("Warning: {}", message),
+                status: ShredStatus::Warning {
+                    message: message.to_string(),
                 },
             },
         );

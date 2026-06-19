@@ -42,8 +42,18 @@ pub fn validate_path(path: &Path) -> Result<(), ShredError> {
         .strip_prefix(r"\\?\")
         .unwrap_or(&canonical_str);
 
+    #[cfg(windows)]
+    let canonical_lower = canonical_normalized.to_lowercase();
+    #[cfg(not(windows))]
+    let canonical_lower = canonical_normalized.to_string();
+
     for sys_path in SYSTEM_PATHS {
-        if canonical_normalized.starts_with(sys_path) {
+        #[cfg(windows)]
+        let matches = canonical_lower.starts_with(&sys_path.to_lowercase());
+        #[cfg(not(windows))]
+        let matches = canonical_lower.starts_with(sys_path);
+
+        if matches {
             return Err(ShredError::SystemFile(canonical));
         }
     }

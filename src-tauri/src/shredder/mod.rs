@@ -14,7 +14,10 @@ mod tests;
 
 pub use errors::ShredError;
 pub use traits::{PlatformIo, ProgressReporter, ShredAlgorithm, VerificationStrategy};
-pub use types::{HardLinkInfo, MediaType, PatternType, ProcessInfo, ProgressEvent, ShredReport, ShredReportError, ShredResult, ShredStatus, VerificationLevel, VerificationResult};
+pub use types::{
+    HardLinkInfo, MediaType, PatternType, ProcessInfo, ProgressEvent, ShredReport,
+    ShredReportError, ShredResult, ShredStatus, VerificationLevel, VerificationResult,
+};
 
 /// Shred a single file with full pipeline
 pub fn shred_file(
@@ -38,22 +41,28 @@ pub fn shred_file(
     // 3. Check hard links (warn, don't block)
     let hard_link_info = validation::check_hard_links(path)?;
     if hard_link_info.link_count > 1 {
-        progress.on_warning(path, &format!(
-            "File has {} hard links. Shredding this path will not destroy data at other links.",
-            hard_link_info.link_count
-        ));
+        progress.on_warning(
+            path,
+            &format!(
+                "File has {} hard links. Shredding this path will not destroy data at other links.",
+                hard_link_info.link_count
+            ),
+        );
     }
 
     // 4. Detect media type
     let platform_io = platform::create_platform_io();
     let media_type = platform_io.detect_media_type(path)?;
     if media_type == MediaType::Ssd && passes > 1 {
-        progress.on_warning(path, "Multi-pass shredding is less effective on SSDs due to wear leveling.");
+        progress.on_warning(
+            path,
+            "Multi-pass shredding is less effective on SSDs due to wear leveling.",
+        );
     }
 
     // 5. Get file size
-    let metadata = std::fs::metadata(path)
-        .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
+    let metadata =
+        std::fs::metadata(path).map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
     let file_size = metadata.len();
 
     progress.on_file_start(path, file_size);
@@ -82,26 +91,43 @@ pub fn shred_file(
     let mut bytes_written_total = 0u64;
     let mut errors = Vec::new();
 
-    for pass in 0..passes {
-        progress.on_pass_start(pass + 1, passes);
-
-        // Write pattern
-        let result = algorithm.shred(&mut file, file_size, 1, pattern, progress)?;
+    if algorithm.has_fixed_pattern_sequence() {
+        // Let algorithm handle multi-pass with its fixed sequence
+        progress.on_pass_start(1, passes);
+        let result = algorithm.shred(&mut file, file_size, passes, pattern, progress)?;
         bytes_written_total += result.bytes_written;
-
-        // Flush to disk
         platform_io.sync_to_disk(&mut file)?;
-
-        // Verify after each pass
+        // Verify after all passes
         let verification_result = verifier.verify(&mut file, &pattern, file_size)?;
         if !verification_result.passed {
             errors.push(ShredError::VerificationFailed {
                 path: path.to_path_buf(),
-                pass: pass + 1,
+                pass: passes,
             });
         }
+        progress.on_pass_complete(passes, passes);
+    } else {
+        for pass in 0..passes {
+            progress.on_pass_start(pass + 1, passes);
 
-        progress.on_pass_complete(pass + 1, passes);
+            // Write pattern
+            let result = algorithm.shred(&mut file, file_size, 1, pattern, progress)?;
+            bytes_written_total += result.bytes_written;
+
+            // Flush to disk
+            platform_io.sync_to_disk(&mut file)?;
+
+            // Verify after each pass
+            let verification_result = verifier.verify(&mut file, &pattern, file_size)?;
+            if !verification_result.passed {
+                errors.push(ShredError::VerificationFailed {
+                    path: path.to_path_buf(),
+                    pass: pass + 1,
+                });
+            }
+
+            progress.on_pass_complete(pass + 1, passes);
+        }
     }
 
     // 9. Close file handle before rename/delete
@@ -154,13 +180,27 @@ pub fn shred_files(
     let mut total_bytes = 0u64;
 
     for path in &paths {
-        match shred_file(path, algorithm.as_ref(), passes, pattern, verification_level, progress.as_ref()) {
+        match shred_file(
+            path,
+            algorithm.as_ref(),
+            passes,
+            pattern,
+            verification_level,
+            progress.as_ref(),
+        ) {
             Ok(result) => {
                 if result.success {
                     successful += 1;
                     total_bytes += result.bytes_written;
                 } else {
                     failed += 1;
+                    // Copy verification errors to report
+                    for err in result.errors {
+                        errors.push(ShredReportError {
+                            path: path.to_string_lossy().to_string(),
+                            error: err.to_string(),
+                        });
+                    }
                 }
             }
             Err(e) => {

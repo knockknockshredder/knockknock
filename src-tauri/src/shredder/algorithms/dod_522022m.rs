@@ -1,11 +1,11 @@
 // src-tauri/src/shredder/algorithms/dod_522022m.rs
 
+use crate::shredder::algorithms::common::write_pass;
 use crate::shredder::errors::ShredError;
 use crate::shredder::traits::{ProgressReporter, ShredAlgorithm};
 use crate::shredder::types::*;
 use getrandom::getrandom;
 use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 pub struct Dod522022M;
@@ -52,8 +52,6 @@ impl ShredAlgorithm for Dod522022M {
         let start = std::time::Instant::now();
         let mut total_written = 0u64;
         let mut buffer = vec![0u8; BUFFER_SIZE];
-        let mut last_progress_bytes = 0u64;
-        const PROGRESS_INTERVAL: u64 = 1024 * 1024; // 1 MB
 
         for pass in 0..passes {
             let pass_pattern = dod_pass_pattern(pass);
@@ -67,23 +65,14 @@ impl ShredAlgorithm for Dod522022M {
                 })?,
             }
 
-            file.seek(SeekFrom::Start(0))
-                .map_err(|e| ShredError::from_io_error(PathBuf::from("<file>"), e))?;
-
-            let mut remaining = file_size;
-            while remaining > 0 {
-                let to_write = std::cmp::min(remaining, buffer.len() as u64) as usize;
-                file.write_all(&buffer[..to_write])
-                    .map_err(|e| ShredError::from_io_error(PathBuf::from("<file>"), e))?;
-                total_written += to_write as u64;
-                remaining -= to_write as u64;
-
-                if total_written - last_progress_bytes >= PROGRESS_INTERVAL {
-                    progress.on_progress(total_written, file_size * passes as u64);
-                    last_progress_bytes = total_written;
-                }
-            }
-
+            total_written += write_pass(
+                file,
+                file_size,
+                &buffer,
+                progress,
+                total_written,
+                file_size * passes as u64,
+            )?;
             progress.on_pass_complete(pass + 1, passes);
         }
 
