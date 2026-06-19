@@ -84,13 +84,22 @@ This software is provided "AS IS" without warranty of any kind, express or impli
 
 **Shredding is permanent and irreversible.** There is no undo. Once a file is shredded, it cannot be recovered by any means. Always double-check your selection before confirming.
 
+## Support
+
+If KnockKnock saved you time or protected your privacy, consider supporting the project:
+
+- **GitHub Sponsors** — [Sponsor](https://github.com/sponsors/YOUR_USERNAME)
+- **Buy Me a Coffee** — [buymeacoffee.com/knockknock](https://buymeacoffee.com/knockknock)
+- **Bitcoin** — `bc1q...` (add your address)
+- **Star the repo** — free and helps with visibility
+
 ## Contributing
 
 Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-[MIT License](LICENSE)
+[MIT License](LICENSE) — free forever for personal use.
 
 ## Security
 
