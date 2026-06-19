@@ -1,10 +1,10 @@
 // src-tauri/src/shredder/platform/macos.rs
-// Stub - implemented in later task
 
 use crate::shredder::errors::ShredError;
+use crate::shredder::platform::common::generate_random_name;
 use crate::shredder::traits::PlatformIo;
 use crate::shredder::types::{MediaType, ProcessInfo};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 pub struct MacOsIo;
@@ -16,67 +16,64 @@ impl MacOsIo {
 }
 
 impl PlatformIo for MacOsIo {
-    fn open_for_shred(&self, _path: &Path) -> Result<File, ShredError> {
-        Err(ShredError::IoError {
-            path: PathBuf::new(),
-            kind: "Unimplemented".to_string(),
-            message: "MacOsIo not yet implemented".to_string(),
-        })
+    fn open_for_shred(&self, path: &Path) -> Result<File, ShredError> {
+        let file = OpenOptions::new()
+            .write(true)
+            .open(path)
+            .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
+
+        // Set F_NOCACHE to bypass buffer cache
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = file.as_raw_fd();
+            unsafe {
+                libc::fcntl(fd, libc::F_NOCACHE, 1);
+            }
+        }
+
+        Ok(file)
     }
 
-    fn write_data(&self, _file: &mut File, _data: &[u8]) -> Result<usize, ShredError> {
-        Err(ShredError::IoError {
-            path: PathBuf::new(),
-            kind: "Unimplemented".to_string(),
-            message: "MacOsIo not yet implemented".to_string(),
-        })
+    fn write_data(&self, file: &mut File, data: &[u8]) -> Result<usize, ShredError> {
+        use std::io::Write;
+        file.write(data)
+            .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
     }
 
-    fn sync_to_disk(&self, _file: &mut File) -> Result<(), ShredError> {
-        Err(ShredError::IoError {
-            path: PathBuf::new(),
-            kind: "Unimplemented".to_string(),
-            message: "MacOsIo not yet implemented".to_string(),
-        })
+    fn sync_to_disk(&self, file: &mut File) -> Result<(), ShredError> {
+        file.sync_all()
+            .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
     }
 
-    fn rename_random(&self, _path: &Path) -> Result<PathBuf, ShredError> {
-        Err(ShredError::IoError {
-            path: PathBuf::new(),
-            kind: "Unimplemented".to_string(),
-            message: "MacOsIo not yet implemented".to_string(),
-        })
+    fn rename_random(&self, path: &Path) -> Result<PathBuf, ShredError> {
+        let parent = path.parent().unwrap_or(Path::new("."));
+        let new_path = parent.join(generate_random_name());
+        std::fs::rename(path, &new_path)
+            .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
+        Ok(new_path)
     }
 
-    fn truncate_to_zero(&self, _file: &mut File) -> Result<(), ShredError> {
-        Err(ShredError::IoError {
-            path: PathBuf::new(),
-            kind: "Unimplemented".to_string(),
-            message: "MacOsIo not yet implemented".to_string(),
-        })
+    fn truncate_to_zero(&self, file: &mut File) -> Result<(), ShredError> {
+        file.set_len(0)
+            .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
     }
 
-    fn delete(&self, _path: &Path) -> Result<(), ShredError> {
-        Err(ShredError::IoError {
-            path: PathBuf::new(),
-            kind: "Unimplemented".to_string(),
-            message: "MacOsIo not yet implemented".to_string(),
-        })
+    fn delete(&self, path: &Path) -> Result<(), ShredError> {
+        std::fs::remove_file(path).map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
     }
 
     fn detect_media_type(&self, _path: &Path) -> Result<MediaType, ShredError> {
-        Err(ShredError::IoError {
-            path: PathBuf::new(),
-            kind: "Unimplemented".to_string(),
-            message: "MacOsIo not yet implemented".to_string(),
-        })
+        // TODO: Use diskutil info to check Solid State
+        Ok(MediaType::Unknown)
     }
 
-    fn find_locking_processes(&self, path: &Path) -> Result<Vec<ProcessInfo>, ShredError> {
+    fn find_locking_processes(&self, _path: &Path) -> Result<Vec<ProcessInfo>, ShredError> {
+        // TODO: Implement using lsof
         Err(ShredError::IoError {
-            path: path.to_path_buf(),
-            kind: "Unimplemented".to_string(),
-            message: "MacOsIo not yet implemented".to_string(),
+            path: _path.to_path_buf(),
+            kind: "NotImplemented".to_string(),
+            message: "Process lock detection not yet implemented on macOS".to_string(),
         })
     }
 }
