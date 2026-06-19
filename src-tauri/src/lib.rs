@@ -1,5 +1,6 @@
 // src-tauri/src/lib.rs
 
+mod browser;
 mod commands;
 mod shredder;
 
@@ -10,6 +11,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::shred::shred_files,
             commands::shred::get_algorithms,
+            commands::browser::detect_browsers,
+            commands::browser::shred_browser_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
