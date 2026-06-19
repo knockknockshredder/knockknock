@@ -6,6 +6,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "@/components/ui/tooltip";
+import { Question } from "@phosphor-icons/react";
 
 interface ShredOptionsProps {
   passes: number;
@@ -15,6 +22,19 @@ interface ShredOptionsProps {
   verificationLevel: "none" | "sample" | "full";
   onVerificationLevelChange: (v: "none" | "sample" | "full") => void;
   maxPasses: number;
+}
+
+function HintTooltip({ text }: { text: string }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger render={<span className="inline-flex cursor-help" />}>
+          <Question size={14} className="text-muted-foreground" />
+        </TooltipTrigger>
+        <TooltipContent>{text}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
 }
 
 export function ShredOptions({
@@ -29,13 +49,18 @@ export function ShredOptions({
   return (
     <div className="flex flex-wrap gap-4">
       <div className="flex flex-col gap-1.5">
-        <label className="font-mono text-xs text-muted-foreground">Passes</label>
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono text-xs text-muted-foreground">
+            Passes
+          </span>
+          <HintTooltip text="Number of overwrite passes. More passes = more thorough destruction but slower. Most algorithms specify a default." />
+        </div>
         <Select
           value={String(passes)}
           onValueChange={(v) => onPassesChange(Number(v))}
         >
           <SelectTrigger className="w-[100px] font-mono text-sm">
-            <SelectValue />
+            <SelectValue placeholder={String(passes)} />
           </SelectTrigger>
           <SelectContent>
             {Array.from({ length: maxPasses }, (_, i) => i + 1).map((n) => (
@@ -48,13 +73,18 @@ export function ShredOptions({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label className="font-mono text-xs text-muted-foreground">Pattern</label>
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono text-xs text-muted-foreground">
+            Pattern
+          </span>
+          <HintTooltip text="Byte pattern used for each overwrite pass. Random is most secure. Zeros/Ones are deterministic patterns used by some standards." />
+        </div>
         <Select
           value={pattern}
           onValueChange={(v) => v && onPatternChange(v)}
         >
           <SelectTrigger className="w-[120px] font-mono text-sm">
-            <SelectValue />
+            <SelectValue placeholder="Pattern" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="random">Random</SelectItem>
@@ -65,15 +95,18 @@ export function ShredOptions({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label className="font-mono text-xs text-muted-foreground">
-          Verification
-        </label>
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono text-xs text-muted-foreground">
+            Verification
+          </span>
+          <HintTooltip text="How thoroughly to verify that data was actually overwritten. None skips verification. Sample checks random blocks. Full reads back every block." />
+        </div>
         <Select
           value={verificationLevel}
           onValueChange={(v) => v && onVerificationLevelChange(v)}
         >
           <SelectTrigger className="w-[120px] font-mono text-sm">
-            <SelectValue />
+            <SelectValue placeholder="Verification" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="none">None</SelectItem>
