@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+target/
+.pnpm-store/
+
+# Build outputs
+dist/
+dist-ssr/
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
+# Rust
+Cargo.lock
+
+# OS
+desktop.ini

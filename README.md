@@ -55,6 +55,23 @@ NTFS, APFS, and ext4 journals may retain traces of file metadata. KnockKnock shr
 - **Shredding:** Platform-native APIs (Windows: `FILE_FLAG_WRITE_THROUGH`, macOS: `fcntl(F_NOCACHE)`, Linux: `O_DIRECT`)
 - **Binary size:** ~8–12 MB
 
+## Development
+
+```bash
+pnpm dev          # Development server (Tauri + React hot reload)
+pnpm build        # Production build
+pnpm tauri dev    # Run Tauri desktop app in dev mode
+pnpm tauri build  # Build desktop app for distribution
+```
+
+## Support
+
+If KnockKnock saved you time or protected your privacy, consider supporting the project:
+
+- **GitHub Sponsors** — [Sponsor](https://github.com/sponsors/YOUR_USERNAME)
+- **Buy Me a Coffee** — [buymeacoffee.com/knockknock](https://buymeacoffee.com/knockknock)
+- **Star the repo** — free and helps with visibility
+
 ## Legal Disclaimer
 
 ### Intended Use
@@ -83,15 +100,6 @@ This software is provided "AS IS" without warranty of any kind, express or impli
 ### Data Loss Warning
 
 **Shredding is permanent and irreversible.** There is no undo. Once a file is shredded, it cannot be recovered by any means. Always double-check your selection before confirming.
-
-## Support
-
-If KnockKnock saved you time or protected your privacy, consider supporting the project:
-
-- **GitHub Sponsors** — [Sponsor](https://github.com/sponsors/YOUR_USERNAME)
-- **Buy Me a Coffee** — [buymeacoffee.com/knockknock](https://buymeacoffee.com/knockknock)
-- **Bitcoin** — `bc1q...` (add your address)
-- **Star the repo** — free and helps with visibility
 
 ## Contributing
 
