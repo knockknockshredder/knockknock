@@ -282,6 +282,90 @@ Before ANY task, evaluate available skills. If a skill matches even remotely, lo
 
 ---
 
+## 11. TAURI V2 GOTCHAS (DESKTOP ONLY)
+
+These rules prevent silent failures specific to Tauri 2.x. Sourced from official Tauri v2 docs and verified failure modes. Mobile-specific rules intentionally omitted — KnockKnock is desktop-only for now.
+
+### Setup & Build
+
+- **`tauri migrate` is a starter, not a complete fix.** It handles manifest config but NOT
+  JS API renames, capability file creation, or permission string migration. Run it,
+  then manually verify frontend imports and capability files.
+  *(Tauri v2 migration: from-tauri-1)*
+
+- **lib.rs owns all logic.** `src-tauri/src/main.rs` must be a thin passthrough:
+  `fn main() { app_lib::run() }`. `Cargo.toml` requires
+  `[lib] name = "app_lib" crate-type = ["staticlib", "cdylib", "rlib"]`.
+  Recommended even for desktop-only — enables future mobile support and cleaner testing.
+
+### Commands
+
+- **Every `#[tauri::command]` must be in `generate_handler![...]`.** Missing entries
+  produce no compile error — `invoke()` returns "command not found" at runtime silently.
+  Only the last `invoke_handler` call wins.
+  *(Tauri v2 docs: calling-rust)*
+
+- **Async commands cannot use borrowed types.** `async fn bad(name: &str)` fails with
+  cryptic "`__tauri_message__` does not live long enough". Use owned types: `String`,
+  `Vec<u8>`. `State<'_, T>` works, but the inner type must be `Send + Sync`.
+  *(GitHub issue #6733)*
+
+- **Custom error types crossing IPC must `impl Serialize`.** `Result<T, MyError>` without
+  `Serialize` silently serializes as `{}`. Use `thiserror` + manual `impl Serialize` that
+  forwards to `Display`. Apply to every error type returned from any command.
+
+- **`State<T>` requires interior mutability.** Plain `State<'_, AppState>` where
+  `AppState { counter: u32 }` panics on access. Wrap with `Mutex<AppState>` and pass
+  `Mutex::new(...)` to `.manage()`. For async commands, use `tokio::sync::Mutex`.
+
+- **`State<T>` type must match `.manage()` exactly.** `State<'_, Mutex<AppState>>` panics
+  if `.manage()` was passed `AppState` directly. Type mismatch = runtime panic, not
+  compile error. Double-check type parameter on every `.manage()` / `State<...>` pair.
+
+### IPC
+
+- **`invoke` vs `emit` vs `Channel` — choose correctly.**
+  - `invoke` = request/response, awaits result
+  - `emit`/`listen` = broadcast pub-sub, no acknowledgment
+  - `Channel<T>` = ordered high-frequency streams (progress updates)
+
+- **Plugin imports moved from `@tauri-apps/api/*` to `@tauri-apps/plugin-*`.**
+  - `invoke` → `@tauri-apps/api/core`
+  - Dialog, fs, http, shell → `@tauri-apps/plugin-<name>`
+  Old paths don't exist in v2 — `pnpm install` the plugin package separately.
+  *(Tauri v2 migration: JavaScript API changes)*
+
+### Capabilities & Permissions
+
+- **Capabilities are deny-by-default.** Installing a plugin (`.plugin(...)` + `pnpm install`)
+  is NOT enough. Without the matching permission string in
+  `src-tauri/capabilities/default.json`, the operation silently fails — no panic, just a
+  rejected Promise with "not allowed".
+  *(Tauri v2 docs: security/capabilities)*
+
+- **Plugin `.init()` call is mandatory.** Adding a plugin to `Cargo.toml` does not register it.
+  All three steps required: Cargo.toml + `.plugin(tauri_plugin_X::init())` in builder +
+  permission string in capability file. Missing any one = silent failure.
+
+- **`shell:allow-execute` requires explicit scope.** No scope = all commands denied.
+  Define: `allow: [{ "name": "git", "cmd": "git", "args": true }]`. Wildcards for all
+  arguments rejected for security. **Do not grant this permission to KnockKnock — it
+  has no shell-execute use case.**
+
+- **`fs:default` is intentionally restricted.** Grants read access only to `$APPDATA`,
+  `$APPCONFIG`, etc. For KnockKnock's file shredding across user-selected paths, scope
+  explicitly to `$HOME/**` (read/write/remove) — do NOT use `fs:allow-read-all` /
+  `fs:allow-write-all` (excessively broad for a file shredder).
+
+### Platform-Specific
+
+- **Windows production uses `http://tauri.localhost` (not `https://`).** This resets
+  IndexedDB/LocalStorage/cookies on upgrade unless `app.windows.useHttpsScheme: true` is
+  set in `tauri.conf.json`. Affects any frontend persistence layer.
+  *(Tauri v2 migration: new-origin-url-on-windows)*
+
+---
+
 ## SECURITY NOTES
 
 - This tool is for **legitimate privacy/security purposes only**
