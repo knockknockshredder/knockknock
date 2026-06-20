@@ -11,7 +11,7 @@ export function TitleBar() {
       className="flex h-10 items-center justify-between border-b border-border bg-surface px-4 select-none"
     >
       <div className="flex items-center gap-2">
-        <span className="font-mono text-xs font-semibold uppercase tracking-widest text-foreground">
+        <span className="font-mono text-xs font-semibold tracking-widest text-foreground">
           KnockKnock
         </span>
       </div>
