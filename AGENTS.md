@@ -366,6 +366,44 @@ These rules prevent silent failures specific to Tauri 2.x. Sourced from official
 
 ---
 
+## 12. HINDSIGHT MEMORY (OBLIGATORY)
+
+This project uses Hindsight long-term memory. Bank ID: **`KnockKnock`**.
+
+### Retention Policy
+
+- **MANDATORY** — call `hindsight_retain` at these checkpoints:
+  - Every 5 implementation steps
+  - End of every session
+  - After any architectural decision
+  - After any installation / dependency change
+  - After any rule update to this file
+
+- **Tools available:**
+  - `hindsight_retain` — store new information
+  - `hindsight_recall` — search past context
+  - `hindsight_reflect` — synthesize answer from memory
+
+- **Related skill:** `hindsight-docs` — load for Hindsight API reference when needed.
+
+### What to Retain
+
+- Project context (stack, constraints, target users)
+- Architectural decisions with rationale
+- Skipped alternatives with reasons (prevents re-research)
+- Bug root causes and fixes
+- Cross-session state (in-progress work)
+- User preferences and standing rules
+
+### What NOT to Retain
+
+- Credentials, API keys, secrets
+- Personal file paths or PII
+- Transient session state
+- Full file contents (use references instead)
+
+---
+
 ## SECURITY NOTES
 
 - This tool is for **legitimate privacy/security purposes only**
