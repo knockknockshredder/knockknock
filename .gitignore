@@ -55,6 +55,7 @@ docs/
 .scripts/
 *.pyc
 __pycache__/
+opencode.json
 
 # Testing
 coverage/
