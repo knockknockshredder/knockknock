@@ -2,13 +2,12 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { FileDropZone } from "@/components/shred/FileDropZone";
-import { FileList } from "@/components/shred/FileList";
 import { ShredButton } from "@/components/shred/ShredButton";
 import { AlgorithmSelector } from "@/components/shred/AlgorithmSelector";
 import { ShredOptions } from "@/components/shred/ShredOptions";
 import { ConfirmationDialog } from "@/components/shred/ConfirmationDialog";
 import { useShred } from "@/contexts/ShredContext";
+import { useBrowser } from "@/contexts/BrowserContext";
 import type { ShredReport, ProgressEvent, ShredStatus } from "@/types";
 
 function statusToString(status: ShredStatus): string {
@@ -27,6 +26,8 @@ export function ShredSection() {
     algorithms,
   } = useShred();
 
+  const { getSelectedCount } = useBrowser();
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [passes, setPasses] = useState(1);
   const [pattern, setPattern] = useState<"random" | "zeros" | "ones">("random");
@@ -34,6 +35,7 @@ export function ShredSection() {
   const unlistenRef = useRef<(() => void) | null>(null);
 
   const pendingFiles = files.filter((f) => f.status === "pending");
+  const selectedProfileCount = getSelectedCount();
   const currentAlgorithm = algorithms[algorithmIndex];
 
   // Load algorithms on mount
@@ -115,8 +117,6 @@ export function ShredSection() {
   return (
     <div className="flex flex-col gap-4">
       <h1 className="font-sans text-xl font-semibold">Shred Files</h1>
-      <FileDropZone />
-      <FileList />
       <div className="flex flex-col items-center gap-4 pt-2">
         <AlgorithmSelector />
         {currentAlgorithm && (
@@ -128,14 +128,21 @@ export function ShredSection() {
             verificationLevel={verificationLevel}
             onVerificationLevelChange={setVerificationLevel}
             maxPasses={currentAlgorithm.max_passes}
+            currentAlgorithm={currentAlgorithm}
           />
         )}
-        <ShredButton onClick={handleShredClick} />
+        <ShredButton
+          fileCount={pendingFiles.length}
+          profileCount={selectedProfileCount}
+          isShredding={isShredding}
+          onClick={handleShredClick}
+        />
       </div>
       <ConfirmationDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         fileCount={pendingFiles.length}
+        profileCount={selectedProfileCount}
         onConfirm={executeShred}
       />
     </div>

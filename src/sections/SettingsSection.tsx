@@ -1,11 +1,18 @@
 // src/sections/SettingsSection.tsx
 import { ToggleSetting } from "@/components/settings/ToggleSetting";
-import { AlgorithmInfo } from "@/components/settings/AlgorithmInfo";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useShred } from "@/contexts/ShredContext";
+import { cn } from "@/lib/utils";
+
+const ALGO_HINTS: Record<number, string> = {
+  0: "Best for SSDs, fast, single-pass",
+  1: "Military-grade, 3-pass fixed pattern",
+  2: "Simple random overwrite",
+};
 
 export function SettingsSection() {
-  const { autoClearLog, setAutoClearLog } = useSettings();
+  const { autoClearLog, setAutoClearLog, defaultAlgorithmIndex, setDefaultAlgorithmIndex } =
+    useSettings();
   const { algorithms } = useShred();
 
   return (
@@ -28,13 +35,61 @@ export function SettingsSection() {
         <h2 className="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
           Algorithms
         </h2>
-        <div className="flex flex-col gap-3">
-          {algorithms.map((algo) => (
-            <AlgorithmInfo key={algo.index} algo={algo} />
-          ))}
-          {algorithms.length === 0 && (
-            <p className="text-xs text-muted-foreground">Loading algorithms...</p>
-          )}
+        <div className="overflow-x-auto rounded border border-border">
+          <table className="w-full font-mono text-xs">
+            <thead>
+              <tr className="border-b border-border bg-surface text-left text-muted-foreground">
+                <th className="px-3 py-2 font-medium">Algorithm</th>
+                <th className="px-3 py-2 text-center font-medium">Default</th>
+                <th className="px-3 py-2 font-medium">Passes</th>
+                <th className="px-3 py-2 font-medium">Max</th>
+                <th className="px-3 py-2 font-medium">Patterns</th>
+              </tr>
+            </thead>
+            <tbody>
+              {algorithms.map((algo) => (
+                <tr
+                  key={algo.index}
+                  className="border-b border-border last:border-b-0"
+                >
+                  <td className="px-3 py-2">
+                    <div className="font-semibold text-foreground">{algo.name}</div>
+                    <div className="text-muted-foreground">
+                      {ALGO_HINTS[algo.index] ?? algo.description}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <button
+                      type="button"
+                      onClick={() => setDefaultAlgorithmIndex(algo.index)}
+                      className={cn(
+                        "mx-auto h-4 w-4 rounded-full border-2 transition-colors",
+                        defaultAlgorithmIndex === algo.index
+                          ? "border-accent bg-accent"
+                          : "border-muted-foreground hover:border-foreground"
+                      )}
+                      aria-label={`Set ${algo.name} as default`}
+                    />
+                  </td>
+                  <td className="px-3 py-2">{algo.default_passes}</td>
+                  <td className="px-3 py-2">{algo.max_passes}</td>
+                  <td className="px-3 py-2 text-muted-foreground">
+                    {algo.accepted_patterns.length}
+                  </td>
+                </tr>
+              ))}
+              {algorithms.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="px-3 py-2 text-center text-muted-foreground"
+                  >
+                    Loading algorithms...
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </section>
 

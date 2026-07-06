@@ -1,20 +1,38 @@
 // src/components/shred/ShredButton.tsx
-import { useShred } from "@/contexts/ShredContext";
 import { cn } from "@/lib/utils";
 
 interface ShredButtonProps {
+  fileCount: number;
+  profileCount: number;
+  isShredding: boolean;
   onClick: () => void;
 }
 
-export function ShredButton({ onClick }: ShredButtonProps) {
-  const { files, isShredding } = useShred();
-  const pendingFiles = files.filter((f) => f.status === "pending");
-  const disabled = pendingFiles.length === 0 || isShredding;
-  const totalSize = pendingFiles.reduce((sum, f) => sum + f.size, 0);
+export function ShredButton({
+  fileCount,
+  profileCount,
+  isShredding,
+  onClick,
+}: ShredButtonProps) {
+  const hasFiles = fileCount > 0;
+  const hasProfiles = profileCount > 0;
+  const disabled = (!hasFiles && !hasProfiles) || isShredding;
+
+  let label: string;
+  if (hasFiles && hasProfiles) {
+    label = `Shred Selected (${fileCount} file${fileCount !== 1 ? "s" : ""} + ${profileCount} profile${profileCount !== 1 ? "s" : ""})`;
+  } else if (hasFiles) {
+    label = `Shred Selected (${fileCount} file${fileCount !== 1 ? "s" : ""})`;
+  } else if (hasProfiles) {
+    label = `Clean Selected (${profileCount} profile${profileCount !== 1 ? "s" : ""})`;
+  } else {
+    label = "Nothing to shred";
+  }
 
   return (
     <div className="flex flex-col items-center gap-2">
       <button
+        type="button"
         onClick={onClick}
         disabled={disabled}
         className={cn(
@@ -24,17 +42,11 @@ export function ShredButton({ onClick }: ShredButtonProps) {
             : "border-destructive text-destructive hover:border-red-500 hover:bg-red-500 hover:text-background"
         )}
       >
-        Shred Files
+        {label}
       </button>
-      {pendingFiles.length > 0 && (
+      {(hasFiles || hasProfiles) && !isShredding && (
         <p className="font-mono text-xs text-muted-foreground">
-          {pendingFiles.length} file{pendingFiles.length !== 1 ? "s" : ""}
-          {totalSize > 0
-            ? totalSize > 1073741824
-              ? `, ${(totalSize / 1073741824).toFixed(2)} GB`
-              : `, ${(totalSize / 1048576).toFixed(1)} MB`
-            : ""}{" "}
-          — this action is irreversible
+          this action is irreversible
         </p>
       )}
     </div>

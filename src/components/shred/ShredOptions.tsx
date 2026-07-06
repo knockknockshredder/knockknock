@@ -22,6 +22,10 @@ interface ShredOptionsProps {
   verificationLevel: "none" | "sample" | "full";
   onVerificationLevelChange: (v: "none" | "sample" | "full") => void;
   maxPasses: number;
+  currentAlgorithm?: {
+    default_passes: number;
+    has_fixed_pattern_sequence: boolean;
+  };
 }
 
 function HintTooltip({ text }: { text: string }) {
@@ -45,15 +49,16 @@ export function ShredOptions({
   verificationLevel,
   onVerificationLevelChange,
   maxPasses,
+  currentAlgorithm,
 }: ShredOptionsProps) {
   return (
     <div className="flex flex-wrap gap-4">
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-1.5">
           <span className="font-mono text-xs text-muted-foreground">
-            Passes
+            Pass repeats
           </span>
-          <HintTooltip text="Number of overwrite passes. More passes = more thorough destruction but slower. Most algorithms specify a default." />
+          <HintTooltip text="How many times to repeat the algorithm's full pass sequence. DoD (3 passes) × 7 repeats = 21 total overwrites." />
         </div>
         <Select
           value={String(passes)}
@@ -70,6 +75,12 @@ export function ShredOptions({
             ))}
           </SelectContent>
         </Select>
+        {currentAlgorithm?.has_fixed_pattern_sequence && (
+          <span className="font-mono text-xs text-muted-foreground">
+            {currentAlgorithm.default_passes} passes × {passes} repeats ={" "}
+            {currentAlgorithm.default_passes * passes} total
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col gap-1.5">

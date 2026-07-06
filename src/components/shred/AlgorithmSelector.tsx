@@ -14,6 +14,19 @@ import {
 } from "@/components/ui/tooltip";
 import { Question } from "@phosphor-icons/react";
 import { useShred } from "@/contexts/ShredContext";
+import type { AlgorithmOption } from "@/types";
+
+// Short hint per algorithm, shown below the name in the dropdown.
+// Falls back to the description when no hint is mapped.
+const ALGO_HINTS: Record<string, string> = {
+  "NIST 800-88 Clear": "Best for SSDs, fast, single-pass",
+  "DoD 5220.22-M": "Military-grade, 3-pass fixed pattern",
+  "RandomOnly": "Simple random overwrite",
+};
+
+function hintFor(algo: AlgorithmOption): string {
+  return ALGO_HINTS[algo.name] ?? algo.description;
+}
 
 export function AlgorithmSelector() {
   const { algorithms, algorithmIndex, setAlgorithmIndex } = useShred();
@@ -29,7 +42,10 @@ export function AlgorithmSelector() {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-1.5">
-        <label className="font-mono text-xs text-muted-foreground">
+        <label
+          htmlFor="algorithm-select"
+          className="font-mono text-xs text-muted-foreground"
+        >
           Algorithm
         </label>
         <TooltipProvider>
@@ -51,13 +67,32 @@ export function AlgorithmSelector() {
         value={String(algorithmIndex)}
         onValueChange={(v) => setAlgorithmIndex(Number(v))}
       >
-        <SelectTrigger className="w-full font-mono text-sm">
-          <SelectValue placeholder={current ? `${current.name} — ${current.description}` : "Select algorithm"} />
-        </SelectTrigger>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <SelectTrigger
+                  id="algorithm-select"
+                  className="w-full font-mono text-sm"
+                />
+              }
+            >
+              <SelectValue
+                placeholder={current ? current.name : "Select algorithm"}
+              />
+            </TooltipTrigger>
+            <TooltipContent>{current?.description}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
         <SelectContent>
           {algorithms.map((algo) => (
             <SelectItem key={algo.index} value={String(algo.index)}>
-              {algo.name} — {algo.description}
+              <div className="flex flex-col">
+                <span>{algo.name}</span>
+                <span className="text-xs text-muted-foreground">
+                  {hintFor(algo)}
+                </span>
+              </div>
             </SelectItem>
           ))}
         </SelectContent>

@@ -1,6 +1,6 @@
 // src/types/index.ts
 
-export type Section = "shred" | "browser" | "settings";
+export type Section = "home" | "settings";
 
 export interface ShredFile {
   id: string;

@@ -4,23 +4,16 @@ import type { Section } from "@/types";
 
 interface NavigationState {
   activeSection: Section;
-  sidebarExpanded: boolean;
   setActiveSection: (section: Section) => void;
-  toggleSidebar: () => void;
 }
 
 const NavigationContext = createContext<NavigationState | null>(null);
 
 export function NavigationProvider({ children }: { children: ReactNode }) {
-  const [activeSection, setActiveSection] = useState<Section>("shred");
-  const [sidebarExpanded, setSidebarExpanded] = useState(true);
-
-  const toggleSidebar = () => setSidebarExpanded((prev) => !prev);
+  const [activeSection, setActiveSection] = useState<Section>("home");
 
   return (
-    <NavigationContext.Provider
-      value={{ activeSection, sidebarExpanded, setActiveSection, toggleSidebar }}
-    >
+    <NavigationContext.Provider value={{ activeSection, setActiveSection }}>
       {children}
     </NavigationContext.Provider>
   );
