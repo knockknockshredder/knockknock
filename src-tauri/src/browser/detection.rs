@@ -5,6 +5,21 @@ use crate::browser::process::is_browser_running;
 use crate::browser::types::*;
 use std::path::Path;
 
+/// Map browser name to icon identifier for frontend
+fn browser_icon(name: &str) -> String {
+    match name {
+        "Chrome" => "GoogleChrome",
+        "Firefox" => "FirefoxLogo",
+        "Edge" => "MicrosoftEdge",
+        "Brave" => "BraveLogo",
+        "Opera" => "OperaLogo",
+        "Vivaldi" => "VivaldiLogo",
+        "Safari" => "SafariLogo",
+        _ => "Globe",
+    }
+    .to_string()
+}
+
 /// Detect all installed browsers on the system
 pub fn detect_browsers() -> Vec<DetectedBrowser> {
     let mut browsers = Vec::new();
@@ -14,26 +29,47 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
 
         for base_path in base_paths {
             if base_path.exists() {
+                let is_running = is_browser_running(
+                    browser_path.process_names,
+                    &base_path,
+                    browser_path.lock_file_pattern,
+                );
+
                 // Find all profiles in this browser
-                let profiles = find_browser_profiles(&base_path, browser_path.profile_glob);
+                let profile_paths = find_browser_profiles(&base_path, browser_path.profile_glob);
+                let mut profiles = Vec::new();
 
-                for profile_path in profiles {
+                for profile_path in &profile_paths {
                     if profile_path.exists() {
-                        let is_running = is_browser_running(
-                            browser_path.process_names,
-                            &base_path,
-                            browser_path.lock_file_pattern,
-                        );
-                        let size = estimate_directory_size(&profile_path);
+                        let name = profile_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        let size = estimate_directory_size(profile_path);
 
-                        browsers.push(DetectedBrowser {
-                            name: browser_path.name.to_string(),
-                            profile_path: profile_path.to_string_lossy().to_string(),
-                            is_running,
-                            data_types: detect_data_types(&profile_path),
-                            estimated_size_bytes: size,
+                        profiles.push(BrowserProfile {
+                            id: format!(
+                                "{}-{}",
+                                browser_path.name.to_lowercase(),
+                                name.to_lowercase().replace(' ', "-")
+                            ),
+                            name,
+                            path: profile_path.to_string_lossy().to_string(),
+                            size,
+                            selected: false,
                         });
                     }
+                }
+
+                if !profiles.is_empty() {
+                    browsers.push(DetectedBrowser {
+                        id: browser_path.name.to_lowercase(),
+                        name: browser_path.name.to_string(),
+                        icon: browser_icon(browser_path.name),
+                        is_running,
+                        profiles,
+                    });
                 }
 
                 break; // Found this browser, move to next
