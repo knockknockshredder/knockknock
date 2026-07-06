@@ -66,6 +66,7 @@ playwright-report/
 *.tmp
 *.temp
 *.cache
+local_cache/
 .local_cache/
 
 # Git worktrees
