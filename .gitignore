@@ -73,3 +73,4 @@ local_cache/
 # Git worktrees
 .slim/
 !slim/worktrees.json
+.worktrees/
