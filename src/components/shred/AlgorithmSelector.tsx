@@ -39,14 +39,14 @@ export function AlgorithmSelector() {
           </Tooltip>
         </TooltipProvider>
       </div>
-      <div className="flex">
+      <div className="flex w-full">
         {algorithms.map((algo) => (
           <button
             key={algo.index}
             type="button"
             onClick={() => setAlgorithmIndex(algo.index)}
             className={cn(
-              "flex-1 px-3 py-1.5 font-mono text-xs border transition-colors",
+              "flex-1 px-3 py-1.5 font-mono text-xs border first:rounded-l last:rounded-r transition-colors",
               algorithmIndex === algo.index
                 ? "bg-accent text-accent-foreground border-accent"
                 : "bg-transparent text-muted-foreground border-border hover:bg-elevated hover:text-foreground"

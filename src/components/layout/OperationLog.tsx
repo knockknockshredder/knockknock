@@ -5,6 +5,7 @@ import {
   Terminal,
   AnimatedSpan,
 } from "@/components/ui/terminal";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useShred } from "@/contexts/ShredContext";
 import { useNavigation } from "@/contexts/NavigationContext";
 import { cn } from "@/lib/utils";
@@ -41,16 +42,22 @@ export function OperationLog() {
   const [collapsed, setCollapsed] = useState(false);
 
   const handleScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setIsAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 20);
+    const viewport = scrollRef.current?.querySelector(
+      '[data-slot="scroll-area-viewport"]'
+    ) as HTMLDivElement | null;
+    if (!viewport) return;
+    setIsAtBottom(viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 20);
   };
 
   useEffect(() => {
-    if (isAtBottom && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const viewport = scrollRef.current?.querySelector(
+      '[data-slot="scroll-area-viewport"]'
+    ) as HTMLDivElement | null;
+    if (isAtBottom && viewport) {
+      viewport.scrollTop = viewport.scrollHeight;
     }
-  }, [logEntries, isAtBottom]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logEntries.length, isAtBottom]);
 
   const emptyMessage =
     activeSection === "home"
@@ -84,36 +91,30 @@ export function OperationLog() {
         </div>
       </div>
       {!collapsed && (
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="h-[180px] overflow-auto border-t border-border px-4 pb-4"
-          style={{
-            scrollbarWidth: 'thin',
-            scrollbarColor: 'hsl(var(--muted-foreground) / 0.3) transparent',
-          }}
-        >
-          {logEntries.length === 0 ? (
-            <p className="py-4 text-center font-mono text-xs text-muted-foreground">
-              {emptyMessage}
-            </p>
-          ) : (
-            <Terminal sequence={false} className="max-w-none border-0 bg-transparent p-0">
-              {logEntries.map((entry) => (
-                <AnimatedSpan
-                  key={entry.id}
-                  delay={0}
-                  className={cn("font-mono text-xs", logColor(entry.level))}
-                >
-                  <span>
-                    <span className="text-muted-foreground">[{formatTime(entry.timestamp)}]</span>{" "}
-                    {entry.level === "command" ? "> " : ""}
-                    {entry.message}
-                  </span>
-                </AnimatedSpan>
-              ))}
-            </Terminal>
-          )}
+        <div ref={scrollRef} onScroll={handleScroll}>
+          <ScrollArea className="h-[180px] border-t border-border px-4 pb-4">
+            {logEntries.length === 0 ? (
+              <p className="py-4 text-center font-mono text-xs text-muted-foreground">
+                {emptyMessage}
+              </p>
+            ) : (
+              <Terminal sequence={false} className="max-w-none border-0 bg-transparent p-0">
+                {logEntries.map((entry) => (
+                  <AnimatedSpan
+                    key={entry.id}
+                    delay={0}
+                    className={cn("font-mono text-xs", logColor(entry.level))}
+                  >
+                    <span>
+                      <span className="text-muted-foreground">[{formatTime(entry.timestamp)}]</span>{" "}
+                      {entry.level === "command" ? "> " : ""}
+                      {entry.message}
+                    </span>
+                  </AnimatedSpan>
+                ))}
+              </Terminal>
+            )}
+          </ScrollArea>
         </div>
       )}
     </div>

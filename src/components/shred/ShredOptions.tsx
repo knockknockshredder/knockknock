@@ -56,8 +56,8 @@ export function ShredOptions({
           </span>
           <HintTooltip text="Byte pattern used for each overwrite pass. Random is most secure. Zeros/Ones are deterministic patterns used by some standards." />
         </div>
-        <div className="flex">
-          {(["random", "zeros", "ones"] as const).map((p) => (
+        <div className="flex w-full">
+          {(["random", "zeros", "ones"] as const).map((p, i) => (
             <button
               key={p}
               type="button"
@@ -68,6 +68,8 @@ export function ShredOptions({
               disabled={currentAlgorithm?.has_fixed_pattern_sequence}
               className={cn(
                 "flex-1 px-3 py-1.5 font-mono text-xs border transition-colors",
+                i === 0 && "rounded-l",
+                i === 2 && "rounded-r",
                 pattern === p
                   ? "bg-accent text-accent-foreground border-accent"
                   : "bg-transparent text-muted-foreground border-border hover:bg-elevated hover:text-foreground",
@@ -94,14 +96,16 @@ export function ShredOptions({
           </span>
           <HintTooltip text="How thoroughly to verify that data was actually overwritten. None skips verification. Sample checks random blocks. Full reads back every block." />
         </div>
-        <div className="flex">
-          {(["none", "sample", "full"] as const).map((v) => (
+        <div className="flex w-full">
+          {(["none", "sample", "full"] as const).map((v, i) => (
             <button
               key={v}
               type="button"
               onClick={() => onVerificationLevelChange(v)}
               className={cn(
                 "flex-1 px-3 py-1.5 font-mono text-xs border transition-colors",
+                i === 0 && "rounded-l",
+                i === 2 && "rounded-r",
                 verificationLevel === v
                   ? "bg-accent text-accent-foreground border-accent"
                   : "bg-transparent text-muted-foreground border-border hover:bg-elevated hover:text-foreground"
@@ -118,7 +122,7 @@ export function ShredOptions({
           <span className="font-mono text-xs text-muted-foreground">
             Pass Repeats
           </span>
-          <HintTooltip text="How many times to repeat the algorithm's full pass sequence. DoD (3 passes) × 7 repeats = 21 total overwrites." />
+          <HintTooltip text="Number of overwrite passes per file. Higher values are more thorough but slower. For DoD (3-pass), setting this to 2 means 3 × 2 = 6 total overwrites." />
         </div>
         <input
           type="number"
@@ -129,7 +133,7 @@ export function ShredOptions({
             const v = parseInt(e.target.value, 10);
             if (!isNaN(v) && v >= 1 && v <= maxPasses) onPassesChange(v);
           }}
-          className="w-[100px] rounded border border-border bg-transparent px-2 py-1.5 font-mono text-xs text-foreground focus:border-ring focus:outline-none"
+          className="w-full rounded border border-border bg-transparent px-2 py-1.5 font-mono text-xs text-foreground focus:border-ring focus:outline-none"
         />
         {currentAlgorithm?.has_fixed_pattern_sequence && (
           <span className="font-mono text-xs text-muted-foreground">

@@ -1,5 +1,5 @@
 // src/hooks/useBrowserDetection.ts
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useBrowser } from "@/contexts/BrowserContext";
 import { useShred } from "@/contexts/ShredContext";
@@ -8,8 +8,11 @@ import type { DetectedBrowser } from "@/types";
 export function useBrowserDetection() {
   const { setBrowsers, setIsScanning } = useBrowser();
   const { addLogEntry } = useShred();
+  const hasScanned = useRef(false);
 
   useEffect(() => {
+    if (hasScanned.current) return;
+    hasScanned.current = true;
     let cancelled = false;
 
     async function scan() {

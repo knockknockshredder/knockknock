@@ -8,6 +8,7 @@ import { ShredOptions } from "@/components/shred/ShredOptions";
 import { ConfirmationDialog } from "@/components/shred/ConfirmationDialog";
 import { useShred } from "@/contexts/ShredContext";
 import { useBrowser } from "@/contexts/BrowserContext";
+import { useSettings } from "@/contexts/SettingsContext";
 import type { ShredReport, ProgressEvent, ShredStatus } from "@/types";
 
 function statusToString(status: ShredStatus): string {
@@ -18,6 +19,7 @@ export function ShredSection() {
   const {
     files,
     algorithmIndex,
+    setAlgorithmIndex,
     isShredding,
     setIsShredding,
     addLogEntry,
@@ -27,6 +29,7 @@ export function ShredSection() {
   } = useShred();
 
   const { getSelectedCount } = useBrowser();
+  const { defaultAlgorithmIndex } = useSettings();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [passes, setPasses] = useState(1);
@@ -38,12 +41,18 @@ export function ShredSection() {
   const selectedProfileCount = getSelectedCount();
   const currentAlgorithm = algorithms[algorithmIndex];
 
-  // Load algorithms on mount
+  // Load algorithms on mount and sync default from settings
   useEffect(() => {
     invoke<ShredReport[]>("get_algorithms")
-      .then((algorithms) => setAlgorithms(algorithms as any))
+      .then((algorithms) => {
+        setAlgorithms(algorithms as any);
+        // Apply default algorithm from settings
+        if (defaultAlgorithmIndex > 0 && defaultAlgorithmIndex < algorithms.length) {
+          setAlgorithmIndex(defaultAlgorithmIndex);
+        }
+      })
       .catch((err) => addLogEntry("error", `Failed to load algorithms: ${err}`));
-  }, [setAlgorithms, addLogEntry]);
+  }, [setAlgorithms, addLogEntry, defaultAlgorithmIndex, setAlgorithmIndex]);
 
   // Cleanup progress listener on unmount
   useEffect(() => {
@@ -117,7 +126,7 @@ export function ShredSection() {
   return (
     <div className="flex flex-col gap-4">
       <h1 className="font-sans text-xl font-semibold">Shred Files</h1>
-      <div className="flex flex-col items-center gap-4 pt-2">
+      <div className="flex flex-col gap-4 w-full max-w-lg">
         <AlgorithmSelector />
         {currentAlgorithm && (
           <ShredOptions

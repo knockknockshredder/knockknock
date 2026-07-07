@@ -32,8 +32,8 @@ export function SettingsSection() {
       </section>
 
       <section>
-        <h2 className="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
-          Algorithms
+          <h2 className="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
+          Select Default Algorithm
         </h2>
         <div className="flex flex-col gap-3">
           {algorithms.map((algo) => (
