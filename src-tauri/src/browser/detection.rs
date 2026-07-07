@@ -46,7 +46,6 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
                             .unwrap_or_default()
                             .to_string_lossy()
                             .to_string();
-                        let size = estimate_directory_size(profile_path);
 
                         profiles.push(BrowserProfile {
                             id: format!(
@@ -56,7 +55,7 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
                             ),
                             name,
                             path: profile_path.to_string_lossy().to_string(),
-                            size,
+                            size: 0, // Skip size estimation on startup for speed
                             selected: false,
                         });
                     }

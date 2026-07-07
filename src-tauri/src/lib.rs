@@ -22,6 +22,7 @@ pub fn run() {
             commands::shred::get_algorithms,
             commands::shred::validate_paths,
             commands::browser::detect_browsers,
+            commands::browser::get_profile_size,
             commands::browser::shred_browser_data,
             commands::tray::quick_shred_from_clipboard,
             commands::tray::minimize_to_tray,
