@@ -32,12 +32,12 @@ const SI_BROWSERS: Record<string, string> = {
 };
 
 function BrowserIcon({ name }: { name: string }) {
-  // FontAwesome icons for Edge and IE
+  // FontAwesome icons for Edge and IE (slightly larger to match Simple Icons visual weight)
   if (name === "Edge") {
-    return <FontAwesomeIcon icon={faEdge} className="h-5 w-5 shrink-0 text-white" />;
+    return <FontAwesomeIcon icon={faEdge} className="h-[22px] w-[22px] shrink-0 text-white" />;
   }
   if (name === "Internet Explorer") {
-    return <FontAwesomeIcon icon={faInternetExplorer} className="h-5 w-5 shrink-0 text-white" />;
+    return <FontAwesomeIcon icon={faInternetExplorer} className="h-[22px] w-[22px] shrink-0 text-white" />;
   }
 
   // Simple Icons SVGs (white)
