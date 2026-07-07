@@ -1,7 +1,6 @@
 // src-tauri/src/browser/detection.rs
 
 use crate::browser::paths::{find_browser_profiles, get_browser_base_paths, BROWSER_PATHS};
-use crate::browser::process::is_browser_running;
 use crate::browser::types::*;
 use std::path::Path;
 
@@ -29,11 +28,9 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
 
         for base_path in base_paths {
             if base_path.exists() {
-                let is_running = is_browser_running(
-                    browser_path.process_names,
-                    &base_path,
-                    browser_path.lock_file_pattern,
-                );
+                // Skip process check — tasklist can hang on some systems.
+                // is_running is reported as false; can be checked lazily later.
+                let is_running = false;
 
                 // Find all profiles in this browser
                 let profile_paths = find_browser_profiles(&base_path, browser_path.profile_glob);
