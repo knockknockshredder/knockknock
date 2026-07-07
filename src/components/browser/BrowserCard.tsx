@@ -11,22 +11,12 @@ import {
   siVivaldi,
   siTorbrowser,
 } from "simple-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faEdge, faInternetExplorer } from "@fortawesome/free-brands-svg-icons";
 
 // Simple Icons SVG path extraction
 function siPath(icon: { svg: string }): string {
   return icon.svg.match(/d="([^"]+)"/)?.[1] ?? "";
-}
-
-// FontAwesome icon data → { path, viewBox }
-function faIcon(icon: { icon: unknown[] }) {
-  const [width, height, , , path] = icon.icon as [number, number, unknown, unknown, string];
-  // Crop ~20% padding FA icons have built-in
-  const crop = width * 0.1;
-  return {
-    path,
-    viewBox: `${crop} ${crop} ${width - crop * 2} ${height - crop * 2}`,
-  };
 }
 
 // Browser → Simple Icons mapping (white fill)
@@ -41,26 +31,13 @@ const SI_BROWSERS: Record<string, string> = {
   "Tor Browser": siPath(siTorbrowser),
 };
 
-// FontAwesome browsers (cropped viewBox to match Simple Icons visual weight)
-const FA_BROWSERS: Record<string, { path: string; viewBox: string }> = {
-  Edge: faIcon(faEdge),
-  "Internet Explorer": faIcon(faInternetExplorer),
-};
-
 function BrowserIcon({ name }: { name: string }) {
-  // FontAwesome icons (rendered as raw SVGs with cropped viewBox)
-  const faData = FA_BROWSERS[name];
-  if (faData) {
-    return (
-      <svg
-        role="img"
-        viewBox={faData.viewBox}
-        className="h-5 w-5 shrink-0 fill-white"
-      >
-        <title>{name}</title>
-        <path d={faData.path} />
-      </svg>
-    );
+  // FontAwesome icons — larger to compensate for ~20% built-in padding
+  if (name === "Edge") {
+    return <FontAwesomeIcon icon={faEdge} className="h-6 w-6 shrink-0 text-white" />;
+  }
+  if (name === "Internet Explorer") {
+    return <FontAwesomeIcon icon={faInternetExplorer} className="h-6 w-6 shrink-0 text-white" />;
   }
 
   // Simple Icons SVGs (white)
