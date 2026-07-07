@@ -68,8 +68,6 @@ export function ShredOptions({
               disabled={currentAlgorithm?.has_fixed_pattern_sequence}
               className={cn(
                 "flex-1 px-3 py-1.5 font-mono text-xs border transition-colors",
-                i === 0 && "rounded-l",
-                i === 2 && "rounded-r",
                 pattern === p
                   ? "bg-accent text-accent-foreground border-accent"
                   : "bg-transparent text-muted-foreground border-border hover:bg-elevated hover:text-foreground",
@@ -104,8 +102,6 @@ export function ShredOptions({
               onClick={() => onVerificationLevelChange(v)}
               className={cn(
                 "flex-1 px-3 py-1.5 font-mono text-xs border transition-colors",
-                i === 0 && "rounded-l",
-                i === 2 && "rounded-r",
                 verificationLevel === v
                   ? "bg-accent text-accent-foreground border-accent"
                   : "bg-transparent text-muted-foreground border-border hover:bg-elevated hover:text-foreground"
@@ -133,7 +129,7 @@ export function ShredOptions({
             const v = parseInt(e.target.value, 10);
             if (!isNaN(v) && v >= 1 && v <= maxPasses) onPassesChange(v);
           }}
-          className="w-full rounded border border-border bg-transparent px-2 py-1.5 font-mono text-xs text-foreground focus:border-ring focus:outline-none"
+          className="w-full border border-border bg-transparent px-2 py-1.5 font-mono text-xs text-foreground focus:border-ring focus:outline-none"
         />
         {currentAlgorithm?.has_fixed_pattern_sequence && (
           <span className="font-mono text-xs text-muted-foreground">

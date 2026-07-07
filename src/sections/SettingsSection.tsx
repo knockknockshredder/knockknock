@@ -40,7 +40,7 @@ export function SettingsSection() {
             <div
               key={algo.index}
               className={cn(
-                "rounded border p-4 transition-colors cursor-pointer",
+                "border p-4 transition-colors cursor-pointer",
                 defaultAlgorithmIndex === algo.index
                   ? "border-accent bg-accent/5"
                   : "border-border bg-surface hover:border-muted-foreground"
@@ -93,7 +93,7 @@ export function SettingsSection() {
         <h2 className="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
           About
         </h2>
-        <div className="rounded border border-border bg-surface p-4">
+        <div className="border border-border bg-surface p-4">
           <p className="font-mono text-sm font-semibold text-foreground">
             KnockKnock v0.1.0
           </p>

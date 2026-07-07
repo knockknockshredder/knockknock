@@ -93,7 +93,7 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
     <div
       onClick={handleClick}
       className={cn(
-        "flex cursor-pointer flex-col items-center justify-center gap-3 rounded border-2 border-dashed p-12 transition-colors",
+        "flex cursor-pointer flex-col items-center justify-center gap-3 border-2 border-dashed p-12 transition-colors",
         isDragOver
           ? "border-accent bg-accent/5"
           : "border-border hover:border-muted-foreground"

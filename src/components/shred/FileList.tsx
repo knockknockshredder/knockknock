@@ -33,7 +33,7 @@ export function FileList() {
 
   return (
     <div ref={scrollRef} className="h-full">
-      <ScrollArea className="h-full rounded border border-border">
+      <ScrollArea className="h-full border border-border">
         {files.map((file) => (
           <FileListItem key={file.id} file={file} />
         ))}

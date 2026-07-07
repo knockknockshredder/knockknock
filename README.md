@@ -2,21 +2,20 @@
 
 **Emergency file shredder with browser profile cleanup.**
 
-> One button. Gone forever.
+> One button. Gone forever. Greet your guests.
 
 ## What It Does
 
-KnockKnock securely deletes files, folders, and browser data using NIST 800-88 compliant single-pass random overwrite. Designed for speed and reliability when you need data gone *now*.
+KnockKnock securely deletes files, folders, and browser data using NIST 800-88 compliant single-pass random overwrite. Designed for speed and reliability when you need data gone _now_.
 
 ### Features
 
 - **One-click shredding** — drag, drop, confirm, done
 - **Browser profile cleanup** — auto-detects installed browsers, shreds profiles/history/cache/cookies
 - **Cross-platform** — Windows, macOS, Linux
-- **Fast** — single-pass overwrite (NIST 800-88 Clear), not 35-pass Gutmann
+- **Fast** — single-pass overwrite (NIST 800-88 Clear)
 - **SSD-aware** — detects drive type, applies TRIM after shredding
 - **Verification** — read-back confirmation that data was actually overwritten
-- **PIN protection** — optional PIN to prevent accidental shredding
 
 ### Supported Browsers
 
@@ -24,11 +23,11 @@ Chrome, Firefox, Edge, Safari, Brave, Opera, Vivaldi — auto-detected per platf
 
 ## Install
 
-*Coming soon.*
+_Coming soon._
 
 ## Usage
 
-*Coming soon.*
+_Coming soon._
 
 ## How It Works
 
@@ -68,8 +67,6 @@ pnpm tauri build  # Build desktop app for distribution
 
 If KnockKnock saved you time or protected your privacy, consider supporting the project:
 
-- **GitHub Sponsors** — [Sponsor](https://github.com/sponsors/YOUR_USERNAME)
-- **Buy Me a Coffee** — [buymeacoffee.com/knockknock](https://buymeacoffee.com/knockknock)
 - **Star the repo** — free and helps with visibility
 
 ## Legal Disclaimer

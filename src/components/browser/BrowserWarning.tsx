@@ -12,7 +12,7 @@ export function BrowserWarning({ browserName, onAcknowledge }: BrowserWarningPro
   const [acknowledged, setAcknowledged] = useState(false);
 
   return (
-    <div className="flex items-start gap-3 rounded border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+    <div className="flex items-start gap-3 border border-amber-500/30 bg-amber-500/10 px-4 py-3">
       <Warning size={20} className="mt-0.5 shrink-0 text-amber-500" />
       <div className="flex flex-col gap-2">
         <p className="text-sm text-foreground">

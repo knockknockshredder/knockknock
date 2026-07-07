@@ -71,7 +71,7 @@ export function OperationLog() {
           <button
             type="button"
             onClick={clearLog}
-            className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
+            className="p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
             title="Clear log"
           >
             <Trash size={14} />
@@ -79,7 +79,7 @@ export function OperationLog() {
           <button
             type="button"
             onClick={() => setCollapsed(!collapsed)}
-            className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
+            className="p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
             title={collapsed ? "Expand log" : "Collapse log"}
           >
             {collapsed ? <CaretUp size={14} /> : <CaretDown size={14} />}

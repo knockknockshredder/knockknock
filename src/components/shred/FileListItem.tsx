@@ -41,7 +41,7 @@ export function FileListItem({ file }: { file: ShredFile }) {
         <button
           onClick={() => removeFile(file.id)}
           aria-label={`Remove ${file.name}`}
-          className="rounded p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
+          className="p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
         >
           <X size={14} />
         </button>
