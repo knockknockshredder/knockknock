@@ -36,4 +36,8 @@ pub struct BrowserShredRequest {
     pub browser_name: String,
     pub profile_path: String,
     pub data_types: Vec<BrowserDataType>,
+    pub algorithm_index: usize,
+    pub passes: u32,
+    pub pattern: crate::shredder::PatternType,
+    pub verification_level: crate::shredder::VerificationLevel,
 }

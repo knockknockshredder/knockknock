@@ -112,7 +112,7 @@ pub struct ProgressEvent {
 }
 
 /// Verification levels (user-configurable)
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum VerificationLevel {
     None,
