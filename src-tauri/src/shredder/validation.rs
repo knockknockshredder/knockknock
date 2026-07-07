@@ -5,8 +5,17 @@ use crate::shredder::types::HardLinkInfo;
 use std::path::{Path, PathBuf};
 
 const SYSTEM_PATHS: &[&str] = &[
+    // Windows
     "C:\\Windows",
+    "C:\\Program Files",
+    "C:\\Program Files (x86)",
+    "C:\\ProgramData",
+    // macOS
     "/System",
+    "/System/Library",
+    "/Applications",
+    "/Library",
+    // Linux
     "/usr",
     "/etc",
     "/bin",
@@ -15,6 +24,10 @@ const SYSTEM_PATHS: &[&str] = &[
     "/dev",
     "/proc",
     "/sys",
+    "/lib",
+    "/lib64",
+    "/opt",
+    "/var",
 ];
 
 pub fn validate_path(path: &Path) -> Result<(), ShredError> {
@@ -55,6 +68,17 @@ pub fn validate_path(path: &Path) -> Result<(), ShredError> {
 
         if matches {
             return Err(ShredError::SystemFile(canonical));
+        }
+    }
+
+    // Protect app's own binary
+    if let Ok(app_exe) = std::env::current_exe() {
+        if let Ok(app_dir) = app_exe.parent().map(|p| p.canonicalize()).transpose() {
+            if let Some(app_dir) = app_dir {
+                if canonical.starts_with(&app_dir) {
+                    return Err(ShredError::SystemFile(canonical));
+                }
+            }
         }
     }
 
