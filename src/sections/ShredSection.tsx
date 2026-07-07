@@ -9,7 +9,7 @@ import { ConfirmationDialog } from "@/components/shred/ConfirmationDialog";
 import { useShred } from "@/contexts/ShredContext";
 import { useBrowser } from "@/contexts/BrowserContext";
 import { useSettings } from "@/contexts/SettingsContext";
-import type { ShredReport, ProgressEvent, ShredStatus } from "@/types";
+import type { ShredReport, ProgressEvent, ShredStatus, AlgorithmOption } from "@/types";
 
 function statusToString(status: ShredStatus): string {
   return status.type.toLowerCase();
@@ -43,9 +43,9 @@ export function ShredSection() {
 
   // Load algorithms on mount and sync default from settings
   useEffect(() => {
-    invoke<ShredReport[]>("get_algorithms")
+    invoke<AlgorithmOption[]>("get_algorithms")
       .then((algorithms) => {
-        setAlgorithms(algorithms as any);
+        setAlgorithms(algorithms);
         // Apply default algorithm from settings
         if (defaultAlgorithmIndex > 0 && defaultAlgorithmIndex < algorithms.length) {
           setAlgorithmIndex(defaultAlgorithmIndex);
