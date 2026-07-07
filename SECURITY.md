@@ -4,7 +4,7 @@
 
 **Do NOT open a public GitHub issue for security vulnerabilities.**
 
-Email: [INSERT EMAIL]
+Email: security@knockknockapp.org
 
 Include:
 - Description of the vulnerability

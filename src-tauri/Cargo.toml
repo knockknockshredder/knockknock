@@ -1,9 +1,13 @@
 [package]
 name = "knockknock"
 version = "0.1.0"
-description = "A Tauri App"
+description = "Emergency file shredder with browser profile cleanup"
 authors = ["KnockKnock Contributors"]
 edition = "2021"
+rust-version = "1.77"
+license = "MIT"
+repository = "https://github.com/knockknockshredder/knockknock"
+homepage = "https://knockknockapp.org"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
