@@ -1,10 +1,6 @@
 // src/components/layout/OperationLog.tsx
 import { useEffect, useRef, useState } from "react";
 import { CaretDown, CaretUp, Trash } from "@phosphor-icons/react";
-import {
-  Terminal,
-  AnimatedSpan,
-} from "@/components/ui/terminal";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useShred } from "@/contexts/ShredContext";
 import { useNavigation } from "@/contexts/NavigationContext";
@@ -98,21 +94,18 @@ export function OperationLog() {
                 {emptyMessage}
               </p>
             ) : (
-              <Terminal sequence={false} className="max-w-none border-0 bg-transparent p-0">
+              <div className="flex flex-col gap-0.5">
                 {logEntries.map((entry) => (
-                  <AnimatedSpan
+                  <div
                     key={entry.id}
-                    delay={0}
                     className={cn("font-mono text-xs", logColor(entry.level))}
                   >
-                    <span>
-                      <span className="text-muted-foreground">[{formatTime(entry.timestamp)}]</span>{" "}
-                      {entry.level === "command" ? "> " : ""}
-                      {entry.message}
-                    </span>
-                  </AnimatedSpan>
+                    <span className="text-muted-foreground">[{formatTime(entry.timestamp)}]</span>{" "}
+                    {entry.level === "command" ? "> " : ""}
+                    {entry.message}
+                  </div>
                 ))}
-              </Terminal>
+              </div>
             )}
           </ScrollArea>
         </div>
