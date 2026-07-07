@@ -28,7 +28,7 @@ export function ShredSection() {
     algorithms,
   } = useShred();
 
-  const { getSelectedCount } = useBrowser();
+  const { getSelectedCount, browsers } = useBrowser();
   const { defaultAlgorithmIndex } = useSettings();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -68,10 +68,13 @@ export function ShredSection() {
   };
 
   const executeShred = async () => {
-    if (pendingFiles.length === 0) return;
+    if (pendingFiles.length === 0 && selectedProfileCount === 0) return;
 
     setIsShredding(true);
-    addLogEntry("command", `shredding ${pendingFiles.length} file(s)...`);
+    addLogEntry(
+      "command",
+      `shredding ${pendingFiles.length} file(s) and ${selectedProfileCount} browser profile(s)...`
+    );
 
     // Listen for progress events
     const unlisten = await listen<ProgressEvent>("shred-progress", (event) => {
@@ -110,6 +113,48 @@ export function ShredSection() {
         "success",
         `Complete: ${report.successful} destroyed, ${report.failed} failed, ${report.skipped} skipped (${report.duration_secs.toFixed(1)}s)`
       );
+
+      // Shred browser profiles if any
+      if (selectedProfileCount > 0) {
+        const selectedProfiles = browsers.flatMap((b) =>
+          b.profiles
+            .filter((p) => p.selected)
+            .map((p) => ({
+              browser_name: b.name,
+              profile_path: p.path,
+              data_types: ["cache", "cookies", "history", "passwords"] as const,
+            }))
+        );
+
+        for (const profile of selectedProfiles) {
+          try {
+            addLogEntry(
+              "info",
+              `Shredding ${profile.browser_name} profile: ${profile.profile_path}`
+            );
+            const browserReport: ShredReport = await invoke("shred_browser_data", {
+              request: {
+                browser_name: profile.browser_name,
+                profile_path: profile.profile_path,
+                data_types: profile.data_types,
+                algorithm_index: algorithmIndex,
+                passes: passes,
+                pattern: pattern,
+                verification_level: verificationLevel,
+              },
+            });
+            addLogEntry(
+              "success",
+              `${profile.browser_name}: ${browserReport.successful} files destroyed, ${browserReport.failed} failed`
+            );
+          } catch (err) {
+            addLogEntry(
+              "error",
+              `Failed to shred ${profile.browser_name} profile: ${err}`
+            );
+          }
+        }
+      }
     } catch (err) {
       addLogEntry("error", `Shred failed: ${err}`);
       // Mark all pending as error
