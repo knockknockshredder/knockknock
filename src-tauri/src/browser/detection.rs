@@ -21,13 +21,15 @@ fn browser_icon(name: &str) -> String {
 
 /// Detect all installed browsers on the system
 pub fn detect_browsers() -> Vec<DetectedBrowser> {
+    eprintln!("[detect_browsers] starting");
     let mut browsers = Vec::new();
 
     for browser_path in BROWSER_PATHS {
         let base_paths = get_browser_base_paths(browser_path);
 
-        for base_path in base_paths {
+        for base_path in &base_paths {
             if base_path.exists() {
+                eprintln!("[detect_browsers] found base_path: {:?}", base_path);
                 // Skip process check — tasklist can hang on some systems.
                 // is_running is reported as false; can be checked lazily later.
                 let is_running = false;
@@ -74,6 +76,7 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
         }
     }
 
+    eprintln!("[detect_browsers] done, found {} browsers", browsers.len());
     browsers
 }
 
@@ -131,18 +134,29 @@ pub fn detect_data_types(profile_path: &Path) -> Vec<BrowserDataType> {
     types
 }
 
-/// Estimate directory size in bytes
+/// Estimate directory size in bytes (iterative, capped, symlink-safe)
 pub fn estimate_directory_size(path: &Path) -> u64 {
-    let mut size = 0;
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
-            let metadata = entry.metadata();
-            if let Ok(meta) = metadata {
+    let mut size = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    let mut visited = 0usize;
+    const MAX_VISITS: usize = 50_000;
+
+    while let Some(current) = stack.pop() {
+        if let Ok(entries) = std::fs::read_dir(&current) {
+            for entry in entries.flatten() {
+                visited += 1;
+                if visited > MAX_VISITS {
+                    return size;
+                }
+                let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
+                    continue;
+                };
                 if meta.is_file() {
                     size += meta.len();
                 } else if meta.is_dir() {
-                    size += estimate_directory_size(&entry.path());
+                    stack.push(entry.path());
                 }
+                // symlinks skipped — no loops
             }
         }
     }

@@ -8,16 +8,17 @@ import type { DetectedBrowser } from "@/types";
 export function useBrowserDetection() {
   const { setBrowsers, setIsScanning } = useBrowser();
   const { addLogEntry } = useShred();
-  const hasScanned = useRef(false);
+  const loggedRef = useRef(false);
 
   useEffect(() => {
-    if (hasScanned.current) return;
-    hasScanned.current = true;
     let cancelled = false;
 
     async function scan() {
       setIsScanning(true);
-      addLogEntry("info", "Scanning for installed browsers...");
+      if (!loggedRef.current) {
+        addLogEntry("info", "Scanning for installed browsers...");
+        loggedRef.current = true;
+      }
 
       try {
         const browsers = await invoke<DetectedBrowser[]>("detect_browsers");

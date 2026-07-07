@@ -5,10 +5,13 @@ use crate::browser::types::*;
 use crate::shredder::types::ShredReport;
 
 #[tauri::command]
-pub async fn detect_browsers() -> Vec<DetectedBrowser> {
-    tokio::task::spawn_blocking(browser::detection::detect_browsers)
+pub async fn detect_browsers() -> Result<Vec<DetectedBrowser>, String> {
+    eprintln!("[detect_browsers command] called");
+    let result = tokio::task::spawn_blocking(|| browser::detection::detect_browsers())
         .await
-        .unwrap_or_default()
+        .map_err(|e| format!("Detection panicked: {:?}", e))?;
+    eprintln!("[detect_browsers command] returning {} browsers", result.len());
+    Ok(result)
 }
 
 #[tauri::command]
