@@ -1,12 +1,13 @@
 // src/components/layout/LeftSidebar.tsx
 import { useState } from "react";
+import { CheckSquare, Square, ArrowClockwise } from "@phosphor-icons/react";
 import { BrowserCard } from "@/components/browser/BrowserCard";
 import { BrowserWarning } from "@/components/browser/BrowserWarning";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useBrowser } from "@/contexts/BrowserContext";
 
 export function LeftSidebar() {
-  const { browsers, isScanning, selectAllProfiles, deselectAllProfiles } = useBrowser();
+  const { browsers, isScanning, selectAllProfiles, deselectAllProfiles, rescanBrowsers } = useBrowser();
   const [acknowledgedBrowsers, setAcknowledgedBrowsers] = useState<Set<string>>(new Set());
   const runningBrowsers = browsers.filter((b) => b.isRunning);
 
@@ -27,20 +28,30 @@ export function LeftSidebar() {
         <h2 className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
           Browsers
         </h2>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={selectAllAll}
-            className="font-mono text-xs text-accent hover:underline"
+            className="text-muted-foreground hover:text-accent transition-colors"
+            title="Select all"
           >
-            Select all
+            <CheckSquare size={14} />
           </button>
           <button
             type="button"
             onClick={deselectAllAll}
-            className="font-mono text-xs text-muted-foreground hover:underline"
+            className="text-muted-foreground hover:text-accent transition-colors"
+            title="Deselect all"
           >
-            Deselect all
+            <Square size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={rescanBrowsers}
+            className="text-muted-foreground hover:text-accent transition-colors"
+            title="Rescan browsers"
+          >
+            <ArrowClockwise size={14} />
           </button>
         </div>
       </div>

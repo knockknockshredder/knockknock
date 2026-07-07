@@ -29,6 +29,10 @@ interface PersistedSettings {
   rightSidebarWidth?: number;
 }
 
+function clampSidebarWidth(value: number): number {
+  return Math.max(160, Math.min(400, value));
+}
+
 function loadSettings(): PersistedSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -51,10 +55,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     persisted.defaultAlgorithmIndex ?? 0
   );
   const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(
-    persisted.leftSidebarWidth ?? 260
+    clampSidebarWidth(persisted.leftSidebarWidth ?? 260)
   );
   const [rightSidebarWidth, setRightSidebarWidth] = useState<number>(
-    persisted.rightSidebarWidth ?? 260
+    clampSidebarWidth(persisted.rightSidebarWidth ?? 260)
   );
 
   useEffect(() => {
