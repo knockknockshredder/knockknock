@@ -30,9 +30,8 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
         for base_path in &base_paths {
             if base_path.exists() {
                 eprintln!("[detect_browsers] found base_path: {:?}", base_path);
-                // Skip process check — tasklist can hang on some systems.
-                // is_running is reported as false; can be checked lazily later.
-                let is_running = false;
+                // Check lock file for running detection (fast, reliable)
+                let is_running = check_lock_file(base_path, browser_path.lock_file_pattern);
 
                 // Find all profiles in this browser
                 let profile_paths = find_browser_profiles(&base_path, browser_path.profile_glob);
@@ -78,6 +77,30 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
 
     eprintln!("[detect_browsers] done, found {} browsers", browsers.len());
     browsers
+}
+
+/// Check for browser lock files
+fn check_lock_file(base_path: &std::path::Path, pattern: &str) -> bool {
+    if pattern.is_empty() {
+        return false;
+    }
+
+    if pattern.contains('*') {
+        // Glob pattern - check the final filename component in each subdirectory
+        let final_part = pattern.rsplit('/').next().unwrap_or(pattern);
+        if let Ok(entries) = std::fs::read_dir(base_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.join(final_part).exists() {
+                    return true;
+                }
+            }
+        }
+        false
+    } else {
+        // Direct lock file
+        base_path.join(pattern).exists()
+    }
 }
 
 /// Detect what data types exist in a browser profile
