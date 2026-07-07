@@ -1,5 +1,6 @@
 // src/contexts/BrowserContext.tsx
 import { createContext, useContext, useState, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { DetectedBrowser } from "@/types";
 
 interface BrowserState {
@@ -11,6 +12,7 @@ interface BrowserState {
   selectAllProfiles: (browserId: string) => void;
   deselectAllProfiles: (browserId: string) => void;
   getSelectedCount: () => number;
+  rescanBrowsers: () => Promise<void>;
 }
 
 const BrowserContext = createContext<BrowserState | null>(null);
@@ -60,6 +62,18 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
       0
     );
 
+  const rescanBrowsers = async () => {
+    setIsScanning(true);
+    try {
+      const browsers = await invoke<DetectedBrowser[]>("detect_browsers");
+      setBrowsers(browsers);
+    } catch {
+      // Silently fail — scanning is best-effort
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
   return (
     <BrowserContext.Provider
       value={{
@@ -71,6 +85,7 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
         selectAllProfiles,
         deselectAllProfiles,
         getSelectedCount,
+        rescanBrowsers,
       }}
     >
       {children}

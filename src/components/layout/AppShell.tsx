@@ -36,7 +36,7 @@ export function AppShell({ children, bottom }: AppShellProps) {
             <ResizeHandle
               side="left"
               onResize={(d) =>
-                setLeftSidebarWidth((w) => Math.max(160, Math.min(320, w + d)))
+                setLeftSidebarWidth((w) => Math.max(160, Math.min(400, w + d)))
               }
               onReset={() => setLeftSidebarWidth(260)}
             />
@@ -48,7 +48,7 @@ export function AppShell({ children, bottom }: AppShellProps) {
             <ResizeHandle
               side="right"
               onResize={(d) =>
-                setRightSidebarWidth((w) => Math.max(200, Math.min(400, w - d)))
+                setRightSidebarWidth((w) => Math.max(160, Math.min(400, w - d)))
               }
               onReset={() => setRightSidebarWidth(260)}
             />
