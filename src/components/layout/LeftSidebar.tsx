@@ -44,29 +44,31 @@ export function LeftSidebar() {
           </button>
         </div>
       </div>
-      <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-3 p-3">
-          {runningBrowsers.map((b) => (
-            <BrowserWarning
-              key={b.id}
-              browserName={b.name}
-              onAcknowledge={() => handleAcknowledge(b.id)}
-            />
-          ))}
+      <div className="flex-1 overflow-hidden">
+        <ScrollArea className="h-full">
+          <div className="flex flex-col gap-3 p-3">
+            {runningBrowsers.map((b) => (
+              <BrowserWarning
+                key={b.id}
+                browserName={b.name}
+                onAcknowledge={() => handleAcknowledge(b.id)}
+              />
+            ))}
 
-          {isScanning ? (
-            <p className="text-sm text-muted-foreground">Scanning for browsers...</p>
-          ) : browsers.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No browsers detected.</p>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {browsers.map((browser) => (
-                <BrowserCard key={browser.id} browser={browser} />
-              ))}
-            </div>
-          )}
-        </div>
-      </ScrollArea>
+            {isScanning ? (
+              <p className="text-sm text-muted-foreground">Scanning for browsers...</p>
+            ) : browsers.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No browsers detected.</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {browsers.map((browser) => (
+                  <BrowserCard key={browser.id} browser={browser} />
+                ))}
+              </div>
+            )}
+          </div>
+        </ScrollArea>
+      </div>
     </div>
   );
 }
