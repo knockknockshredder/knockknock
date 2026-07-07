@@ -168,7 +168,7 @@ pub fn get_browser_base_paths(browser: &BrowserPath) -> Vec<PathBuf> {
         if let Some(home) = std::env::var("HOME").ok() {
             for mac_path in browser.macos_paths {
                 paths.push(
-                    PathBuf::from(home)
+                    PathBuf::from(&home)
                         .join("Library/Application Support")
                         .join(mac_path),
                 );
