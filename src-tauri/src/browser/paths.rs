@@ -112,6 +112,40 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
         lock_file_pattern: "",
         profile_glob: "",
     },
+    BrowserPath {
+        name: "Tor Browser",
+        process_names: &["tor-browser", "firefox"], // Tor uses Firefox under the hood
+        windows_paths: &["Tor Browser\\Browser\\TorBrowser\\Data\\Browser"],
+        macos_paths: &["TorBrowser-Data/Browser"],
+        linux_paths: &[
+            ".local/share/torbrowser/tbb/x86_64/tor-browser/Browser/TorBrowser/Data/Browser",
+            "tor-browser/Browser/TorBrowser/Data/Browser",
+        ],
+        lock_file_pattern: "parent.lock",
+        profile_glob: "*.default",
+    },
+    BrowserPath {
+        name: "Chromium",
+        process_names: &["chromium", "chromium.exe"],
+        windows_paths: &["Chromium\\User Data"],
+        macos_paths: &["Chromium"],
+        linux_paths: &[
+            "chromium",
+            "snap/chromium/common/chromium",                   // Snap
+            ".var/app/org.chromium.Chromium/.config/chromium", // Flatpak
+        ],
+        lock_file_pattern: "SingletonLock",
+        profile_glob: "Default",
+    },
+    BrowserPath {
+        name: "Internet Explorer",
+        process_names: &["iexplore", "iexplore.exe"],
+        windows_paths: &["Microsoft\\Internet Explorer"],
+        macos_paths: &[], // IE not on macOS
+        linux_paths: &[], // IE not on Linux
+        lock_file_pattern: "",
+        profile_glob: "",
+    },
 ];
 
 pub fn get_browser_base_paths(browser: &BrowserPath) -> Vec<PathBuf> {

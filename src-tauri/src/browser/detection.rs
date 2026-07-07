@@ -14,6 +14,9 @@ fn browser_icon(name: &str) -> String {
         "Opera" => "OperaLogo",
         "Vivaldi" => "VivaldiLogo",
         "Safari" => "SafariLogo",
+        "Tor Browser" => "TorBrowser",
+        "Chromium" => "Chromium",
+        "Internet Explorer" => "InternetExplorer",
         _ => "Globe",
     }
     .to_string()
