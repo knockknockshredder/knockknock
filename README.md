@@ -57,7 +57,7 @@ msiexec /i KnockKnock_<version>_x64.msi /quiet
 2. Drag KnockKnock to Applications
 3. On first launch, right-click → Open (macOS Gatekeeper warning for unsigned apps)
 
-For Apple Silicon (M1/M2/M3), use the `aarch64.dmg`. For Intel Macs, use the `x64.dmg`.
+For Apple Silicon (M chips familty), use the `aarch64.dmg`. For Intel Macs, use the `x64.dmg`.
 
 ### Linux
 
@@ -82,10 +82,9 @@ chmod +x knockknock_<version>_amd64.AppImage
 
 ### Browser Cleanup
 
-1. Switch to the **Browser** tab
-2. KnockKnock auto-detects installed browsers
-3. Select which browsers to clean
-4. Click **Shred Browser Data** — profiles, cache, cookies, and history are securely wiped
+1. KnockKnock auto-detects installed browsers
+2. Select which browsers to clean
+3. Click **Shred** — profiles, cache, cookies, and history are securely wiped
 
 ### PIN Protection
 
