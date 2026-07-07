@@ -23,6 +23,8 @@ pnpm-debug.log*
 .env
 .env.local
 .env.*.local
+.env.pub
+*.pub
 
 # IDE
 .vscode/*
@@ -37,7 +39,7 @@ pnpm-debug.log*
 Thumbs.db
 
 # Rust
-Cargo.lock
+# Cargo.lock — tracked for reproducible builds (apps should commit lockfiles)
 
 # OS
 desktop.ini
