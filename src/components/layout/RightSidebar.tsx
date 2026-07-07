@@ -27,7 +27,7 @@ export function RightSidebar() {
           </div>
         )}
       </div>
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-hidden">
         {files.length === 0 ? (
           <div className="p-3 h-full">
             <FileDropZone />

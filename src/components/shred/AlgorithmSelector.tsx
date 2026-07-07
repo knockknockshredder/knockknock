@@ -1,12 +1,5 @@
 // src/components/shred/AlgorithmSelector.tsx
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
@@ -14,6 +7,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Question } from "@phosphor-icons/react";
 import { useShred } from "@/contexts/ShredContext";
+import { cn } from "@/lib/utils";
 
 export function AlgorithmSelector() {
   const { algorithms, algorithmIndex, setAlgorithmIndex } = useShred();
@@ -24,17 +18,12 @@ export function AlgorithmSelector() {
     );
   }
 
-  const current = algorithms[algorithmIndex];
-
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1.5 w-full">
       <div className="flex items-center gap-1.5">
-        <label
-          htmlFor="algorithm-select"
-          className="font-mono text-xs text-muted-foreground"
-        >
+        <span className="font-mono text-xs text-muted-foreground">
           Algorithm
-        </label>
+        </span>
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger
@@ -50,24 +39,23 @@ export function AlgorithmSelector() {
           </Tooltip>
         </TooltipProvider>
       </div>
-      <Select
-        value={current?.name ?? ""}
-        onValueChange={(v) => {
-          const idx = algorithms.findIndex((a) => a.name === v);
-          if (idx !== -1) setAlgorithmIndex(idx);
-        }}
-      >
-        <SelectTrigger id="algorithm-select" className="w-full font-mono text-sm">
-          <SelectValue placeholder="Select algorithm" />
-        </SelectTrigger>
-        <SelectContent>
-          {algorithms.map((algo) => (
-            <SelectItem key={algo.index} value={algo.name}>
-              {algo.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="flex">
+        {algorithms.map((algo) => (
+          <button
+            key={algo.index}
+            type="button"
+            onClick={() => setAlgorithmIndex(algo.index)}
+            className={cn(
+              "flex-1 px-3 py-1.5 font-mono text-xs border transition-colors",
+              algorithmIndex === algo.index
+                ? "bg-accent text-accent-foreground border-accent"
+                : "bg-transparent text-muted-foreground border-border hover:bg-elevated hover:text-foreground"
+            )}
+          >
+            {algo.name}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

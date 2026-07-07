@@ -29,7 +29,7 @@ export function AppShell({ children, bottom }: AppShellProps) {
           <>
             <div
               style={{ width: leftSidebarWidth }}
-              className="flex-shrink-0 border-r border-border bg-surface overflow-hidden"
+              className="flex-shrink-0 border-r border-border bg-surface overflow-hidden min-h-0"
             >
               <LeftSidebar />
             </div>
@@ -54,7 +54,7 @@ export function AppShell({ children, bottom }: AppShellProps) {
             />
             <div
               style={{ width: rightSidebarWidth }}
-              className="flex-shrink-0 border-l border-border bg-surface overflow-hidden"
+              className="flex-shrink-0 border-l border-border bg-surface overflow-hidden min-h-0"
             >
               <RightSidebar />
             </div>
