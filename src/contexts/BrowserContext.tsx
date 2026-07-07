@@ -2,6 +2,7 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { DetectedBrowser } from "@/types";
+import { useShred } from "@/contexts/ShredContext";
 
 interface BrowserState {
   browsers: DetectedBrowser[];
@@ -20,6 +21,7 @@ const BrowserContext = createContext<BrowserState | null>(null);
 export function BrowserProvider({ children }: { children: ReactNode }) {
   const [browsers, setBrowsers] = useState<DetectedBrowser[]>([]);
   const [isScanning, setIsScanning] = useState(false);
+  const { addLogEntry } = useShred();
 
   const toggleProfile = (browserId: string, profileId: string) => {
     setBrowsers((prev) =>
@@ -64,11 +66,16 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
 
   const rescanBrowsers = async () => {
     setIsScanning(true);
+    addLogEntry("info", "Rescanning for installed browsers...");
     try {
       const browsers = await invoke<DetectedBrowser[]>("detect_browsers");
       setBrowsers(browsers);
-    } catch {
-      // Silently fail — scanning is best-effort
+      addLogEntry(
+        "success",
+        `Rescan complete: found ${browsers.length} browsers, ${browsers.reduce((sum, b) => sum + b.profiles.length, 0)} profiles`
+      );
+    } catch (err) {
+      addLogEntry("error", `Browser rescan failed: ${err}`);
     } finally {
       setIsScanning(false);
     }
