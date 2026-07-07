@@ -26,13 +26,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-4-dev
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v5
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
