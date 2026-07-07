@@ -141,6 +141,7 @@ export function ShredSection() {
                 passes: passes,
                 pattern: pattern,
                 verification_level: verificationLevel,
+                explicit_consent: true,
               },
             });
             addLogEntry(

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BrowserProfile {
     pub id: String,
     pub name: String,
@@ -12,6 +13,7 @@ pub struct BrowserProfile {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DetectedBrowser {
     pub id: String,
     pub name: String,
@@ -40,4 +42,5 @@ pub struct BrowserShredRequest {
     pub passes: u32,
     pub pattern: crate::shredder::PatternType,
     pub verification_level: crate::shredder::VerificationLevel,
+    pub explicit_consent: bool,
 }

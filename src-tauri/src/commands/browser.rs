@@ -38,6 +38,15 @@ pub async fn shred_browser_data(
         ));
     }
 
+    // Safety: refuse to shred browser data while the browser is running
+    // unless the user has explicitly acknowledged the warning.
+    if check_browser_lock_file(&profile_path) && !request.explicit_consent {
+        return Err(format!(
+            "Browser {} is currently running. Close it first or acknowledge the warning.",
+            request.browser_name
+        ));
+    }
+
     // Collect files to shred based on selected data types
     let mut files_to_shred = Vec::new();
 
@@ -214,4 +223,22 @@ fn collect_files_recursive_excluding(
             }
         }
     }
+}
+
+/// Detect if a browser is running by looking for lock files in the profile directory.
+/// Chromium-based browsers create `SingletonLock` (or `lock`) while running;
+/// Firefox creates `.parentlock`. Returns true if any lock file is present.
+fn check_browser_lock_file(profile_path: &std::path::Path) -> bool {
+    const LOCK_FILES: &[&str] = &["SingletonLock", "lock", ".parentlock"];
+    for lock_name in LOCK_FILES {
+        if profile_path.join(lock_name).exists() {
+            return true;
+        }
+    }
+    if let Some(parent) = profile_path.parent() {
+        if parent.join("SingletonLock").exists() {
+            return true;
+        }
+    }
+    false
 }
