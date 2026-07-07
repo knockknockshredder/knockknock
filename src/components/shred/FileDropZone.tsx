@@ -1,6 +1,6 @@
 // src/components/shred/FileDropZone.tsx
 import { useCallback, useEffect, useState } from "react";
-import { Upload } from "@phosphor-icons/react";
+import { Plus, Upload } from "@phosphor-icons/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -13,7 +13,11 @@ interface FileMetadata {
   size: number;
 }
 
-export function FileDropZone() {
+interface FileDropZoneProps {
+  compact?: boolean;
+}
+
+export function FileDropZone({ compact = false }: FileDropZoneProps) {
   const { addFiles, addLogEntry } = useShred();
   const [isDragOver, setIsDragOver] = useState(false);
 
@@ -71,6 +75,19 @@ export function FileDropZone() {
       addLogEntry("error", `File dialog failed: ${err}`);
     }
   };
+
+  if (compact) {
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        className="text-muted-foreground hover:text-foreground transition-colors"
+        title="Add files"
+      >
+        <Plus size={14} />
+      </button>
+    );
+  }
 
   return (
     <div

@@ -14,19 +14,6 @@ import {
 } from "@/components/ui/tooltip";
 import { Question } from "@phosphor-icons/react";
 import { useShred } from "@/contexts/ShredContext";
-import type { AlgorithmOption } from "@/types";
-
-// Short hint per algorithm, shown below the name in the dropdown.
-// Falls back to the description when no hint is mapped.
-const ALGO_HINTS: Record<string, string> = {
-  "NIST 800-88 Clear": "Best for SSDs, fast, single-pass",
-  "DoD 5220.22-M": "Military-grade, 3-pass fixed pattern",
-  "RandomOnly": "Simple random overwrite",
-};
-
-function hintFor(algo: AlgorithmOption): string {
-  return ALGO_HINTS[algo.name] ?? algo.description;
-}
 
 export function AlgorithmSelector() {
   const { algorithms, algorithmIndex, setAlgorithmIndex } = useShred();
@@ -64,35 +51,19 @@ export function AlgorithmSelector() {
         </TooltipProvider>
       </div>
       <Select
-        value={String(algorithmIndex)}
-        onValueChange={(v) => setAlgorithmIndex(Number(v))}
+        value={current?.name ?? ""}
+        onValueChange={(v) => {
+          const idx = algorithms.findIndex((a) => a.name === v);
+          if (idx !== -1) setAlgorithmIndex(idx);
+        }}
       >
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <SelectTrigger
-                  id="algorithm-select"
-                  className="w-full font-mono text-sm"
-                />
-              }
-            >
-              <SelectValue
-                placeholder={current ? current.name : "Select algorithm"}
-              />
-            </TooltipTrigger>
-            <TooltipContent>{current?.description}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <SelectTrigger id="algorithm-select" className="w-full font-mono text-sm">
+          <SelectValue placeholder="Select algorithm" />
+        </SelectTrigger>
         <SelectContent>
           {algorithms.map((algo) => (
-            <SelectItem key={algo.index} value={String(algo.index)}>
-              <div className="flex flex-col">
-                <span>{algo.name}</span>
-                <span className="text-xs text-muted-foreground">
-                  {hintFor(algo)}
-                </span>
-              </div>
+            <SelectItem key={algo.index} value={algo.name}>
+              {algo.name}
             </SelectItem>
           ))}
         </SelectContent>

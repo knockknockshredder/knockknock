@@ -23,8 +23,10 @@ interface ShredOptionsProps {
   onVerificationLevelChange: (v: "none" | "sample" | "full") => void;
   maxPasses: number;
   currentAlgorithm?: {
+    name: string;
     default_passes: number;
     has_fixed_pattern_sequence: boolean;
+    accepted_patterns: string[];
   };
 }
 
@@ -94,7 +96,10 @@ export function ShredOptions({
           value={pattern}
           onValueChange={(v) => v && onPatternChange(v)}
         >
-          <SelectTrigger className="w-[120px] font-mono text-sm">
+          <SelectTrigger
+            className="w-[120px] font-mono text-sm"
+            disabled={currentAlgorithm?.has_fixed_pattern_sequence}
+          >
             <SelectValue placeholder="Pattern" />
           </SelectTrigger>
           <SelectContent>
@@ -103,6 +108,12 @@ export function ShredOptions({
             <SelectItem value="ones">Ones</SelectItem>
           </SelectContent>
         </Select>
+        {currentAlgorithm?.has_fixed_pattern_sequence && (
+          <span className="font-mono text-xs text-muted-foreground">
+            Fixed pattern for {currentAlgorithm.name ?? "this algorithm"}:{" "}
+            {currentAlgorithm.accepted_patterns.join(", ")}
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col gap-1.5">

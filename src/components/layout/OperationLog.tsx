@@ -1,12 +1,6 @@
 // src/components/layout/OperationLog.tsx
 import { useEffect, useRef, useState } from "react";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import {
   Terminal,
   AnimatedSpan,
 } from "@/components/ui/terminal";
@@ -39,9 +33,8 @@ function logColor(level: LogEntry["level"]): string {
 }
 
 export function OperationLog() {
-  const { logEntries, clearLog } = useShred();
+  const { logEntries } = useShred();
   const { activeSection } = useNavigation();
-  const [collapsed, setCollapsed] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
 
@@ -64,93 +57,37 @@ export function OperationLog() {
 
   return (
     <div className="border-t border-border bg-surface">
-      <div className="flex items-center justify-between px-4 py-2">
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-xs text-muted-foreground">
-            operation.log
-          </span>
-          <span className="font-mono text-xs text-muted-foreground">
-            ({logEntries.length})
-          </span>
-        </div>
-        <div className="flex items-center gap-1">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    onClick={clearLog}
-                    className="h-3 w-3 rounded-full bg-red-500 hover:bg-red-400 transition-colors"
-                  />
-                }
-              />
-              <TooltipContent>Clear log</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
-          {!collapsed ? (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      onClick={() => setCollapsed(true)}
-                      className="h-3 w-3 rounded-full bg-amber-500 hover:bg-amber-400 transition-colors"
-                    />
-                  }
-                />
-                <TooltipContent>Collapse log</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          ) : (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      onClick={() => setCollapsed(false)}
-                      className="h-3 w-3 rounded-full bg-green-500 hover:bg-green-400 transition-colors"
-                    />
-                  }
-                />
-                <TooltipContent>Expand log</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
-        </div>
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-border">
+        <span className="font-mono text-xs text-muted-foreground">operation.log</span>
+        <span className="font-mono text-xs text-muted-foreground">({logEntries.length})</span>
       </div>
-      {!collapsed && (
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="h-[180px] overflow-auto border-t border-border px-4 pb-4"
-        >
-          {logEntries.length === 0 ? (
-            <p className="py-4 text-center font-mono text-xs text-muted-foreground">
-              {emptyMessage}
-            </p>
-          ) : (
-            <Terminal sequence={false} className="max-w-none border-0 bg-transparent p-0">
-              {logEntries.map((entry) => (
-                <AnimatedSpan
-                  key={entry.id}
-                  delay={0}
-                  className={cn("font-mono text-xs", logColor(entry.level))}
-                >
-                  <span>
-                    <span className="text-muted-foreground">[{formatTime(entry.timestamp)}]</span>{" "}
-                    {entry.level === "command" ? "> " : ""}
-                    {entry.message}
-                  </span>
-                </AnimatedSpan>
-              ))}
-            </Terminal>
-          )}
-        </div>
-      )}
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="h-[180px] overflow-auto border-t border-border px-4 pb-4"
+      >
+        {logEntries.length === 0 ? (
+          <p className="py-4 text-center font-mono text-xs text-muted-foreground">
+            {emptyMessage}
+          </p>
+        ) : (
+          <Terminal sequence={false} className="max-w-none border-0 bg-transparent p-0">
+            {logEntries.map((entry) => (
+              <AnimatedSpan
+                key={entry.id}
+                delay={0}
+                className={cn("font-mono text-xs", logColor(entry.level))}
+              >
+                <span>
+                  <span className="text-muted-foreground">[{formatTime(entry.timestamp)}]</span>{" "}
+                  {entry.level === "command" ? "> " : ""}
+                  {entry.message}
+                </span>
+              </AnimatedSpan>
+            ))}
+          </Terminal>
+        )}
+      </div>
     </div>
   );
 }

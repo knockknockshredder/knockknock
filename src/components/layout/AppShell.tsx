@@ -38,7 +38,7 @@ export function AppShell({ children, bottom }: AppShellProps) {
               onResize={(d) =>
                 setLeftSidebarWidth((w) => Math.max(160, Math.min(320, w + d)))
               }
-              onReset={() => setLeftSidebarWidth(200)}
+              onReset={() => setLeftSidebarWidth(260)}
             />
           </>
         )}

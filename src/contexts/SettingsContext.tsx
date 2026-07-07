@@ -51,7 +51,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     persisted.defaultAlgorithmIndex ?? 0
   );
   const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(
-    persisted.leftSidebarWidth ?? 200
+    persisted.leftSidebarWidth ?? 260
   );
   const [rightSidebarWidth, setRightSidebarWidth] = useState<number>(
     persisted.rightSidebarWidth ?? 260

@@ -6,7 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useBrowser } from "@/contexts/BrowserContext";
 
 export function LeftSidebar() {
-  const { browsers, isScanning } = useBrowser();
+  const { browsers, isScanning, selectAllProfiles, deselectAllProfiles } = useBrowser();
   const [acknowledgedBrowsers, setAcknowledgedBrowsers] = useState<Set<string>>(new Set());
   const runningBrowsers = browsers.filter((b) => b.isRunning);
 
@@ -14,12 +14,35 @@ export function LeftSidebar() {
     setAcknowledgedBrowsers((prev) => new Set(prev).add(browserId));
   };
 
+  const selectAllAll = () => browsers.forEach((b) => {
+    selectAllProfiles(b.id);
+  });
+  const deselectAllAll = () => browsers.forEach((b) => {
+    deselectAllProfiles(b.id);
+  });
+
   return (
     <div className="flex flex-col h-full">
-      <div className="px-3 py-2 border-b border-border">
+      <div className="px-3 py-2 border-b border-border flex items-center justify-between">
         <h2 className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
           Browsers
         </h2>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={selectAllAll}
+            className="font-mono text-xs text-accent hover:underline"
+          >
+            Select all
+          </button>
+          <button
+            type="button"
+            onClick={deselectAllAll}
+            className="font-mono text-xs text-muted-foreground hover:underline"
+          >
+            Deselect all
+          </button>
+        </div>
       </div>
       <ScrollArea className="flex-1">
         <div className="flex flex-col gap-3 p-3">
