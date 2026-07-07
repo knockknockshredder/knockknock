@@ -15,8 +15,7 @@ mod tests;
 pub use errors::ShredError;
 pub use traits::{PlatformIo, ProgressReporter, ShredAlgorithm, VerificationStrategy};
 pub use types::{
-    HardLinkInfo, MediaType, PatternType, ProcessInfo, ProgressEvent, ShredReport,
-    ShredReportError, ShredResult, ShredStatus, VerificationLevel, VerificationResult,
+    MediaType, PatternType, ShredReport, ShredReportError, ShredResult, VerificationLevel,
 };
 
 /// Shred a single file with full pipeline

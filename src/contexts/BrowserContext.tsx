@@ -70,9 +70,11 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
     try {
       const browsers = await invoke<DetectedBrowser[]>("detect_browsers");
       setBrowsers(browsers);
+      const browserNames = browsers.map((b) => b.name);
+      const profileCount = browsers.reduce((sum, b) => sum + b.profiles.length, 0);
       addLogEntry(
         "success",
-        `Rescan complete: found ${browsers.length} browsers, ${browsers.reduce((sum, b) => sum + b.profiles.length, 0)} profiles`
+        `Found ${browserNames.join(", ")} (${profileCount} profile${profileCount !== 1 ? "s" : ""})`
       );
     } catch (err) {
       addLogEntry("error", `Browser rescan failed: ${err}`);

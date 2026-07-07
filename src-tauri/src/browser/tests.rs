@@ -4,7 +4,6 @@
 mod tests {
     use crate::browser::detection::{detect_browsers, detect_data_types, estimate_directory_size};
     use crate::browser::paths::{get_browser_base_paths, BROWSER_PATHS};
-    use crate::browser::process::is_browser_running;
     use crate::browser::types::BrowserDataType;
     use std::fs;
     use std::path::PathBuf;
@@ -112,22 +111,5 @@ mod tests {
     fn test_estimate_directory_size_nonexistent_is_zero() {
         let total = estimate_directory_size(std::path::Path::new("/nonexistent/zzz/yyy"));
         assert_eq!(total, 0);
-    }
-
-    #[test]
-    fn test_is_browser_running_handles_unknown_name() {
-        // Random junk browser name should not match any real process.
-        // We don't assert a specific boolean — just that it doesn't panic
-        // and returns a bool.
-        let tmp = TempDir::new().unwrap();
-        let _: bool =
-            is_browser_running(&["definitely_not_a_real_browser_xyz_zzz"], tmp.path(), "");
-    }
-
-    #[test]
-    fn test_is_browser_running_handles_empty_strings() {
-        // Empty inputs should not panic.
-        let tmp = TempDir::new().unwrap();
-        let _: bool = is_browser_running(&[""], tmp.path(), "");
     }
 }

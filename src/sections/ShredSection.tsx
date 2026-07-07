@@ -40,6 +40,7 @@ export function ShredSection() {
   const pendingFiles = files.filter((f) => f.status === "pending");
   const selectedProfileCount = getSelectedCount();
   const currentAlgorithm = algorithms[algorithmIndex];
+  const runningBrowsers = browsers.filter((b) => b.isRunning).map((b) => b.name);
 
   // Load algorithms on mount and sync default from settings
   useEffect(() => {
@@ -198,6 +199,7 @@ export function ShredSection() {
         onOpenChange={setDialogOpen}
         fileCount={pendingFiles.length}
         profileCount={selectedProfileCount}
+        runningBrowsers={runningBrowsers}
         onConfirm={executeShred}
       />
     </div>

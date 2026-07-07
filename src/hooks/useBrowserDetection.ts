@@ -1,24 +1,25 @@
 // src/hooks/useBrowserDetection.ts
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useBrowser } from "@/contexts/BrowserContext";
 import { useShred } from "@/contexts/ShredContext";
 import type { DetectedBrowser } from "@/types";
 
+// Module-level guard persists across StrictMode double-invoke
+let hasScanned = false;
+
 export function useBrowserDetection() {
   const { setBrowsers, setIsScanning } = useBrowser();
   const { addLogEntry } = useShred();
-  const loggedRef = useRef(false);
 
   useEffect(() => {
+    if (hasScanned) return;
+    hasScanned = true;
     let cancelled = false;
 
     async function scan() {
       setIsScanning(true);
-      if (!loggedRef.current) {
-        addLogEntry("info", "Scanning for installed browsers...");
-        loggedRef.current = true;
-      }
+      addLogEntry("info", "Scanning for installed browsers...");
 
       try {
         const browsers = await invoke<DetectedBrowser[]>("detect_browsers");
@@ -26,9 +27,13 @@ export function useBrowserDetection() {
 
         setBrowsers(browsers);
         setIsScanning(false);
+
+        // Build human-friendly browser list
+        const browserNames = browsers.map((b) => b.name);
+        const profileCount = browsers.reduce((sum, b) => sum + b.profiles.length, 0);
         addLogEntry(
           "success",
-          `Found ${browsers.length} browsers, ${browsers.reduce((sum, b) => sum + b.profiles.length, 0)} profiles`
+          `Found ${browserNames.join(", ")} (${profileCount} profile${profileCount !== 1 ? "s" : ""})`
         );
       } catch (err) {
         if (cancelled) return;

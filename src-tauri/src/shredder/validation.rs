@@ -2,7 +2,7 @@
 
 use crate::shredder::errors::ShredError;
 use crate::shredder::types::HardLinkInfo;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const SYSTEM_PATHS: &[&str] = &[
     // Windows

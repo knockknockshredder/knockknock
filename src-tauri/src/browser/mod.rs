@@ -2,7 +2,6 @@
 
 pub mod detection;
 pub mod paths;
-pub mod process;
 pub mod types;
 
 #[cfg(test)]

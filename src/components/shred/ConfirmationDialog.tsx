@@ -16,6 +16,7 @@ interface ConfirmationDialogProps {
   onOpenChange: (open: boolean) => void;
   fileCount: number;
   profileCount: number;
+  runningBrowsers: string[];
   onConfirm: () => void;
 }
 
@@ -24,6 +25,7 @@ export function ConfirmationDialog({
   onOpenChange,
   fileCount,
   profileCount,
+  runningBrowsers,
   onConfirm,
 }: ConfirmationDialogProps) {
   const hasFiles = fileCount > 0;
@@ -78,6 +80,11 @@ export function ConfirmationDialog({
             Confirm Destruction
           </AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
+          {runningBrowsers.length > 0 && (
+            <p className="mt-2 text-amber-500 font-mono text-xs">
+              {runningBrowsers.join(", ")} {runningBrowsers.length === 1 ? "is" : "are"} currently running. Close {runningBrowsers.length === 1 ? "it" : "them"} first or data may be corrupted.
+            </p>
+          )}
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>

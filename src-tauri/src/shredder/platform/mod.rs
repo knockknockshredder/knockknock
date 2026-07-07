@@ -15,11 +15,17 @@ use crate::shredder::traits::PlatformIo;
 
 pub fn create_platform_io() -> Box<dyn PlatformIo> {
     #[cfg(target_os = "windows")]
-    { Box::new(windows::WindowsIo::new()) }
+    {
+        Box::new(windows::WindowsIo::new())
+    }
 
     #[cfg(target_os = "macos")]
-    { Box::new(macos::MacOsIo::new()) }
+    {
+        Box::new(macos::MacOsIo::new())
+    }
 
     #[cfg(target_os = "linux")]
-    { Box::new(linux::LinuxIo::new()) }
+    {
+        Box::new(linux::LinuxIo::new())
+    }
 }
