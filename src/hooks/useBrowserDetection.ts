@@ -13,7 +13,6 @@ export function useBrowserDetection() {
   useEffect(() => {
     if (hasScanned.current) return;
     hasScanned.current = true;
-    let cancelled = false;
 
     async function scan() {
       setIsScanning(true);
@@ -21,7 +20,6 @@ export function useBrowserDetection() {
 
       try {
         const browsers = await invoke<DetectedBrowser[]>("detect_browsers");
-        if (cancelled) return;
 
         setBrowsers(browsers);
         setIsScanning(false);
@@ -34,13 +32,11 @@ export function useBrowserDetection() {
           `Found ${browserNames.join(", ")} (${profileCount} profile${profileCount !== 1 ? "s" : ""})`
         );
       } catch (err) {
-        if (cancelled) return;
         setIsScanning(false);
         addLogEntry("error", `Browser scan failed: ${err}`);
       }
     }
 
     scan();
-    return () => { cancelled = true; };
   }, [setBrowsers, setIsScanning, addLogEntry]);
 }
