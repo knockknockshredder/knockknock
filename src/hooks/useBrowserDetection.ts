@@ -8,10 +8,11 @@ import type { DetectedBrowser } from "@/types";
 export function useBrowserDetection() {
   const { setBrowsers, setIsScanning } = useBrowser();
   const { addLogEntry } = useShred();
-  const scanIdRef = useRef(0);
+  const hasScanned = useRef(false);
 
   useEffect(() => {
-    const id = ++scanIdRef.current;
+    if (hasScanned.current) return;
+    hasScanned.current = true;
     let cancelled = false;
 
     async function scan() {
@@ -20,7 +21,7 @@ export function useBrowserDetection() {
 
       try {
         const browsers = await invoke<DetectedBrowser[]>("detect_browsers");
-        if (cancelled || scanIdRef.current !== id) return;
+        if (cancelled) return;
 
         setBrowsers(browsers);
         setIsScanning(false);
@@ -29,7 +30,7 @@ export function useBrowserDetection() {
           `Found ${browsers.length} browsers, ${browsers.reduce((sum, b) => sum + b.profiles.length, 0)} profiles`
         );
       } catch (err) {
-        if (cancelled || scanIdRef.current !== id) return;
+        if (cancelled) return;
         setIsScanning(false);
         addLogEntry("error", `Browser scan failed: ${err}`);
       }
