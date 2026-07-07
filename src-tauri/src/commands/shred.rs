@@ -76,39 +76,66 @@ pub struct FileMetadata {
     pub size: u64,
 }
 
+/// Collect metadata for a single file
+fn collect_file_metadata(path: &std::path::Path, path_str: &str) -> Option<FileMetadata> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return None,
+    };
+
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    Some(FileMetadata {
+        path: path_str.to_string(),
+        name,
+        size: metadata.len(),
+    })
+}
+
+/// Recursively collect all files from a directory
+fn collect_files_from_dir(dir: &std::path::Path, valid: &mut Vec<FileMetadata>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            let path_str = path.to_string_lossy().to_string();
+            if let Some(meta) = collect_file_metadata(&path, &path_str) {
+                valid.push(meta);
+            }
+        } else if path.is_dir() {
+            // Recurse into subdirectory
+            collect_files_from_dir(&path, valid);
+        }
+    }
+}
+
 #[tauri::command]
 pub fn validate_paths(paths: Vec<String>) -> Result<Vec<FileMetadata>, String> {
     let mut valid = Vec::new();
     for path_str in paths {
         let path = std::path::Path::new(&path_str);
 
-        // Check if file exists
+        // Check if path exists
         if !path.exists() {
             continue;
         }
 
-        // Check if it's a file (not directory)
-        if !path.is_file() {
-            continue;
+        if path.is_file() {
+            // Single file — add directly
+            if let Some(meta) = collect_file_metadata(path, &path_str) {
+                valid.push(meta);
+            }
+        } else if path.is_dir() {
+            // Directory — recurse and collect all files
+            collect_files_from_dir(path, &mut valid);
         }
-
-        // Get metadata
-        let metadata = match std::fs::metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        // Get filename
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        valid.push(FileMetadata {
-            path: path_str,
-            name,
-            size: metadata.len(),
-        });
     }
     Ok(valid)
 }
