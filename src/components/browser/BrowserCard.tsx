@@ -32,12 +32,14 @@ const SI_BROWSERS: Record<string, string> = {
 };
 
 function BrowserIcon({ name }: { name: string }) {
-  // FontAwesome icons — larger to compensate for ~20% built-in padding
-  if (name === "Edge") {
-    return <FontAwesomeIcon icon={faEdge} className="h-6 w-6 shrink-0 text-white" />;
-  }
-  if (name === "Internet Explorer") {
-    return <FontAwesomeIcon icon={faInternetExplorer} className="h-6 w-6 shrink-0 text-white" />;
+  // FontAwesome icons — wrapped in 20px container, scaled up to strip padding
+  if (name === "Edge" || name === "Internet Explorer") {
+    const icon = name === "Edge" ? faEdge : faInternetExplorer;
+    return (
+      <div className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden">
+        <FontAwesomeIcon icon={icon} className="h-[25px] w-[25px] text-white" />
+      </div>
+    );
   }
 
   // Simple Icons SVGs (white)
