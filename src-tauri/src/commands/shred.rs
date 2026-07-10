@@ -114,29 +114,61 @@ fn collect_file_metadata(path: &std::path::Path, path_str: &str) -> Option<FileM
 }
 
 /// Recursively collect all files from a directory
-fn collect_files_from_dir(dir: &std::path::Path, valid: &mut Vec<FileMetadata>) {
+fn collect_files_from_dir(
+    dir: &std::path::Path,
+    valid: &mut Vec<FileMetadata>,
+    errors: &mut Vec<String>,
+    depth: usize,
+) {
+    const MAX_DEPTH: usize = 50;
+    if depth > MAX_DEPTH {
+        errors.push(format!(
+            "Max directory depth ({}) exceeded at: {:?}",
+            MAX_DEPTH, dir
+        ));
+        return;
+    }
+
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(e) => {
+            errors.push(format!("Cannot read directory {:?}: {}", dir, e));
+            return;
+        }
     };
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_file() {
+
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                errors.push(format!("Cannot stat {:?}: {}", path, e));
+                continue;
+            }
+        };
+
+        if metadata.file_type().is_symlink() {
+            continue; // Skip symlinks
+        }
+
+        if metadata.file_type().is_file() {
             let path_str = path.to_string_lossy().to_string();
             if let Some(meta) = collect_file_metadata(&path, &path_str) {
                 valid.push(meta);
             }
-        } else if path.is_dir() {
-            // Recurse into subdirectory
-            collect_files_from_dir(&path, valid);
+        } else if metadata.file_type().is_dir() {
+            collect_files_from_dir(&path, valid, errors, depth + 1);
         }
     }
 }
 
 #[tauri::command]
-pub fn validate_paths(paths: Vec<String>) -> Result<Vec<FileMetadata>, String> {
+pub fn validate_paths(
+    paths: Vec<String>,
+) -> Result<(Vec<FileMetadata>, Vec<String>), String> {
     let mut valid = Vec::new();
+    let mut errors = Vec::new();
     for path_str in paths {
         let path = std::path::Path::new(&path_str);
 
@@ -152,8 +184,8 @@ pub fn validate_paths(paths: Vec<String>) -> Result<Vec<FileMetadata>, String> {
             }
         } else if path.is_dir() {
             // Directory — recurse and collect all files
-            collect_files_from_dir(path, &mut valid);
+            collect_files_from_dir(path, &mut valid, &mut errors, 0);
         }
     }
-    Ok(valid)
+    Ok((valid, errors))
 }
