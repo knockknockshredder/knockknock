@@ -22,13 +22,17 @@ impl PlatformIo for MacOsIo {
             .open(path)
             .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
 
-        // Set F_NOCACHE to bypass buffer cache
         #[cfg(unix)]
         {
             use std::os::unix::io::AsRawFd;
             let fd = file.as_raw_fd();
-            unsafe {
-                libc::fcntl(fd, libc::F_NOCACHE, 1);
+            let result = unsafe { libc::fcntl(fd, libc::F_NOCACHE, 1) };
+            if result != 0 {
+                eprintln!(
+                    "[KnockKnock] Warning: F_NOCACHE failed for {:?}: {}",
+                    path,
+                    std::io::Error::last_os_error()
+                );
             }
         }
 
@@ -42,8 +46,24 @@ impl PlatformIo for MacOsIo {
     }
 
     fn sync_to_disk(&self, file: &mut File) -> Result<(), ShredError> {
-        file.sync_all()
-            .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = file.as_raw_fd();
+            let result = unsafe { libc::fcntl(fd, libc::F_FULLFSYNC) };
+            if result != 0 {
+                return Err(ShredError::from_io_error(
+                    PathBuf::from("<open file>"),
+                    std::io::Error::last_os_error(),
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            file.sync_all()
+                .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
+        }
     }
 
     fn rename_random(&self, path: &Path) -> Result<PathBuf, ShredError> {
