@@ -1,11 +1,14 @@
 // src/components/shred/ShredButton.tsx
 import { cn } from "@/lib/utils";
+import type { ProgressState } from "@/types";
 
 interface ShredButtonProps {
   fileCount: number;
   profileCount: number;
   isShredding: boolean;
   onClick: () => void;
+  onCancel?: () => void;
+  progress?: ProgressState | null;
 }
 
 export function ShredButton({
@@ -13,10 +16,39 @@ export function ShredButton({
   profileCount,
   isShredding,
   onClick,
+  onCancel,
+  progress,
 }: ShredButtonProps) {
   const hasFiles = fileCount > 0;
   const hasProfiles = profileCount > 0;
   const disabled = (!hasFiles && !hasProfiles) || isShredding;
+
+  if (isShredding) {
+    return (
+      <div className="flex flex-col items-center gap-2 w-full max-w-[400px]">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="w-full border-2 border-amber-500 px-6 py-3 font-mono text-sm font-semibold uppercase tracking-wider text-amber-500 hover:bg-amber-500 hover:text-background transition-colors"
+        >
+          Cancel Shredding
+        </button>
+        {progress && (
+          <div className="w-full bg-secondary rounded-full h-2">
+            <div
+              className="bg-amber-500 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${progress.percent}%` }}
+            />
+          </div>
+        )}
+        {progress && (
+          <p className="font-mono text-xs text-muted-foreground">
+            {progress.current}/{progress.total} files ({progress.percent}%)
+          </p>
+        )}
+      </div>
+    );
+  }
 
   let label: string;
   if (hasFiles && hasProfiles) {

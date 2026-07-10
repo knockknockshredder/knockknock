@@ -26,6 +26,8 @@ export function ShredSection() {
     updateFileStatus,
     setAlgorithms,
     algorithms,
+    progress,
+    setProgress,
   } = useShred();
 
   const { getSelectedCount, browsers } = useBrowser();
@@ -86,6 +88,14 @@ export function ShredSection() {
           ? `[${file_path}] error: ${status.message}`
           : `[${file_path}] ${statusStr} (pass ${current_pass}/${total_passes})`;
       addLogEntry(status.type === "Error" ? "error" : "info", message);
+
+      // Update progress state
+      setProgress({
+        current: pendingFiles.filter((f) => f.status === "done").length,
+        total: pendingFiles.length,
+        percent: Math.round((current_pass / total_passes) * 100),
+        currentFile: file_path,
+      });
     });
     unlistenRef.current = unlisten;
 
@@ -166,7 +176,17 @@ export function ShredSection() {
     } finally {
       unlisten();
       unlistenRef.current = null;
+      setProgress(null);
       setIsShredding(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    try {
+      await invoke("cancel_shred");
+      addLogEntry("warning", "Cancellation requested...");
+    } catch (err) {
+      addLogEntry("error", `Cancel failed: ${err}`);
     }
   };
 
@@ -192,6 +212,8 @@ export function ShredSection() {
           profileCount={selectedProfileCount}
           isShredding={isShredding}
           onClick={handleShredClick}
+          onCancel={handleCancel}
+          progress={progress}
         />
       </div>
       <ConfirmationDialog

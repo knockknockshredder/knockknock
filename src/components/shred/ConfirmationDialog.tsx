@@ -89,7 +89,10 @@ export function ConfirmationDialog({
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            onClick={onConfirm}
+            onClick={() => {
+              onConfirm();
+              onOpenChange(false);
+            }}
             className="bg-red-600 text-white hover:bg-red-700"
           >
             DESTROY

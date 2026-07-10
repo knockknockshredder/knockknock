@@ -67,6 +67,13 @@ export interface ProgressEvent {
   status: ShredStatus;
 }
 
+export interface ProgressState {
+  current: number;
+  total: number;
+  percent: number;
+  currentFile: string;
+}
+
 export interface ShredReport {
   total_files: number;
   successful: number;

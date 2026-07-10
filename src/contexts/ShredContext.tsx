@@ -1,6 +1,6 @@
 // src/contexts/ShredContext.tsx
 import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
-import type { ShredFile, LogEntry, AlgorithmOption } from "@/types";
+import type { ShredFile, LogEntry, AlgorithmOption, ProgressState } from "@/types";
 
 interface ShredState {
   files: ShredFile[];
@@ -8,6 +8,7 @@ interface ShredState {
   isShredding: boolean;
   logEntries: LogEntry[];
   algorithms: AlgorithmOption[];
+  progress: ProgressState | null;
   addFiles: (files: Array<{ path: string; name: string; size: number }>) => void;
   removeFile: (id: string) => void;
   clearFiles: () => void;
@@ -16,6 +17,7 @@ interface ShredState {
   addLogEntry: (level: LogEntry["level"], message: string) => void;
   clearLog: () => void;
   setAlgorithms: (algorithms: AlgorithmOption[]) => void;
+  setProgress: (progress: ProgressState | null) => void;
   updateFileStatus: (id: string, status: ShredFile["status"], error?: string) => void;
 }
 
@@ -27,6 +29,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   const [isShredding, setIsShredding] = useState(false);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [algorithms, setAlgorithms] = useState<AlgorithmOption[]>([]);
+  const [progress, setProgress] = useState<ProgressState | null>(null);
 
   const addFiles = useCallback((newEntries: Array<{ path: string; name: string; size: number }>) => {
     const newFiles: ShredFile[] = newEntries
@@ -73,6 +76,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         isShredding,
         logEntries,
         algorithms,
+        progress,
         addFiles,
         removeFile,
         clearFiles,
@@ -81,6 +85,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         addLogEntry,
         clearLog,
         setAlgorithms,
+        setProgress,
         updateFileStatus,
       }}
     >
