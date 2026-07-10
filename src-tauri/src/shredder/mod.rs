@@ -146,7 +146,9 @@ pub fn shred_file(
 
     // 13. Issue TRIM for SSDs
     if media_type == MediaType::Ssd {
-        let _ = platform_io.issue_trim(path);
+        if let Err(e) = platform_io.issue_trim(&renamed_path) {
+            progress.on_warning(path, &format!("TRIM failed: {}", e));
+        }
     }
 
     let result = ShredResult {
