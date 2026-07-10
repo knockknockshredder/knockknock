@@ -58,6 +58,63 @@ pub fn cancel_shred() {
     crate::shredder::cancel::cancel_global();
 }
 
+/// Re-launch the current executable with administrator privileges.
+///
+/// On Windows, this invokes `ShellExecuteW` with the `runas` verb, which
+/// triggers the standard UAC elevation prompt. On a successful elevation
+/// request the current process exits so the elevated instance can replace
+/// it. On any failure (user cancelled UAC, no admin token available, etc.)
+/// an error string is returned to the frontend.
+///
+/// On non-Windows platforms, returns an "unsupported" error so the UI can
+/// hide the elevation control.
+#[tauri::command]
+pub fn request_elevation() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("Cannot determine executable path: {}", e))?;
+
+        let exe_wide: Vec<u16> = exe
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+
+        // ShellExecuteW returns an HINSTANCE. Values > 32 indicate success;
+        // values <= 32 are predefined error codes (SE_ERR_*).
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                exe_wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+
+        if (result as isize) > 32 {
+            // Exit the non-elevated instance so the elevated one takes over.
+            std::process::exit(0);
+        } else {
+            Err(format!(
+                "Elevation request failed (ShellExecuteW returned {})",
+                result as isize
+            ))
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("Elevation is not supported on this platform".to_string())
+    }
+}
+
 #[tauri::command]
 pub fn cleanup_orphans() -> Vec<String> {
     let remaining = crate::shredder::journal::cleanup_orphans();
