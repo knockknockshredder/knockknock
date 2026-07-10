@@ -57,7 +57,6 @@ impl ShredAlgorithm for RandomOnly {
                 total_written,
                 file_size * passes as u64,
             )?;
-            progress.on_pass_complete(pass + 1, passes);
         }
 
         Ok(ShredResult {
