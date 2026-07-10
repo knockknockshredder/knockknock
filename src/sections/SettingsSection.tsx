@@ -1,5 +1,8 @@
 // src/sections/SettingsSection.tsx
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { ToggleSetting } from "@/components/settings/ToggleSetting";
+import { PinSetup } from "@/components/settings/PinSetup";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useShred } from "@/contexts/ShredContext";
 import { cn } from "@/lib/utils";
@@ -30,6 +33,12 @@ export function SettingsSection() {
     setLogObfuscation,
   } = useSettings();
   const { algorithms } = useShred();
+  const [pinEnabled, setPinEnabled] = useState(false);
+  const [pinSetupOpen, setPinSetupOpen] = useState(false);
+
+  useEffect(() => {
+    invoke<boolean>("is_pin_enabled").then(setPinEnabled);
+  }, []);
 
   return (
     <div className="flex flex-col gap-6">
@@ -44,6 +53,40 @@ export function SettingsSection() {
           description="Clear the operation log after each shredding session"
           checked={autoClearLog}
           onCheckedChange={setAutoClearLog}
+        />
+      </section>
+
+      <section>
+        <h2 className="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
+          PIN Protection
+        </h2>
+        <div className="flex flex-col gap-3">
+          <ToggleSetting
+            label="Enable PIN"
+            description="Require PIN to open app and shred files"
+            checked={pinEnabled}
+            onCheckedChange={(enabled) => {
+              if (enabled) {
+                setPinSetupOpen(true);
+              } else {
+                invoke("disable_pin").then(() => setPinEnabled(false));
+              }
+            }}
+          />
+          {pinEnabled && (
+            <button
+              type="button"
+              onClick={() => setPinSetupOpen(true)}
+              className="px-4 py-2 text-sm font-mono border border-border hover:border-muted-foreground transition-colors"
+            >
+              Change PIN
+            </button>
+          )}
+        </div>
+        <PinSetup
+          open={pinSetupOpen}
+          onOpenChange={setPinSetupOpen}
+          onPinSet={() => setPinEnabled(true)}
         />
       </section>
 
