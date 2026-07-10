@@ -82,11 +82,30 @@ impl PlatformIo for WindowsIo {
     }
 
     fn schedule_delete_on_reboot(&self, path: &Path) -> Result<(), ShredError> {
-        // TODO: Implement MoveFileExW with MOVEFILE_DELAY_UNTIL_REBOOT
-        Err(ShredError::IoError {
-            path: path.to_path_buf(),
-            kind: "NotImplemented".to_string(),
-            message: "Delete-on-reboot not yet implemented".to_string(),
-        })
+        use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+        use windows_sys::Win32::Storage::FileSystem::MOVEFILE_DELAY_UNTIL_REBOOT;
+
+        let path_wide: Vec<u16> = path
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let result = unsafe {
+            MoveFileExW(
+                path_wide.as_ptr(),
+                std::ptr::null(),
+                MOVEFILE_DELAY_UNTIL_REBOOT,
+            )
+        };
+
+        if result != 0 {
+            Ok(())
+        } else {
+            Err(ShredError::IoError {
+                path: path.to_path_buf(),
+                kind: "MoveFileExW".to_string(),
+                message: "Failed to schedule delete on reboot".to_string(),
+            })
+        }
     }
 }
