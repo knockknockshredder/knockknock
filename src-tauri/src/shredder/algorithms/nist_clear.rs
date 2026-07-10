@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 pub struct NistClear;
 
-const BUFFER_SIZE: usize = 256 * 1024; // 256 KB
+const BUFFER_SIZE: usize = 1024 * 1024; // 1 MB
 
 impl ShredAlgorithm for NistClear {
     fn name(&self) -> &str {
@@ -55,7 +55,8 @@ impl ShredAlgorithm for NistClear {
             total_written += write_pass(
                 file,
                 file_size,
-                &buffer,
+                pattern,
+                &mut buffer,
                 progress,
                 total_written,
                 file_size * passes as u64,

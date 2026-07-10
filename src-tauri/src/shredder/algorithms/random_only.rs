@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 pub struct RandomOnly;
 
-const BUFFER_SIZE: usize = 256 * 1024; // 256 KB
+const BUFFER_SIZE: usize = 1024 * 1024; // 1 MB
 
 impl ShredAlgorithm for RandomOnly {
     fn name(&self) -> &str {
@@ -34,7 +34,7 @@ impl ShredAlgorithm for RandomOnly {
         file: &mut File,
         file_size: u64,
         passes: u32,
-        _pattern: PatternType,
+        pattern: PatternType,
         progress: &dyn ProgressReporter,
     ) -> Result<ShredResult, ShredError> {
         let start = std::time::Instant::now();
@@ -51,7 +51,8 @@ impl ShredAlgorithm for RandomOnly {
             total_written += write_pass(
                 file,
                 file_size,
-                &buffer,
+                pattern,
+                &mut buffer,
                 progress,
                 total_written,
                 file_size * passes as u64,

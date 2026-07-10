@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 pub struct Dod522022M;
 
-const BUFFER_SIZE: usize = 256 * 1024; // 256 KB
+const BUFFER_SIZE: usize = 1024 * 1024; // 1 MB
 
 fn dod_pass_pattern(pass: u32) -> PatternType {
     match pass % 3 {
@@ -46,7 +46,7 @@ impl ShredAlgorithm for Dod522022M {
         file: &mut File,
         file_size: u64,
         passes: u32,
-        _pattern: PatternType,
+        pattern: PatternType,
         progress: &dyn ProgressReporter,
     ) -> Result<ShredResult, ShredError> {
         let start = std::time::Instant::now();
@@ -68,7 +68,8 @@ impl ShredAlgorithm for Dod522022M {
             total_written += write_pass(
                 file,
                 file_size,
-                &buffer,
+                pattern,
+                &mut buffer,
                 progress,
                 total_written,
                 file_size * passes as u64,
