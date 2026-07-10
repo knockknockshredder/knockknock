@@ -1,6 +1,19 @@
 // src/contexts/ShredContext.tsx
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
-import type { ShredFile, LogEntry, AlgorithmOption, ProgressState } from "@/types";
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useEffect,
+  type ReactNode,
+} from "react";
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  ShredFile,
+  LogEntry,
+  AlgorithmOption,
+  ProgressState,
+} from "@/types";
 
 interface ShredState {
   files: ShredFile[];
@@ -9,6 +22,7 @@ interface ShredState {
   logEntries: LogEntry[];
   algorithms: AlgorithmOption[];
   progress: ProgressState | null;
+  vaultLoaded: boolean;
   addFiles: (files: Array<{ path: string; name: string; size: number }>) => void;
   removeFile: (id: string) => void;
   clearFiles: () => void;
@@ -19,6 +33,8 @@ interface ShredState {
   setAlgorithms: (algorithms: AlgorithmOption[]) => void;
   setProgress: (progress: ProgressState | null) => void;
   updateFileStatus: (id: string, status: ShredFile["status"], error?: string) => void;
+  loadVault: (pin: string) => Promise<void>;
+  saveVault: (pin: string) => Promise<void>;
 }
 
 const ShredContext = createContext<ShredState | null>(null);
@@ -30,19 +46,23 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [algorithms, setAlgorithms] = useState<AlgorithmOption[]>([]);
   const [progress, setProgress] = useState<ProgressState | null>(null);
+  const [vaultLoaded, setVaultLoaded] = useState(false);
 
   const addFiles = useCallback((newEntries: Array<{ path: string; name: string; size: number }>) => {
-    const newFiles: ShredFile[] = newEntries
-      .filter((entry) => !files.some((f) => f.path === entry.path))
-      .map((entry) => ({
-        id: crypto.randomUUID(),
-        path: entry.path,
-        name: entry.name,
-        size: entry.size,
-        status: "pending" as const,
-      }));
-    setFiles((prev) => [...prev, ...newFiles]);
-  }, [files]);
+    setFiles((prev) => {
+      const existingPaths = new Set(prev.map((f) => f.path));
+      const newFiles: ShredFile[] = newEntries
+        .filter((entry) => !existingPaths.has(entry.path))
+        .map((entry) => ({
+          id: crypto.randomUUID(),
+          path: entry.path,
+          name: entry.name,
+          size: entry.size,
+          status: "pending" as const,
+        }));
+      return [...prev, ...newFiles];
+    });
+  }, []);
 
   const removeFile = useCallback((id: string) => {
     setFiles((prev) => prev.filter((f) => f.id !== id));
@@ -68,6 +88,59 @@ export function ShredProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  // Decrypt the on-disk vault with the user's PIN and rehydrate the file
+  // list. Files that no longer exist on disk are silently dropped by
+  // validate_paths. Failures (wrong PIN, corrupted vault) are logged but
+  // do not block app startup — the user can keep adding files normally.
+  const loadVault = useCallback(async (pin: string) => {
+    try {
+      const exists = await invoke<boolean>("vault_exists");
+      if (!exists) {
+        return;
+      }
+      const paths = await invoke<string[]>("load_vault", { pin });
+      if (paths.length === 0) {
+        setVaultLoaded(true);
+        return;
+      }
+      const [validFiles] = await invoke<[FileMetadata[], string[]]>(
+        "validate_paths",
+        { paths }
+      );
+      addFiles(validFiles);
+      setVaultLoaded(true);
+    } catch (err) {
+      console.error("Failed to load vault:", err);
+      addLogEntry("error", `Failed to restore session: ${err}`);
+    }
+  }, [addFiles, addLogEntry]);
+
+  // Encrypt the current shred list and persist it. Best-effort: a save
+  // failure is logged but never blocks the user's workflow.
+  const saveVault = useCallback(
+    async (pin: string) => {
+      try {
+        const paths = files.map((f) => f.path);
+        await invoke("save_vault", { paths, pin });
+      } catch (err) {
+        console.error("Failed to save vault:", err);
+        addLogEntry("error", `Failed to save session: ${err}`);
+      }
+    },
+    [files, addLogEntry]
+  );
+
+  // Auto-save whenever the file list changes after the vault has been
+  // unlocked. We don't have the PIN here (PIN is only known to the
+  // settings layer), so this just emits a no-op when no PIN is set. The
+  // caller wires up the actual saveVault() call from SettingsContext.
+  useEffect(() => {
+    if (vaultLoaded) {
+      // Marker effect — actual save is driven from the Settings layer
+      // when the user has unlocked their session with a PIN.
+    }
+  }, [files, vaultLoaded]);
+
   return (
     <ShredContext.Provider
       value={{
@@ -77,6 +150,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         logEntries,
         algorithms,
         progress,
+        vaultLoaded,
         addFiles,
         removeFile,
         clearFiles,
@@ -87,11 +161,20 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         setAlgorithms,
         setProgress,
         updateFileStatus,
+        loadVault,
+        saveVault,
       }}
     >
       {children}
     </ShredContext.Provider>
   );
+}
+
+/** Minimal shape returned by the Rust `validate_paths` command. */
+interface FileMetadata {
+  path: string;
+  name: string;
+  size: number;
 }
 
 export function useShred() {

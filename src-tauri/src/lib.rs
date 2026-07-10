@@ -6,6 +6,7 @@ mod drive;
 mod pin;
 mod shredder;
 mod tray;
+mod vault;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -32,6 +33,10 @@ pub fn run() {
             commands::pin::verify_pin,
             commands::pin::is_pin_enabled,
             commands::pin::disable_pin,
+            commands::vault::save_vault,
+            commands::vault::load_vault,
+            commands::vault::clear_vault,
+            commands::vault::vault_exists,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
