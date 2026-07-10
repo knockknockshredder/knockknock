@@ -92,13 +92,35 @@ pub fn read_orphans() -> Vec<JournalEntry> {
     }
 }
 
+/// Auto-expire journal entries older than this. Stops the journal from
+/// accumulating dead entries forever if the cleanup path never runs (e.g.
+/// app killed mid-shred on the same file repeatedly).
+const JOURNAL_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
+
 pub fn cleanup_orphans() -> Vec<JournalEntry> {
     let entries = read_orphans();
     let mut remaining = Vec::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
     for entry in entries {
+        // Drop entries whose renamed file may have disappeared (TTL expired or
+        // a clean shred was followed by an external delete). Either way, the
+        // rename target is uninteresting past 7 days.
+        if now.saturating_sub(entry.timestamp) > JOURNAL_TTL_SECS {
+            clear_orphan(&entry.renamed_path);
+            continue;
+        }
+
         match std::fs::remove_file(&entry.renamed_path) {
-            Ok(_) => clear_orphan(&entry.renamed_path),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => clear_orphan(&entry.renamed_path),
+            Ok(_) => {
+                clear_orphan(&entry.renamed_path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                clear_orphan(&entry.renamed_path);
+            }
             Err(_) => remaining.push(entry),
         }
     }
