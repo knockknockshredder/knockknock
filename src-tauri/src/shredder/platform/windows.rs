@@ -109,4 +109,15 @@ impl PlatformIo for WindowsIo {
             })
         }
     }
+
+    fn find_locking_processes(&self, path: &Path) -> Result<Vec<ProcessInfo>, ShredError> {
+        // Try to open exclusively — if it fails, someone has it locked
+        match OpenOptions::new().write(true).share_mode(0).open(path) {
+            Ok(_) => Ok(vec![]), // Not locked
+            Err(_) => Ok(vec![ProcessInfo {
+                pid: 0,
+                name: "Unknown (file is locked by another process)".to_string(),
+            }]),
+        }
+    }
 }
