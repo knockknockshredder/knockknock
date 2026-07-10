@@ -90,8 +90,9 @@ pub fn validate_path(path: &Path) -> Result<(), ShredError> {
 }
 
 pub fn check_hard_links(path: &Path) -> Result<HardLinkInfo, ShredError> {
-    let metadata =
-        std::fs::metadata(path).map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
+    #[cfg(unix)]
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
 
     #[cfg(unix)]
     let link_count = {
