@@ -4,9 +4,8 @@ use crate::shredder::algorithms::common::write_pass;
 use crate::shredder::errors::ShredError;
 use crate::shredder::traits::{ProgressReporter, ShredAlgorithm};
 use crate::shredder::types::*;
-use getrandom::getrandom;
+use crate::shredder::verification::PrngSeed;
 use std::fs::File;
-use std::path::PathBuf;
 
 pub struct NistClear;
 
@@ -36,22 +35,13 @@ impl ShredAlgorithm for NistClear {
         passes: u32,
         pattern: PatternType,
         progress: &dyn ProgressReporter,
+        seed: Option<&PrngSeed>,
     ) -> Result<ShredResult, ShredError> {
         let start = std::time::Instant::now();
         let mut total_written = 0u64;
         let mut buffer = vec![0u8; BUFFER_SIZE];
 
-        for pass in 0..passes {
-            match pattern {
-                PatternType::Random => getrandom(&mut buffer).map_err(|e| ShredError::IoError {
-                    path: PathBuf::from("<random>"),
-                    kind: "RandomGeneration".to_string(),
-                    message: e.to_string(),
-                })?,
-                PatternType::Zeros => buffer.fill(0x00),
-                PatternType::Ones => buffer.fill(0xFF),
-            }
-
+        for _ in 0..passes {
             total_written += write_pass(
                 file,
                 file_size,
@@ -60,6 +50,7 @@ impl ShredAlgorithm for NistClear {
                 progress,
                 total_written,
                 file_size * passes as u64,
+                seed,
             )?;
         }
 

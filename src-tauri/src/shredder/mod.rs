@@ -85,7 +85,16 @@ pub fn shred_file(
     // 7. Open file for shredding
     let mut file = platform_io.open_for_shred(path)?;
 
-    // 8. Shred with per-pass verification
+    // 8. Generate PRNG seed for deterministic Random verification.
+    //    Only Random pattern needs a seed; fixed patterns (Zeros, Ones) use
+    //    direct byte comparison and don't benefit from seeding.
+    let prng_seed = if pattern == PatternType::Random {
+        Some(verification::PrngSeed::generate()?)
+    } else {
+        None
+    };
+
+    // 9. Shred with per-pass verification
     let verifier = verification::create_verifier(verification_level);
     let mut bytes_written_total = 0u64;
     let mut errors = Vec::new();
@@ -93,13 +102,21 @@ pub fn shred_file(
     if algorithm.has_fixed_pattern_sequence() {
         // Let algorithm handle multi-pass with its fixed sequence
         progress.on_pass_start(1, passes);
-        let result = algorithm.shred(&mut file, file_size, passes, pattern, progress)?;
+        let result = algorithm.shred(
+            &mut file,
+            file_size,
+            passes,
+            pattern,
+            progress,
+            prng_seed.as_ref(),
+        )?;
         bytes_written_total += result.bytes_written;
         platform_io.sync_to_disk(&mut file)?;
         // Verify against the algorithm's final-pass pattern, not the user's
         // selected pattern (fixed-sequence algorithms may differ).
         let verify_pattern = algorithm.final_pattern(pattern);
-        let verification_result = verifier.verify(&mut file, &verify_pattern, file_size)?;
+        let verification_result =
+            verifier.verify(&mut file, &verify_pattern, file_size, prng_seed.as_ref())?;
         if !verification_result.passed {
             errors.push(ShredError::VerificationFailed {
                 path: path.to_path_buf(),
@@ -112,14 +129,22 @@ pub fn shred_file(
             progress.on_pass_start(pass + 1, passes);
 
             // Write pattern
-            let result = algorithm.shred(&mut file, file_size, 1, pattern, progress)?;
+            let result = algorithm.shred(
+                &mut file,
+                file_size,
+                1,
+                pattern,
+                progress,
+                prng_seed.as_ref(),
+            )?;
             bytes_written_total += result.bytes_written;
 
             // Flush to disk
             platform_io.sync_to_disk(&mut file)?;
 
             // Verify after each pass
-            let verification_result = verifier.verify(&mut file, &pattern, file_size)?;
+            let verification_result =
+                verifier.verify(&mut file, &pattern, file_size, prng_seed.as_ref())?;
             if !verification_result.passed {
                 errors.push(ShredError::VerificationFailed {
                     path: path.to_path_buf(),

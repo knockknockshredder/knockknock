@@ -3,8 +3,47 @@
 use crate::shredder::errors::ShredError;
 use crate::shredder::traits::VerificationStrategy;
 use crate::shredder::types::{PatternType, VerificationLevel, VerificationResult};
+use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
+use chacha20::ChaCha20;
+use getrandom::getrandom;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+
+/// Deterministic seed for ChaCha20-based PRNG used to write and verify random data.
+///
+/// `key` is the 32-byte ChaCha20 key; `nonce` is the 12-byte ChaCha20 nonce.
+/// Generating the seed once per file lets the writer and the verifier reproduce
+/// the exact same byte stream — verification becomes a deterministic byte
+/// comparison instead of a statistical guess.
+#[derive(Debug, Clone)]
+pub struct PrngSeed {
+    pub key: [u8; 32],
+    pub nonce: [u8; 12],
+}
+
+impl PrngSeed {
+    /// Generate a fresh seed using the OS CSPRNG (`getrandom`).
+    pub fn generate() -> Result<Self, ShredError> {
+        let mut key = [0u8; 32];
+        let mut nonce = [0u8; 12];
+        getrandom(&mut key).map_err(|e| ShredError::IoError {
+            path: std::path::PathBuf::from("<random>"),
+            kind: "RandomGeneration".to_string(),
+            message: e.to_string(),
+        })?;
+        getrandom(&mut nonce).map_err(|e| ShredError::IoError {
+            path: std::path::PathBuf::from("<random>"),
+            kind: "RandomGeneration".to_string(),
+            message: e.to_string(),
+        })?;
+        Ok(Self { key, nonce })
+    }
+
+    /// Build a fresh ChaCha20 cipher positioned at the keystream start.
+    pub fn cipher(&self) -> ChaCha20 {
+        ChaCha20::new(&self.key.into(), &self.nonce.into())
+    }
+}
 
 pub struct NoVerification;
 
@@ -14,6 +53,7 @@ impl VerificationStrategy for NoVerification {
         _file: &mut File,
         _pattern: &PatternType,
         _size: u64,
+        _seed: Option<&PrngSeed>,
     ) -> Result<VerificationResult, ShredError> {
         Ok(VerificationResult {
             passed: true,
@@ -31,6 +71,39 @@ impl SampleVerification {
     pub fn new() -> Self {
         Self { block_size: 4096 }
     }
+
+    /// Compare `buffer[..n]` against the expected bytes at absolute file
+    /// offset `pos`. For `Random` with a seed, regenerate via ChaCha20 with
+    /// `try_seek` (O(1)) so the buffer length doesn't matter.
+    fn compare(
+        buffer: &[u8],
+        n: usize,
+        pos: u64,
+        pattern: &PatternType,
+        seed: Option<&PrngSeed>,
+    ) -> bool {
+        let slice = &buffer[..n];
+        match pattern {
+            PatternType::Zeros => slice.iter().all(|&b| b == 0),
+            PatternType::Ones => slice.iter().all(|&b| b == 0xFF),
+            PatternType::Random => match seed {
+                Some(seed) => {
+                    let mut cipher = seed.cipher();
+                    if cipher.try_seek(pos).is_err() {
+                        return false;
+                    }
+                    let mut expected = vec![0u8; n];
+                    cipher.apply_keystream(&mut expected);
+                    expected == slice
+                }
+                None => {
+                    // Fallback heuristic when no seed is available — same as the
+                    // original (broken) behavior. Better than a false pass.
+                    !(slice.iter().all(|&b| b == 0) || slice.iter().all(|&b| b == 0xFF))
+                }
+            },
+        }
+    }
 }
 
 impl VerificationStrategy for SampleVerification {
@@ -39,6 +112,7 @@ impl VerificationStrategy for SampleVerification {
         file: &mut File,
         pattern: &PatternType,
         size: u64,
+        seed: Option<&PrngSeed>,
     ) -> Result<VerificationResult, ShredError> {
         if size == 0 {
             return Ok(VerificationResult {
@@ -62,23 +136,8 @@ impl VerificationStrategy for SampleVerification {
                 continue;
             }
 
-            match pattern {
-                PatternType::Random => {
-                    if buffer[..n].iter().all(|&b| b == 0) || buffer[..n].iter().all(|&b| b == 0xFF)
-                    {
-                        mismatches += 1;
-                    }
-                }
-                PatternType::Zeros => {
-                    if buffer[..n].iter().any(|&b| b != 0) {
-                        mismatches += 1;
-                    }
-                }
-                PatternType::Ones => {
-                    if buffer[..n].iter().any(|&b| b != 0xFF) {
-                        mismatches += 1;
-                    }
-                }
+            if !Self::compare(&buffer, n, *pos, pattern, seed) {
+                mismatches += 1;
             }
         }
 
@@ -92,12 +151,47 @@ impl VerificationStrategy for SampleVerification {
 
 pub struct FullVerification;
 
+impl FullVerification {
+    /// Fill `buffer[..n]` with the expected bytes at absolute file offset `pos`.
+    /// For deterministic patterns we compare inline; for Random-with-seed we
+    /// regenerate via ChaCha20 with `try_seek` (O(1) per jump, no skip buffers).
+    fn fill_expected(
+        buffer: &mut [u8],
+        n: usize,
+        pos: u64,
+        pattern: &PatternType,
+        seed: Option<&PrngSeed>,
+    ) -> bool {
+        let slice = &mut buffer[..n];
+        match pattern {
+            PatternType::Zeros => {
+                // Compare inline: any nonzero byte = mismatch
+                slice.iter().any(|&b| b != 0)
+            }
+            PatternType::Ones => slice.iter().any(|&b| b != 0xFF),
+            PatternType::Random => match seed {
+                Some(seed) => {
+                    let mut cipher = seed.cipher();
+                    if cipher.try_seek(pos).is_err() {
+                        return true;
+                    }
+                    let mut expected = vec![0u8; n];
+                    cipher.apply_keystream(&mut expected);
+                    expected != *slice
+                }
+                None => slice.iter().all(|&b| b == 0) || slice.iter().all(|&b| b == 0xFF),
+            },
+        }
+    }
+}
+
 impl VerificationStrategy for FullVerification {
     fn verify(
         &self,
         file: &mut File,
         pattern: &PatternType,
         size: u64,
+        seed: Option<&PrngSeed>,
     ) -> Result<VerificationResult, ShredError> {
         if size == 0 {
             return Ok(VerificationResult {
@@ -113,6 +207,8 @@ impl VerificationStrategy for FullVerification {
         let mut buffer = vec![0u8; 65536];
         let mut mismatches = 0;
         let mut remaining = size;
+        let mut pos = 0u64;
+        let mut blocks_checked = 0usize;
 
         while remaining > 0 {
             let to_read = std::cmp::min(remaining, buffer.len() as u64) as usize;
@@ -123,31 +219,18 @@ impl VerificationStrategy for FullVerification {
                 break;
             }
 
-            match pattern {
-                PatternType::Random => {
-                    if buffer[..n].iter().all(|&b| b == 0) || buffer[..n].iter().all(|&b| b == 0xFF)
-                    {
-                        mismatches += 1;
-                    }
-                }
-                PatternType::Zeros => {
-                    if buffer[..n].iter().any(|&b| b != 0) {
-                        mismatches += 1;
-                    }
-                }
-                PatternType::Ones => {
-                    if buffer[..n].iter().any(|&b| b != 0xFF) {
-                        mismatches += 1;
-                    }
-                }
+            if Self::fill_expected(&mut buffer, n, pos, pattern, seed) {
+                mismatches += 1;
             }
+            blocks_checked += 1;
 
+            pos += n as u64;
             remaining -= n as u64;
         }
 
         Ok(VerificationResult {
             passed: mismatches == 0,
-            blocks_checked: (size / 65536 + 1) as usize,
+            blocks_checked,
             mismatches,
         })
     }

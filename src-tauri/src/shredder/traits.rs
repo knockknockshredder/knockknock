@@ -2,6 +2,7 @@
 
 use crate::shredder::errors::ShredError;
 use crate::shredder::types::*;
+use crate::shredder::verification::PrngSeed;
 use std::fs::File;
 use std::path::Path;
 
@@ -30,6 +31,7 @@ pub trait ShredAlgorithm: Send + Sync {
         passes: u32,
         pattern: PatternType,
         progress: &dyn ProgressReporter,
+        seed: Option<&PrngSeed>,
     ) -> Result<ShredResult, ShredError>;
 }
 
@@ -40,6 +42,7 @@ pub trait VerificationStrategy: Send + Sync {
         file: &mut File,
         expected_pattern: &PatternType,
         file_size: u64,
+        seed: Option<&PrngSeed>,
     ) -> Result<VerificationResult, ShredError>;
 }
 

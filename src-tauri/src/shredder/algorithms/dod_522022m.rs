@@ -4,9 +4,8 @@ use crate::shredder::algorithms::common::write_pass;
 use crate::shredder::errors::ShredError;
 use crate::shredder::traits::{ProgressReporter, ShredAlgorithm};
 use crate::shredder::types::*;
-use getrandom::getrandom;
+use crate::shredder::verification::PrngSeed;
 use std::fs::File;
-use std::path::PathBuf;
 
 pub struct Dod522022M;
 
@@ -26,7 +25,7 @@ impl ShredAlgorithm for Dod522022M {
         "DoD 5220.22-M"
     }
     fn description(&self) -> &str {
-        "US DoD 5220.22-M. Fixed 3-pass sequence: zeros → ones → random. Passes > 3 repeat the sequence."
+        "US DoD 5220.22-M. Fixed 3-pass sequence: zeros, ones, random. Passes > 3 repeat the sequence."
     }
     fn default_passes(&self) -> u32 {
         3
@@ -51,8 +50,9 @@ impl ShredAlgorithm for Dod522022M {
         file: &mut File,
         file_size: u64,
         passes: u32,
-        pattern: PatternType,
+        _pattern: PatternType,
         progress: &dyn ProgressReporter,
+        seed: Option<&PrngSeed>,
     ) -> Result<ShredResult, ShredError> {
         let start = std::time::Instant::now();
         let mut total_written = 0u64;
@@ -60,24 +60,16 @@ impl ShredAlgorithm for Dod522022M {
 
         for pass in 0..passes {
             let pass_pattern = dod_pass_pattern(pass);
-            match pass_pattern {
-                PatternType::Zeros => buffer.fill(0x00),
-                PatternType::Ones => buffer.fill(0xFF),
-                PatternType::Random => getrandom(&mut buffer).map_err(|e| ShredError::IoError {
-                    path: PathBuf::from("<random>"),
-                    kind: "RandomGeneration".to_string(),
-                    message: e.to_string(),
-                })?,
-            }
 
             total_written += write_pass(
                 file,
                 file_size,
-                pattern,
+                pass_pattern,
                 &mut buffer,
                 progress,
                 total_written,
                 file_size * passes as u64,
+                seed,
             )?;
             // Note: do NOT emit on_pass_complete here. The pipeline in mod.rs
             // emits pass-complete after the algorithm returns to avoid double-emit.
