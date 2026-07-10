@@ -27,6 +27,7 @@ impl PlatformIo for WindowsIo {
         OpenOptions::new()
             .write(true)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_WRITE_THROUGH)
             .open(path)
             .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
     }
