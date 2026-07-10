@@ -4,6 +4,7 @@ pub mod algorithms;
 pub mod cancel;
 pub mod errors;
 pub mod journal;
+pub mod logging;
 pub mod platform;
 pub mod progress;
 pub mod traits;
