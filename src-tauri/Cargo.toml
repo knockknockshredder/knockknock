@@ -36,6 +36,9 @@ tauri-plugin-dialog = "2.7.1"
 bcrypt = "0.15"
 dirs = "5"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+
 [dev-dependencies]
 tempfile = "3"
 

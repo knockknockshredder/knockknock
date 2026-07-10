@@ -100,7 +100,31 @@ pub fn check_hard_links(path: &Path) -> Result<HardLinkInfo, ShredError> {
     };
 
     #[cfg(windows)]
-    let link_count = 1u32; // TODO: GetFileInformationByHandle
+    let link_count = {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
+        use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x00000001) // FILE_SHARE_READ
+            .open(path);
+
+        match file {
+            Ok(f) => {
+                let handle = f.as_raw_handle() as *mut _;
+                let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+                let result = unsafe { GetFileInformationByHandle(handle, &mut info) };
+                if result != 0 {
+                    info.nNumberOfLinks
+                } else {
+                    1
+                }
+            }
+            Err(_) => 1,
+        }
+    };
 
     Ok(HardLinkInfo {
         path: path.to_path_buf(),
