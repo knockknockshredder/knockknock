@@ -156,18 +156,42 @@ pub fn check_hard_links(path: &Path) -> Result<HardLinkInfo, ShredError> {
     })
 }
 
+/// Windows mapped-drive (DRIVE_REMOTE) check via `GetDriveTypeW`.
+///
+/// Drive letters like `Z:` mounted as `net use Z: \\server\share` are NOT
+/// detected by path-prefix checks against `\\` — they look like ordinary
+/// drive-letter paths until the OS is consulted. `GetDriveTypeW` returns
+/// `DRIVE_REMOTE (4)` for these so we can refuse them before shredding.
+#[cfg(windows)]
+fn is_windows_remote_drive(path: &Path) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+
+    let path_str = path.to_string_lossy();
+    let drive = if path_str.len() >= 2 && path_str.as_bytes()[1] == b':' {
+        format!("{}:\\", &path_str[..1])
+    } else {
+        return false;
+    };
+
+    let drive_wide: Vec<u16> = drive.encode_utf16().chain(std::iter::once(0)).collect();
+    let drive_type = unsafe { GetDriveTypeW(drive_wide.as_ptr()) };
+
+    // DRIVE_REMOTE = 4
+    drive_type == 4
+}
+
 pub fn is_network_drive(path: &Path) -> bool {
     #[cfg(windows)]
     {
         let s = path.to_string_lossy();
         // Regular UNC: \\server\share or //server/share
-        if s.starts_with("\\\\") || s.starts_with("//") {
-            return true;
-        }
         // Extended-length UNC: \\?\UNC\server\share. canonicalize() prepends
         // this prefix on Windows; callers must catch it before stripping.
-        let s_lower = s.to_ascii_lowercase();
-        if s_lower.starts_with(r"\\?\unc\") {
+        if s.starts_with("\\\\") || s.starts_with("//") || s.starts_with(r"\\?\UNC\") {
+            return true;
+        }
+        // Also check mapped drives via GetDriveTypeW (e.g., `net use Z:` shares)
+        if is_windows_remote_drive(path) {
             return true;
         }
         false
