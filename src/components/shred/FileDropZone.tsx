@@ -45,10 +45,13 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
 
   const validateAndAdd = async (paths: string[]) => {
     try {
-      const validFiles: FileMetadata[] = await invoke("validate_paths", { paths });
+      const [validFiles, validationErrors]: [FileMetadata[], string[]] = await invoke("validate_paths", { paths });
       if (validFiles.length > 0) {
         addFiles(validFiles);
         addLogEntry("info", `Added ${validFiles.length} file(s)`);
+      }
+      for (const err of validationErrors) {
+        addLogEntry("warning", err);
       }
       if (validFiles.length < paths.length) {
         addLogEntry(
