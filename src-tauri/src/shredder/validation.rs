@@ -145,6 +145,30 @@ pub fn is_network_drive(path: &Path) -> bool {
     }
     #[cfg(unix)]
     {
-        false
-    } // TODO: Check /proc/mounts
+        let mounts = match std::fs::read_to_string("/proc/mounts") {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+
+        let path_str = path.to_string_lossy();
+        let mut best_match = "";
+        let mut best_fs_type = "";
+
+        for line in mounts.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let mount_point = parts[1];
+                let fs_type = parts[2];
+                if path_str.starts_with(mount_point) && mount_point.len() > best_match.len() {
+                    best_match = mount_point;
+                    best_fs_type = fs_type;
+                }
+            }
+        }
+
+        matches!(
+            best_fs_type,
+            "nfs" | "nfs4" | "cifs" | "smbfs" | "sshfs" | "afs" | "ncp" | "ncpfs"
+        )
+    }
 }
