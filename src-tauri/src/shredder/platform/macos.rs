@@ -78,9 +78,25 @@ impl PlatformIo for MacOsIo {
         std::fs::remove_file(path).map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
     }
 
-    fn detect_media_type(&self, _path: &Path) -> Result<MediaType, ShredError> {
-        // TODO: Use diskutil info to check Solid State
-        Ok(MediaType::Unknown)
+    fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError> {
+        let output = std::process::Command::new("diskutil")
+            .args(["info", "-plist"])
+            .arg(path)
+            .output();
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if stdout.contains("<key>Solid State</key>") && stdout.contains("<true/>") {
+                    Ok(MediaType::Ssd)
+                } else if stdout.contains("<key>Solid State</key>") && stdout.contains("<false/>") {
+                    Ok(MediaType::Hdd)
+                } else {
+                    Ok(MediaType::Unknown)
+                }
+            }
+            Err(_) => Ok(MediaType::Unknown),
+        }
     }
 
     fn find_locking_processes(&self, _path: &Path) -> Result<Vec<ProcessInfo>, ShredError> {

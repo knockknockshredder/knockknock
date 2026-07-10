@@ -67,9 +67,33 @@ impl PlatformIo for LinuxIo {
         std::fs::remove_file(path).map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
     }
 
-    fn detect_media_type(&self, _path: &Path) -> Result<MediaType, ShredError> {
-        // TODO: Check /sys/block/*/queue/rotational
-        Ok(MediaType::Unknown)
+    fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError> {
+        let output = std::process::Command::new("df")
+            .args(["--output=source", path.to_str().unwrap_or("")])
+            .output();
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let lines: Vec<&str> = stdout.trim().lines().collect();
+                if lines.len() >= 2 {
+                    let device = lines[1].trim();
+                    let dev_name = device.split('/').last().unwrap_or("");
+                    let base_dev = dev_name.trim_end_matches(|c: char| c.is_ascii_digit());
+                    let rotational_path = format!("/sys/block/{}/queue/rotational", base_dev);
+                    if let Ok(rot) = std::fs::read_to_string(&rotational_path) {
+                        let rot = rot.trim();
+                        if rot == "0" {
+                            return Ok(MediaType::Ssd);
+                        } else if rot == "1" {
+                            return Ok(MediaType::Hdd);
+                        }
+                    }
+                }
+                Ok(MediaType::Unknown)
+            }
+            Err(_) => Ok(MediaType::Unknown),
+        }
     }
 
     fn find_locking_processes(&self, _path: &Path) -> Result<Vec<ProcessInfo>, ShredError> {

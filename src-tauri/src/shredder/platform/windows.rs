@@ -75,8 +75,9 @@ impl PlatformIo for WindowsIo {
         std::fs::remove_file(path).map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
     }
 
-    fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError> {
-        // TODO: Implement via GetDriveTypeW
+    fn detect_media_type(&self, _path: &Path) -> Result<MediaType, ShredError> {
+        // TODO: Implement via IOCTL_STORAGE_QUERY_PROPERTY with StorageDeviceSeekPenaltyProperty
+        // or StorageDeviceTrimProperty. Requires the `Win32_System_Ioctl` feature in windows-sys.
         Ok(MediaType::Unknown)
     }
 
