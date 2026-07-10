@@ -267,4 +267,24 @@ mod tests {
             .unwrap();
         assert!(!result.passed);
     }
+
+    // --- Cancellation token tests ---
+
+    #[test]
+    fn test_cancellation_token_basic() {
+        let token = crate::shredder::cancel::CancellationToken::new();
+        assert!(!token.is_cancelled());
+        token.cancel();
+        assert!(token.is_cancelled());
+    }
+
+    #[test]
+    fn test_cancellation_global_reset() {
+        crate::shredder::cancel::reset_global();
+        assert!(!crate::shredder::cancel::is_cancelled_global());
+        crate::shredder::cancel::cancel_global();
+        assert!(crate::shredder::cancel::is_cancelled_global());
+        crate::shredder::cancel::reset_global();
+        assert!(!crate::shredder::cancel::is_cancelled_global());
+    }
 }
