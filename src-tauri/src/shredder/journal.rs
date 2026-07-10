@@ -38,9 +38,21 @@ pub fn write_orphan(original: &std::path::Path, renamed: &std::path::Path) {
     entries.push(entry);
     let path = journal_path();
     let tmp = path.with_extension("tmp");
-    if let Ok(json) = serde_json::to_string_pretty(&entries) {
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
+    match serde_json::to_string_pretty(&entries) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&tmp, &json) {
+                eprintln!("[KnockKnock] Journal write failed for {:?}: {}", tmp, e);
+                return;
+            }
+            if let Err(e) = std::fs::rename(&tmp, &path) {
+                eprintln!(
+                    "[KnockKnock] Journal rename failed {:?} -> {:?}: {}",
+                    tmp, path, e
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("[KnockKnock] Journal serialize failed: {}", e);
         }
     }
 }
@@ -50,9 +62,21 @@ pub fn clear_orphan(renamed: &std::path::Path) {
     entries.retain(|e| e.renamed_path != renamed);
     let path = journal_path();
     let tmp = path.with_extension("tmp");
-    if let Ok(json) = serde_json::to_string_pretty(&entries) {
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
+    match serde_json::to_string_pretty(&entries) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&tmp, &json) {
+                eprintln!("[KnockKnock] Journal write failed for {:?}: {}", tmp, e);
+                return;
+            }
+            if let Err(e) = std::fs::rename(&tmp, &path) {
+                eprintln!(
+                    "[KnockKnock] Journal rename failed {:?} -> {:?}: {}",
+                    tmp, path, e
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("[KnockKnock] Journal serialize failed: {}", e);
         }
     }
 }

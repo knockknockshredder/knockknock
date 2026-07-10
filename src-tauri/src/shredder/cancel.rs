@@ -23,6 +23,9 @@ impl CancellationToken {
 }
 
 static GLOBAL_TOKEN: Mutex<Option<CancellationToken>> = Mutex::new(None);
+// Lock-free global flag: hot loops (write_pass) check this without taking the
+// mutex. Kept consistent with the cached token via cancel_global / reset_global.
+static CANCELLED: AtomicBool = AtomicBool::new(false);
 
 pub fn get_global_token() -> CancellationToken {
     let mut guard = GLOBAL_TOKEN.lock().unwrap_or_else(|e| e.into_inner());
@@ -37,14 +40,17 @@ pub fn cancel_global() {
     if let Some(token) = guard.as_ref() {
         token.cancel();
     }
+    drop(guard);
+    CANCELLED.store(true, Ordering::Relaxed);
 }
 
 pub fn reset_global() {
     let mut guard = GLOBAL_TOKEN.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(CancellationToken::new());
+    CANCELLED.store(false, Ordering::Relaxed);
 }
 
+/// Lock-free cancellation check for hot paths.
 pub fn is_cancelled_global() -> bool {
-    let guard = GLOBAL_TOKEN.lock().unwrap_or_else(|e| e.into_inner());
-    guard.as_ref().map(|t| t.is_cancelled()).unwrap_or(false)
+    CANCELLED.load(Ordering::Relaxed)
 }

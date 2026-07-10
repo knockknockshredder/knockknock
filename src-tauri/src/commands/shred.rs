@@ -172,18 +172,24 @@ pub fn validate_paths(
     for path_str in paths {
         let path = std::path::Path::new(&path_str);
 
-        // Check if path exists
-        if !path.exists() {
+        // Use symlink_metadata so a symlink to a missing target isn't silently
+        // treated as an existing file (path.exists()/is_file() follow links).
+        let sym_meta = match std::fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        if sym_meta.file_type().is_symlink() {
+            // Symlinks are never shredded — skip, never recurse. The actual
+            // target is also rejected by validate_path() during shred.
             continue;
         }
 
-        if path.is_file() {
-            // Single file — add directly
+        if sym_meta.file_type().is_file() {
             if let Some(meta) = collect_file_metadata(path, &path_str) {
                 valid.push(meta);
             }
-        } else if path.is_dir() {
-            // Directory — recurse and collect all files
+        } else if sym_meta.file_type().is_dir() {
             collect_files_from_dir(path, &mut valid, &mut errors, 0);
         }
     }

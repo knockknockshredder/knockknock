@@ -105,50 +105,57 @@ pub fn shred_file(
     let mut errors = Vec::new();
 
     if algorithm.has_fixed_pattern_sequence() {
-        // Let algorithm handle multi-pass with its fixed sequence
-        if cancel.is_cancelled() {
-            progress.on_error(
-                path,
-                &ShredError::IoError {
-                    path: path.to_path_buf(),
-                    kind: "Cancelled".to_string(),
-                    message: "Shredding cancelled before pass".to_string(),
-                },
-            );
-            return Ok(ShredResult {
-                success: false,
-                passes_completed: 0,
-                bytes_written: 0,
-                verification_passed: false,
-                errors: vec![ShredError::IoError {
-                    path: path.to_path_buf(),
-                    kind: "Cancelled".to_string(),
-                    message: "Shredding cancelled before pass".to_string(),
-                }],
-                duration: start.elapsed(),
-            });
-        }
+        // Let algorithm handle multi-pass with its fixed sequence.
+        // Cancellation is surfaced by write_pass inside the algorithm; we
+        // must NOT propagate it via `?` because that would skip the
+        // rename/truncate/delete cleanup pipeline. Catch Cancelled here and
+        // continue to cleanup.
         progress.on_pass_start(1, passes);
-        let result = algorithm.shred(
+        let shred_res = algorithm.shred(
             &mut file,
             file_size,
             passes,
             pattern,
             progress,
             prng_seed.as_ref(),
-        )?;
-        bytes_written_total += result.bytes_written;
-        platform_io.sync_to_disk(&mut file)?;
-        // Verify against the algorithm's final-pass pattern, not the user's
-        // selected pattern (fixed-sequence algorithms may differ).
-        let verify_pattern = algorithm.final_pattern(pattern);
-        let verification_result =
-            verifier.verify(&mut file, &verify_pattern, file_size, prng_seed.as_ref())?;
-        if !verification_result.passed {
-            errors.push(ShredError::VerificationFailed {
-                path: path.to_path_buf(),
-                pass: passes,
-            });
+        );
+        match shred_res {
+            Ok(r) => {
+                bytes_written_total += r.bytes_written;
+                platform_io.sync_to_disk(&mut file)?;
+                // Verify against the algorithm's final-pass pattern, not the user's
+                // selected pattern (fixed-sequence algorithms may differ).
+                let verify_pattern = algorithm.final_pattern(pattern);
+                let verification_result =
+                    verifier.verify(&mut file, &verify_pattern, file_size, prng_seed.as_ref())?;
+                if !verification_result.passed {
+                    errors.push(ShredError::VerificationFailed {
+                        path: path.to_path_buf(),
+                        pass: passes,
+                    });
+                }
+            }
+            Err(ShredError::IoError { kind, .. }) if kind == "Cancelled" => {
+                // Mid-shred cancellation: preserve partial state in `errors`
+                // and continue into the cleanup pipeline below. The file
+                // will still be renamed, truncated, and deleted — no
+                // partially-shredded file leaks back to disk under its
+                // original name.
+                errors.push(ShredError::IoError {
+                    path: path.to_path_buf(),
+                    kind: "Cancelled".to_string(),
+                    message: "Shredding cancelled during pass".to_string(),
+                });
+                progress.on_error(
+                    path,
+                    &ShredError::IoError {
+                        path: path.to_path_buf(),
+                        kind: "Cancelled".to_string(),
+                        message: "Shredding cancelled during pass".to_string(),
+                    },
+                );
+            }
+            Err(e) => return Err(e),
         }
         progress.on_pass_complete(passes, passes);
     } else {
@@ -203,7 +210,11 @@ pub fn shred_file(
     // 9. Close file handle before rename/delete
     drop(file);
 
-    // 10. Rename to random name
+    // 10. Rename to random name. Always run the cleanup pipeline even if the
+    //     shredding pass was cancelled — leaving the original-named partially-
+    //     overwritten file on disk is the catastrophic failure mode this
+    //     stage is here to prevent.
+    let was_cancelled = cancel.is_cancelled();
     let renamed_path = platform_io.rename_random(path)?;
     // Record orphan so a partial-failure recovery can clean it up later
     crate::shredder::journal::write_orphan(path, &renamed_path);
@@ -214,20 +225,25 @@ pub fn shred_file(
         platform_io.truncate_to_zero(&mut f)?;
     }
 
-    // 12. Delete
-    platform_io.delete(&renamed_path)?;
-    // Deletion succeeded — clear the orphan record
-    crate::shredder::journal::clear_orphan(&renamed_path);
-
-    // 13. Issue TRIM for SSDs
+    // 12. Issue TRIM for SSDs BEFORE delete (file must still exist on the
+    //     volume for TRIM to apply). This is the correct ordering for SSD
+    //     wear-leveling: the FTL needs the LBA range before it's freed.
     if media_type == MediaType::Ssd {
         if let Err(e) = platform_io.issue_trim(&renamed_path) {
             progress.on_warning(path, &format!("TRIM failed: {}", e));
         }
     }
 
+    // 13. Delete
+    platform_io.delete(&renamed_path)?;
+    // Deletion succeeded — clear the orphan record
+    crate::shredder::journal::clear_orphan(&renamed_path);
+
+    // Surface cancellation in the final result, alongside any errors that
+    // were already collected. Cleanup ran, but the user must still see the
+    // operation as unsuccessful.
     let result = ShredResult {
-        success: errors.is_empty(),
+        success: errors.is_empty() && !was_cancelled,
         passes_completed: passes,
         bytes_written: bytes_written_total,
         verification_passed: errors.is_empty(),

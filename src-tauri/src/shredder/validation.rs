@@ -35,6 +35,14 @@ pub fn validate_path(path: &Path) -> Result<(), ShredError> {
         return Err(ShredError::EmptyPath);
     }
 
+    // Reject network drives BEFORE canonicalization. Canonicalize on Windows
+    // prepends `\\?\` to UNC paths (e.g. `\\?\UNC\server\share`), so checking
+    // the original input here ensures we never accidentally canonicalize a
+    // network path before refusing it.
+    if is_network_drive(path) {
+        return Err(ShredError::NetworkDrive(path.to_path_buf()));
+    }
+
     // Use symlink_metadata to NOT follow symlinks
     let metadata = std::fs::symlink_metadata(path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => ShredError::FileNotFound(path.to_path_buf()),
@@ -120,10 +128,20 @@ pub fn check_hard_links(path: &Path) -> Result<HardLinkInfo, ShredError> {
                 if result != 0 {
                     info.nNumberOfLinks
                 } else {
+                    eprintln!(
+                        "[KnockKnock] Warning: GetFileInformationByHandle failed for {:?}; assuming single link.",
+                        path
+                    );
                     1
                 }
             }
-            Err(_) => 1,
+            Err(e) => {
+                eprintln!(
+                    "[KnockKnock] Warning: Could not check hard links for {:?}: {}. Assuming single link.",
+                    path, e
+                );
+                1
+            }
         }
     };
 
@@ -142,7 +160,17 @@ pub fn is_network_drive(path: &Path) -> bool {
     #[cfg(windows)]
     {
         let s = path.to_string_lossy();
-        s.starts_with("\\\\") || s.starts_with("//")
+        // Regular UNC: \\server\share or //server/share
+        if s.starts_with("\\\\") || s.starts_with("//") {
+            return true;
+        }
+        // Extended-length UNC: \\?\UNC\server\share. canonicalize() prepends
+        // this prefix on Windows; callers must catch it before stripping.
+        let s_lower = s.to_ascii_lowercase();
+        if s_lower.starts_with(r"\\?\unc\") {
+            return true;
+        }
+        false
     }
     #[cfg(unix)]
     {
