@@ -41,40 +41,43 @@ impl TauriProgressReporter {
     }
 
     fn emit_throttled(&self, event: ProgressEvent) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         if now.duration_since(state.last_emit).as_millis() as u64 >= self.throttle_ms {
             state.last_emit = now;
             drop(state);
-            let _ = self.app.emit("shred-progress", event);
+            self.emit_or_log(event);
+        }
+    }
+
+    fn emit_or_log(&self, event: ProgressEvent) {
+        if let Err(e) = self.app.emit("shred-progress", event) {
+            eprintln!("[KnockKnock] Failed to emit progress event: {}", e);
         }
     }
 }
 
 impl ProgressReporter for TauriProgressReporter {
     fn on_file_start(&self, path: &Path, file_size: u64) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.current_file = path.to_string_lossy().to_string();
         state.current_file_size = file_size;
         drop(state);
 
-        let _ = self.app.emit(
-            "shred-progress",
-            ProgressEvent {
-                file_path: path.to_string_lossy().to_string(),
-                file_size,
-                bytes_written: 0,
-                current_pass: 0,
-                total_passes: 0,
-                speed_bytes_per_sec: 0,
-                estimated_time_remaining_secs: 0,
-                status: ShredStatus::Shredding,
-            },
-        );
+        self.emit_or_log(ProgressEvent {
+            file_path: path.to_string_lossy().to_string(),
+            file_size,
+            bytes_written: 0,
+            current_pass: 0,
+            total_passes: 0,
+            speed_bytes_per_sec: 0,
+            estimated_time_remaining_secs: 0,
+            status: ShredStatus::Shredding,
+        });
     }
 
     fn on_pass_start(&self, pass: u32, total_passes: u32) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.current_pass = pass;
         state.total_passes = total_passes;
         state.pass_start = Instant::now();
@@ -82,7 +85,7 @@ impl ProgressReporter for TauriProgressReporter {
 
     fn on_progress(&self, bytes_written: u64, total: u64) {
         let (file_path, file_size, current_pass, total_passes, pass_start) = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             (
                 state.current_file.clone(),
                 state.current_file_size,
@@ -118,59 +121,63 @@ impl ProgressReporter for TauriProgressReporter {
     }
 
     fn on_pass_complete(&self, pass: u32, total_passes: u32) {
-        // Emit pass complete (not throttled)
+        let (file_path, file_size) = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            (state.current_file.clone(), state.current_file_size)
+        };
+        self.emit_or_log(ProgressEvent {
+            file_path,
+            file_size,
+            bytes_written: 0,
+            current_pass: pass,
+            total_passes,
+            speed_bytes_per_sec: 0,
+            estimated_time_remaining_secs: 0,
+            status: ShredStatus::Shredding,
+        });
     }
 
     fn on_file_complete(&self, path: &Path, result: &ShredResult) {
-        let _ = self.app.emit(
-            "shred-progress",
-            ProgressEvent {
-                file_path: path.to_string_lossy().to_string(),
-                file_size: 0,
-                bytes_written: result.bytes_written,
-                current_pass: result.passes_completed,
-                total_passes: result.passes_completed,
-                speed_bytes_per_sec: 0,
-                estimated_time_remaining_secs: 0,
-                status: ShredStatus::Complete,
-            },
-        );
+        self.emit_or_log(ProgressEvent {
+            file_path: path.to_string_lossy().to_string(),
+            file_size: 0,
+            bytes_written: result.bytes_written,
+            current_pass: result.passes_completed,
+            total_passes: result.passes_completed,
+            speed_bytes_per_sec: 0,
+            estimated_time_remaining_secs: 0,
+            status: ShredStatus::Complete,
+        });
     }
 
     fn on_error(&self, path: &Path, error: &ShredError) {
-        let _ = self.app.emit(
-            "shred-progress",
-            ProgressEvent {
-                file_path: path.to_string_lossy().to_string(),
-                file_size: 0,
-                bytes_written: 0,
-                current_pass: 0,
-                total_passes: 0,
-                speed_bytes_per_sec: 0,
-                estimated_time_remaining_secs: 0,
-                status: ShredStatus::Error {
-                    message: error.to_string(),
-                },
+        self.emit_or_log(ProgressEvent {
+            file_path: path.to_string_lossy().to_string(),
+            file_size: 0,
+            bytes_written: 0,
+            current_pass: 0,
+            total_passes: 0,
+            speed_bytes_per_sec: 0,
+            estimated_time_remaining_secs: 0,
+            status: ShredStatus::Error {
+                message: error.to_string(),
             },
-        );
+        });
     }
 
     fn on_warning(&self, path: &Path, message: &str) {
-        let _ = self.app.emit(
-            "shred-progress",
-            ProgressEvent {
-                file_path: path.to_string_lossy().to_string(),
-                file_size: 0,
-                bytes_written: 0,
-                current_pass: 0,
-                total_passes: 0,
-                speed_bytes_per_sec: 0,
-                estimated_time_remaining_secs: 0,
-                status: ShredStatus::Warning {
-                    message: message.to_string(),
-                },
+        self.emit_or_log(ProgressEvent {
+            file_path: path.to_string_lossy().to_string(),
+            file_size: 0,
+            bytes_written: 0,
+            current_pass: 0,
+            total_passes: 0,
+            speed_bytes_per_sec: 0,
+            estimated_time_remaining_secs: 0,
+            status: ShredStatus::Warning {
+                message: message.to_string(),
             },
-        );
+        });
     }
 }
 
