@@ -17,6 +17,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::shred::shred_files,
+            commands::shred::cancel_shred,
+            commands::shred::cleanup_orphans,
             commands::shred::get_algorithms,
             commands::shred::validate_paths,
             commands::browser::detect_browsers,

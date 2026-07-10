@@ -27,6 +27,10 @@ pub async fn shred_files(
         return Err(format!("Passes {} exceeds maximum {}", passes, algorithm.max_passes()));
     }
 
+    // Reset cancellation token for fresh operation
+    crate::shredder::cancel::reset_global();
+    let _cancel_token = crate::shredder::cancel::get_global_token();
+
     let progress: Arc<dyn crate::shredder::traits::ProgressReporter> =
         Arc::new(TauriProgressReporter::new(app));
 
@@ -39,6 +43,20 @@ pub async fn shred_files(
     .map_err(|e| format!("Task failed: {}", e))?;
 
     Ok(report)
+}
+
+#[tauri::command]
+pub fn cancel_shred() {
+    crate::shredder::cancel::cancel_global();
+}
+
+#[tauri::command]
+pub fn cleanup_orphans() -> Vec<String> {
+    let remaining = crate::shredder::journal::cleanup_orphans();
+    remaining
+        .iter()
+        .map(|e| format!("Orphaned: {:?}", e.renamed_path))
+        .collect()
 }
 
 #[derive(serde::Serialize)]

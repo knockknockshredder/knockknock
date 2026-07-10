@@ -37,6 +37,15 @@ pub fn write_pass(
     let mut cipher = seed.map(|s| s.cipher());
 
     while remaining > 0 {
+        // Check cancellation between chunks (chunk size = buffer.len or remaining)
+        if crate::shredder::cancel::is_cancelled_global() {
+            return Err(ShredError::IoError {
+                path: PathBuf::from("<file>"),
+                kind: "Cancelled".to_string(),
+                message: "Shredding cancelled during write".to_string(),
+            });
+        }
+
         let to_write = std::cmp::min(remaining, buffer.len() as u64) as usize;
 
         // Fill buffer based on pattern at absolute file position `written`.

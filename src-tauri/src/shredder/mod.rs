@@ -1,7 +1,9 @@
 // src-tauri/src/shredder/mod.rs
 
 pub mod algorithms;
+pub mod cancel;
 pub mod errors;
+pub mod journal;
 pub mod platform;
 pub mod progress;
 pub mod traits;
@@ -12,6 +14,7 @@ pub mod verification;
 #[cfg(test)]
 mod tests;
 
+pub use cancel::CancellationToken;
 pub use errors::ShredError;
 pub use traits::{PlatformIo, ProgressReporter, ShredAlgorithm, VerificationStrategy};
 pub use types::{
@@ -26,6 +29,7 @@ pub fn shred_file(
     pattern: PatternType,
     verification_level: VerificationLevel,
     progress: &dyn ProgressReporter,
+    cancel: &CancellationToken,
 ) -> Result<ShredResult, ShredError> {
     let start = std::time::Instant::now();
 
@@ -101,6 +105,28 @@ pub fn shred_file(
 
     if algorithm.has_fixed_pattern_sequence() {
         // Let algorithm handle multi-pass with its fixed sequence
+        if cancel.is_cancelled() {
+            progress.on_error(
+                path,
+                &ShredError::IoError {
+                    path: path.to_path_buf(),
+                    kind: "Cancelled".to_string(),
+                    message: "Shredding cancelled before pass".to_string(),
+                },
+            );
+            return Ok(ShredResult {
+                success: false,
+                passes_completed: 0,
+                bytes_written: 0,
+                verification_passed: false,
+                errors: vec![ShredError::IoError {
+                    path: path.to_path_buf(),
+                    kind: "Cancelled".to_string(),
+                    message: "Shredding cancelled before pass".to_string(),
+                }],
+                duration: start.elapsed(),
+            });
+        }
         progress.on_pass_start(1, passes);
         let result = algorithm.shred(
             &mut file,
@@ -126,6 +152,23 @@ pub fn shred_file(
         progress.on_pass_complete(passes, passes);
     } else {
         for pass in 0..passes {
+            if cancel.is_cancelled() {
+                errors.push(ShredError::IoError {
+                    path: path.to_path_buf(),
+                    kind: "Cancelled".to_string(),
+                    message: format!("Shredding cancelled before pass {}", pass + 1),
+                });
+                progress.on_error(
+                    path,
+                    &ShredError::IoError {
+                        path: path.to_path_buf(),
+                        kind: "Cancelled".to_string(),
+                        message: format!("Shredding cancelled before pass {}", pass + 1),
+                    },
+                );
+                break;
+            }
+
             progress.on_pass_start(pass + 1, passes);
 
             // Write pattern
@@ -161,6 +204,8 @@ pub fn shred_file(
 
     // 10. Rename to random name
     let renamed_path = platform_io.rename_random(path)?;
+    // Record orphan so a partial-failure recovery can clean it up later
+    crate::shredder::journal::write_orphan(path, &renamed_path);
 
     // 11. Truncate (re-open briefly)
     {
@@ -170,6 +215,8 @@ pub fn shred_file(
 
     // 12. Delete
     platform_io.delete(&renamed_path)?;
+    // Deletion succeeded — clear the orphan record
+    crate::shredder::journal::clear_orphan(&renamed_path);
 
     // 13. Issue TRIM for SSDs
     if media_type == MediaType::Ssd {
@@ -207,7 +254,14 @@ pub fn shred_files(
     let mut errors = Vec::new();
     let mut total_bytes = 0u64;
 
+    let cancel_token = crate::shredder::cancel::get_global_token();
+
     for path in &paths {
+        if cancel_token.is_cancelled() {
+            // Skip remaining files once cancelled
+            skipped += paths.len() - successful - failed;
+            break;
+        }
         match shred_file(
             path,
             algorithm.as_ref(),
@@ -215,6 +269,7 @@ pub fn shred_files(
             pattern,
             verification_level,
             progress.as_ref(),
+            &cancel_token,
         ) {
             Ok(result) => {
                 if result.success {
