@@ -74,6 +74,9 @@ export interface ProgressState {
   currentFile: string;
 }
 
+/** Matches backend LogObfuscation enum. Serialized to backend as snake_case string. */
+export type LogObfuscation = "none" | "numbered" | "partial_mask";
+
 export interface ShredReport {
   total_files: number;
   successful: number;

@@ -1,6 +1,7 @@
 // src-tauri/src/commands/shred.rs
 
 use crate::shredder::algorithms::all_algorithms;
+use crate::shredder::logging::LogObfuscation;
 use crate::shredder::progress::TauriProgressReporter;
 use crate::shredder::types::*;
 use crate::shredder::VerificationLevel;
@@ -16,7 +17,14 @@ pub async fn shred_files(
     passes: u32,
     pattern: PatternType,
     verification_level: VerificationLevel,
+    log_obfuscation: String,
 ) -> Result<ShredReport, String> {
+    let obfuscation = match log_obfuscation.as_str() {
+        "numbered" => LogObfuscation::Numbered,
+        "partial_mask" => LogObfuscation::PartialMask,
+        _ => LogObfuscation::None,
+    };
+
     let algorithms = all_algorithms();
     let algorithm = algorithms
         .get(algorithm_index)
@@ -31,7 +39,7 @@ pub async fn shred_files(
     crate::shredder::cancel::reset_global();
 
     let progress: Arc<dyn crate::shredder::traits::ProgressReporter> =
-        Arc::new(TauriProgressReporter::new(app));
+        Arc::new(TauriProgressReporter::new(app, obfuscation));
 
     let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
 

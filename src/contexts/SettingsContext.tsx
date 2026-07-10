@@ -6,6 +6,7 @@ import {
   useEffect,
   type ReactNode,
 } from "react";
+import type { LogObfuscation } from "@/types";
 
 const STORAGE_KEY = "knockknock-settings";
 
@@ -14,6 +15,8 @@ interface SettingsState {
   setAutoClearLog: (v: boolean) => void;
   defaultAlgorithmIndex: number;
   setDefaultAlgorithmIndex: (v: number) => void;
+  logObfuscation: LogObfuscation;
+  setLogObfuscation: (v: LogObfuscation) => void;
   leftSidebarWidth: number;
   rightSidebarWidth: number;
   setLeftSidebarWidth: (v: number | ((prev: number) => number)) => void;
@@ -25,6 +28,7 @@ const SettingsContext = createContext<SettingsState | null>(null);
 interface PersistedSettings {
   autoClearLog?: boolean;
   defaultAlgorithmIndex?: number;
+  logObfuscation?: LogObfuscation;
   leftSidebarWidth?: number;
   rightSidebarWidth?: number;
 }
@@ -54,6 +58,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [defaultAlgorithmIndex, setDefaultAlgorithmIndex] = useState<number>(
     persisted.defaultAlgorithmIndex ?? 0
   );
+  const [logObfuscation, setLogObfuscation] = useState<LogObfuscation>(
+    persisted.logObfuscation ?? "none"
+  );
   const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(
     clampSidebarWidth(persisted.leftSidebarWidth ?? 260)
   );
@@ -65,10 +72,17 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     saveSettings({
       autoClearLog,
       defaultAlgorithmIndex,
+      logObfuscation,
       leftSidebarWidth,
       rightSidebarWidth,
     });
-  }, [autoClearLog, defaultAlgorithmIndex, leftSidebarWidth, rightSidebarWidth]);
+  }, [
+    autoClearLog,
+    defaultAlgorithmIndex,
+    logObfuscation,
+    leftSidebarWidth,
+    rightSidebarWidth,
+  ]);
 
   return (
     <SettingsContext.Provider
@@ -77,6 +91,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         setAutoClearLog,
         defaultAlgorithmIndex,
         setDefaultAlgorithmIndex,
+        logObfuscation,
+        setLogObfuscation,
         leftSidebarWidth,
         rightSidebarWidth,
         setLeftSidebarWidth,

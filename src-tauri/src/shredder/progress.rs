@@ -1,6 +1,7 @@
 // src-tauri/src/shredder/progress.rs
 
 use crate::shredder::errors::ShredError;
+use crate::shredder::logging::{obfuscate_path, LogObfuscation};
 use crate::shredder::traits::ProgressReporter;
 use crate::shredder::types::*;
 use std::path::Path;
@@ -11,11 +12,15 @@ use tauri::{AppHandle, Emitter};
 /// Stateful Tauri progress reporter with throttling
 pub struct TauriProgressReporter {
     app: AppHandle,
+    obfuscation: LogObfuscation,
     state: Mutex<ReporterState>,
     throttle_ms: u64,
 }
 
 struct ReporterState {
+    /// Index for numbered obfuscation; incremented at each `on_file_start`.
+    file_index: u32,
+    /// Display string (obfuscated if mode != None) of the file currently being processed.
     current_file: String,
     current_file_size: u64,
     current_pass: u32,
@@ -25,10 +30,12 @@ struct ReporterState {
 }
 
 impl TauriProgressReporter {
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new(app: AppHandle, obfuscation: LogObfuscation) -> Self {
         Self {
             app,
+            obfuscation,
             state: Mutex::new(ReporterState {
+                file_index: 0,
                 current_file: String::new(),
                 current_file_size: 0,
                 current_pass: 0,
@@ -59,14 +66,18 @@ impl TauriProgressReporter {
 
 impl ProgressReporter for TauriProgressReporter {
     fn on_file_start(&self, path: &Path, file_size: u64) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.current_file = path.to_string_lossy().to_string();
-        state.current_file_size = file_size;
-        drop(state);
+        let obfuscation = self.obfuscation;
+        let (current_file, file_size_out) = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.file_index += 1;
+            state.current_file = obfuscate_path(path, obfuscation, state.file_index as usize);
+            state.current_file_size = file_size;
+            (state.current_file.clone(), state.current_file_size)
+        };
 
         self.emit_or_log(ProgressEvent {
-            file_path: path.to_string_lossy().to_string(),
-            file_size,
+            file_path: current_file,
+            file_size: file_size_out,
             bytes_written: 0,
             current_pass: 0,
             total_passes: 0,
@@ -138,8 +149,15 @@ impl ProgressReporter for TauriProgressReporter {
     }
 
     fn on_file_complete(&self, path: &Path, result: &ShredResult) {
+        let obfuscation = self.obfuscation;
+        let index = self
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .file_index as usize;
+        let display = obfuscate_path(path, obfuscation, index);
         self.emit_or_log(ProgressEvent {
-            file_path: path.to_string_lossy().to_string(),
+            file_path: display,
             file_size: 0,
             bytes_written: result.bytes_written,
             current_pass: result.passes_completed,
@@ -151,8 +169,15 @@ impl ProgressReporter for TauriProgressReporter {
     }
 
     fn on_error(&self, path: &Path, error: &ShredError) {
+        let obfuscation = self.obfuscation;
+        let index = self
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .file_index as usize;
+        let display = obfuscate_path(path, obfuscation, index);
         self.emit_or_log(ProgressEvent {
-            file_path: path.to_string_lossy().to_string(),
+            file_path: display,
             file_size: 0,
             bytes_written: 0,
             current_pass: 0,
@@ -166,8 +191,15 @@ impl ProgressReporter for TauriProgressReporter {
     }
 
     fn on_warning(&self, path: &Path, message: &str) {
+        let obfuscation = self.obfuscation;
+        let index = self
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .file_index as usize;
+        let display = obfuscate_path(path, obfuscation, index);
         self.emit_or_log(ProgressEvent {
-            file_path: path.to_string_lossy().to_string(),
+            file_path: display,
             file_size: 0,
             bytes_written: 0,
             current_pass: 0,

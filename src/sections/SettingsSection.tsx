@@ -3,6 +3,7 @@ import { ToggleSetting } from "@/components/settings/ToggleSetting";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useShred } from "@/contexts/ShredContext";
 import { cn } from "@/lib/utils";
+import type { LogObfuscation } from "@/types";
 
 const ALGO_HINTS: Record<number, string> = {
   0: "Best for SSDs, fast, single-pass",
@@ -10,9 +11,24 @@ const ALGO_HINTS: Record<number, string> = {
   2: "Simple random overwrite",
 };
 
+const LOG_OBFUSCATION_MODES: ReadonlyArray<{
+  value: LogObfuscation;
+  label: string;
+}> = [
+  { value: "none", label: "Full Paths" },
+  { value: "numbered", label: "Numbered" },
+  { value: "partial_mask", label: "Partial Mask" },
+];
+
 export function SettingsSection() {
-  const { autoClearLog, setAutoClearLog, defaultAlgorithmIndex, setDefaultAlgorithmIndex } =
-    useSettings();
+  const {
+    autoClearLog,
+    setAutoClearLog,
+    defaultAlgorithmIndex,
+    setDefaultAlgorithmIndex,
+    logObfuscation,
+    setLogObfuscation,
+  } = useSettings();
   const { algorithms } = useShred();
 
   return (
@@ -29,6 +45,34 @@ export function SettingsSection() {
           checked={autoClearLog}
           onCheckedChange={setAutoClearLog}
         />
+      </section>
+
+      <section>
+        <h2 className="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
+          Log Path Display
+        </h2>
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-muted-foreground">
+            Control how file paths appear in the operation log
+          </p>
+          <div className="flex gap-2">
+            {LOG_OBFUSCATION_MODES.map((mode) => (
+              <button
+                key={mode.value}
+                type="button"
+                onClick={() => setLogObfuscation(mode.value)}
+                className={cn(
+                  "px-3 py-1 text-xs font-mono border transition-colors",
+                  logObfuscation === mode.value
+                    ? "border-accent bg-accent/10 text-accent"
+                    : "border-border hover:border-muted-foreground"
+                )}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </section>
 
       <section>

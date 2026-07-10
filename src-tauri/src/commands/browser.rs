@@ -23,6 +23,7 @@ pub async fn shred_browser_data(
     request: BrowserShredRequest,
 ) -> Result<ShredReport, String> {
     use crate::shredder::algorithms::all_algorithms;
+    use crate::shredder::logging::LogObfuscation;
     use crate::shredder::progress::TauriProgressReporter;
 
     eprintln!(
@@ -80,7 +81,7 @@ pub async fn shred_browser_data(
     }
 
     let progress: Arc<dyn crate::shredder::traits::ProgressReporter> =
-        Arc::new(TauriProgressReporter::new(app));
+        Arc::new(TauriProgressReporter::new(app, LogObfuscation::None));
 
     let report = tokio::task::spawn_blocking(move || {
         crate::shredder::shred_files(
