@@ -29,7 +29,6 @@ pub async fn shred_files(
 
     // Reset cancellation token for fresh operation
     crate::shredder::cancel::reset_global();
-    let _cancel_token = crate::shredder::cancel::get_global_token();
 
     let progress: Arc<dyn crate::shredder::traits::ProgressReporter> =
         Arc::new(TauriProgressReporter::new(app));

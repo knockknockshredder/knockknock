@@ -264,6 +264,8 @@ pub fn shred_files(
     verification_level: VerificationLevel,
     progress: std::sync::Arc<dyn ProgressReporter>,
 ) -> ShredReport {
+    use crate::commands::error::ShredErrorDto;
+
     let start = std::time::Instant::now();
     let mut successful = 0;
     let mut failed = 0;
@@ -294,11 +296,16 @@ pub fn shred_files(
                     total_bytes += result.bytes_written;
                 } else {
                     failed += 1;
-                    // Copy verification errors to report
+                    // Copy verification errors to report via the IPC DTO so the
+                    // frontend gets the stable error_type/actionable fields,
+                    // not just the Display string.
                     for err in result.errors {
+                        let dto = ShredErrorDto::from(&err);
                         errors.push(ShredReportError {
-                            path: path.to_string_lossy().to_string(),
-                            error: err.to_string(),
+                            path: dto
+                                .path
+                                .unwrap_or_else(|| path.to_string_lossy().to_string()),
+                            error: dto.message,
                         });
                     }
                 }
