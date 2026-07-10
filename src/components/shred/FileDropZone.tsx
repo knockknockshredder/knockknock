@@ -64,10 +64,11 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
     }
   };
 
-  const handleClick = async () => {
+  const handleFileClick = async () => {
     try {
       const selected = await open({
         multiple: true,
+        directory: false,
         title: "Select files to shred",
       });
       if (selected) {
@@ -79,11 +80,27 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
     }
   };
 
+  const handleFolderClick = async () => {
+    try {
+      const selected = await open({
+        multiple: true,
+        directory: true,
+        title: "Select folders to shred",
+      });
+      if (selected) {
+        const paths = Array.isArray(selected) ? selected : [selected];
+        await validateAndAdd(paths);
+      }
+    } catch (err) {
+      addLogEntry("error", `Folder dialog failed: ${err}`);
+    }
+  };
+
   if (compact) {
     return (
       <button
         type="button"
-        onClick={handleClick}
+        onClick={handleFileClick}
         className="text-muted-foreground hover:text-foreground transition-colors"
         title="Add files"
       >
@@ -94,9 +111,8 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
 
   return (
     <div
-      onClick={handleClick}
       className={cn(
-        "flex cursor-pointer flex-col items-center justify-center gap-3 border-2 border-dashed p-12 transition-colors",
+        "flex flex-col items-center justify-center gap-3 border-2 border-dashed p-12 transition-colors",
         isDragOver
           ? "border-accent bg-accent/5"
           : "border-border hover:border-muted-foreground"
@@ -110,8 +126,30 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
         )}
       />
       <p className="text-sm text-muted-foreground">
-        Drop files here or click to browse
+        Drop files or folders here
       </p>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleFileClick();
+          }}
+          className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+        >
+          Add Files
+        </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleFolderClick();
+          }}
+          className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+        >
+          Add Folder
+        </button>
+      </div>
     </div>
   );
 }
