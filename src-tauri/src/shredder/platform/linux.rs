@@ -118,7 +118,53 @@ impl PlatformIo for LinuxIo {
     }
 
     fn issue_trim(&self, path: &Path) -> Result<(), ShredError> {
-        // TODO: Run fstrim on the mount point
-        Ok(())
+        // Find the mount point for this path so we can pass it to fstrim.
+        // `df --output=target` prints the mount point column with the header
+        // on the first line, so the actual mount point is line index 1.
+        let parent = path.parent().unwrap_or(path);
+        let output = std::process::Command::new("df")
+            .args(["--output=target", parent.to_str().unwrap_or("")])
+            .output();
+
+        let mount_point = match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let lines: Vec<&str> = stdout.trim().lines().collect();
+                if lines.len() >= 2 {
+                    lines[1].trim().to_string()
+                } else {
+                    // Couldn't determine mount point — TRIM is best-effort, skip.
+                    return Ok(());
+                }
+            }
+            Err(_) => {
+                // `df` not available — TRIM is best-effort, skip.
+                return Ok(());
+            }
+        };
+
+        // Run fstrim on the mount point. Requires CAP_SYS_ADMIN or an
+        // fstrim-enabled sudoers rule; we don't fail the shred if the user
+        // lacks privilege — the file is already gone, TRIM is just an SSD
+        // wear-leveling hint to the FTL.
+        let trim_result = std::process::Command::new("fstrim")
+            .arg("-v")
+            .arg(&mount_point)
+            .output();
+
+        match trim_result {
+            Ok(out) => {
+                if !out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    eprintln!("[KnockKnock] fstrim failed for {}: {}", mount_point, stderr);
+                    // Don't fail the shred — TRIM is a best-effort optimization.
+                }
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("[KnockKnock] fstrim not available: {}", e);
+                Ok(()) // TRIM is best-effort
+            }
+        }
     }
 }
