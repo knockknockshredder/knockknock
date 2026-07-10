@@ -41,6 +41,11 @@ impl ShredAlgorithm for Dod522022M {
         true
     }
 
+    fn final_pattern(&self, _user_pattern: PatternType) -> PatternType {
+        // DoD's final pass is always random (pass 2 in 0-indexed: zeros, ones, random)
+        PatternType::Random
+    }
+
     fn shred(
         &self,
         file: &mut File,
@@ -74,7 +79,8 @@ impl ShredAlgorithm for Dod522022M {
                 total_written,
                 file_size * passes as u64,
             )?;
-            progress.on_pass_complete(pass + 1, passes);
+            // Note: do NOT emit on_pass_complete here. The pipeline in mod.rs
+            // emits pass-complete after the algorithm returns to avoid double-emit.
         }
 
         Ok(ShredResult {

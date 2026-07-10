@@ -96,8 +96,10 @@ pub fn shred_file(
         let result = algorithm.shred(&mut file, file_size, passes, pattern, progress)?;
         bytes_written_total += result.bytes_written;
         platform_io.sync_to_disk(&mut file)?;
-        // Verify after all passes
-        let verification_result = verifier.verify(&mut file, &pattern, file_size)?;
+        // Verify against the algorithm's final-pass pattern, not the user's
+        // selected pattern (fixed-sequence algorithms may differ).
+        let verify_pattern = algorithm.final_pattern(pattern);
+        let verification_result = verifier.verify(&mut file, &verify_pattern, file_size)?;
         if !verification_result.passed {
             errors.push(ShredError::VerificationFailed {
                 path: path.to_path_buf(),

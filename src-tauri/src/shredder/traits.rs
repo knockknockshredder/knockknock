@@ -17,6 +17,12 @@ pub trait ShredAlgorithm: Send + Sync {
         false
     }
 
+    /// For fixed-sequence algorithms, return the pattern used in the final pass.
+    /// Default: returns the user-selected pattern.
+    fn final_pattern(&self, user_pattern: PatternType) -> PatternType {
+        user_pattern
+    }
+
     fn shred(
         &self,
         file: &mut File,
