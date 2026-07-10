@@ -152,10 +152,14 @@ impl VerificationStrategy for SampleVerification {
 pub struct FullVerification;
 
 impl FullVerification {
-    /// Fill `buffer[..n]` with the expected bytes at absolute file offset `pos`.
-    /// For deterministic patterns we compare inline; for Random-with-seed we
-    /// regenerate via ChaCha20 with `try_seek` (O(1) per jump, no skip buffers).
-    fn fill_expected(
+    /// Compare `buffer[..n]` against the expected bytes at absolute file
+    /// offset `pos` and return `true` if any byte mismatches. For
+    /// deterministic patterns (Zeros/Ones) we compare inline; for
+    /// Random-with-seed we regenerate the expected keystream via ChaCha20
+    /// with `try_seek` (O(1) per jump, no skip buffers). The name was
+    /// previously `fill_expected`, which was misleading because nothing is
+    /// ever filled — the function only detects mismatches.
+    fn check_block_mismatch(
         buffer: &mut [u8],
         n: usize,
         pos: u64,
@@ -219,7 +223,7 @@ impl VerificationStrategy for FullVerification {
                 break;
             }
 
-            if Self::fill_expected(&mut buffer, n, pos, pattern, seed) {
+            if Self::check_block_mismatch(&mut buffer, n, pos, pattern, seed) {
                 mismatches += 1;
             }
             blocks_checked += 1;
