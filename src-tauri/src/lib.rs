@@ -2,6 +2,7 @@
 
 mod browser;
 mod commands;
+mod drive;
 mod pin;
 mod shredder;
 mod tray;
@@ -21,6 +22,8 @@ pub fn run() {
             commands::shred::cleanup_orphans,
             commands::shred::get_algorithms,
             commands::shred::validate_paths,
+            commands::shred::get_drive_info,
+            commands::shred::get_all_drive_info,
             commands::browser::detect_browsers,
             commands::browser::shred_browser_data,
             commands::tray::quick_shred_from_clipboard,

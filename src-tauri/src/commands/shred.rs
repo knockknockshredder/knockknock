@@ -1,5 +1,6 @@
 // src-tauri/src/commands/shred.rs
 
+use crate::drive::{self, DriveInfo};
 use crate::shredder::algorithms::all_algorithms;
 use crate::shredder::logging::LogObfuscation;
 use crate::shredder::progress::TauriProgressReporter;
@@ -201,4 +202,30 @@ pub fn validate_paths(
         }
     }
     Ok((valid, errors))
+}
+
+/// Detect drive info for a single path.
+#[tauri::command]
+pub fn get_drive_info(path: String) -> Result<DriveInfo, String> {
+    drive::detect_drive_info(std::path::Path::new(&path))
+}
+
+/// Detect drive info for every unique drive represented by the given paths.
+///
+/// Returns one `DriveInfo` per distinct drive key (e.g. `"C:"`, `"D:"`),
+/// preserving first-seen order.
+#[tauri::command]
+pub fn get_all_drive_info(paths: Vec<String>) -> Result<Vec<DriveInfo>, String> {
+    let mut drives: Vec<DriveInfo> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for path_str in paths {
+        let path = std::path::Path::new(&path_str);
+        let info = drive::detect_drive_info(path)?;
+        if seen.insert(info.drive_letter.clone()) {
+            drives.push(info);
+        }
+    }
+
+    Ok(drives)
 }

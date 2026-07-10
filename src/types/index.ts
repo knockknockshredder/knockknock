@@ -86,3 +86,24 @@ export interface ShredReport {
   total_bytes_shredded: number;
   duration_secs: number;
 }
+
+/**
+ * Drive classification. Mirrors backend `DriveType` snake_case
+ * serialization in `src-tauri/src/drive/mod.rs`.
+ */
+export type DriveType =
+  | "ssd"
+  | "hdd"
+  | "network"
+  | "usb_ssd"
+  | "usb_hdd"
+  | "unknown";
+
+/** Mirrors backend `DriveInfo` in `src-tauri/src/drive/mod.rs`. */
+export interface DriveInfo {
+  drive_letter: string;
+  drive_type: DriveType;
+  label: string;
+  total_bytes: number;
+  free_bytes: number;
+}
