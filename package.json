@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "lint": "tsc --noEmit",
-    "test": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

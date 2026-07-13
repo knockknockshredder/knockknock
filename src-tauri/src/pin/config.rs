@@ -1,5 +1,6 @@
 // src-tauri/src/pin/config.rs
 
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
@@ -7,6 +8,13 @@ fn get_config_path() -> PathBuf {
     let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     path.push("KnockKnock");
     path.push("pin.json");
+    path
+}
+
+fn get_lockout_path() -> PathBuf {
+    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    path.push("KnockKnock");
+    path.push("lockout.json");
     path
 }
 
@@ -42,6 +50,61 @@ pub fn remove_pin_hash() -> Result<(), String> {
     let path = get_config_path();
     if path.exists() {
         fs::remove_file(&path).map_err(|e| format!("Failed to remove PIN config: {}", e))?;
+    }
+    Ok(())
+}
+
+/// Persisted lockout state. Survives app restarts so attackers cannot simply
+/// relaunch the app to reset failed-attempt counters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockoutState {
+    pub failed_attempts: u32,
+    pub lockout_until_unix: Option<u64>,
+}
+
+impl Default for LockoutState {
+    fn default() -> Self {
+        Self {
+            failed_attempts: 0,
+            lockout_until_unix: None,
+        }
+    }
+}
+
+pub fn save_lockout_state(state: &LockoutState) -> Result<(), String> {
+    let path = get_lockout_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    }
+
+    let json = serde_json::to_string_pretty(state)
+        .map_err(|e| format!("Failed to serialize lockout state: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write lockout state: {}", e))?;
+
+    Ok(())
+}
+
+pub fn load_lockout_state() -> Result<LockoutState, String> {
+    let path = get_lockout_path();
+    if !path.exists() {
+        return Ok(LockoutState::default());
+    }
+
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read lockout state: {}", e))?;
+
+    // If the file is corrupt, fail safe to defaults — better to lose the counter
+    // than to refuse to start the app.
+    let state: LockoutState = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse lockout state: {}", e))?;
+
+    Ok(state)
+}
+
+pub fn clear_lockout_state() -> Result<(), String> {
+    let path = get_lockout_path();
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| format!("Failed to remove lockout state: {}", e))?;
     }
     Ok(())
 }
