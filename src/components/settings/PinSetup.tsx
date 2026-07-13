@@ -1,15 +1,26 @@
 // src/components/settings/PinSetup.tsx
 //
-// Minimal stub restored to unblock pnpm lint. The full PIN setup UX lives
-// in the PIN protection task (Task 5) and will be wired in separately.
+// PIN setup dialog. Used both to set the initial PIN and to change an
+// existing PIN (the backend replaces the stored hash on every setup).
+// Digits-only enforcement lives at three layers:
+//   1. Native keyboard (`inputMode="numeric"`, `pattern="[0-9]*"`)
+//   2. onChange strip (`value.replace(/\D/g, "")`)
+//   3. Backend `validate_pin_format` (authoritative)
 
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Lock, WarningCircle } from "@phosphor-icons/react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from "@/components/ui/dialog";
+
+const MIN_PIN_LEN = 6;
+const MAX_PIN_LEN = 32;
 
 interface PinSetupProps {
   open: boolean;
@@ -17,16 +28,137 @@ interface PinSetupProps {
   onPinSet: () => void;
 }
 
-export function PinSetup({ open, onOpenChange, onPinSet: _onPinSet }: PinSetupProps) {
+export function PinSetup({ open, onOpenChange, onPinSet }: PinSetupProps) {
+  const [pin, setPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Reset state whenever the dialog closes so a stale error or partial
+  // input never leaks into a fresh setup attempt.
+  useEffect(() => {
+    if (!open) {
+      setPin("");
+      setConfirmPin("");
+      setError(null);
+      setSubmitting(false);
+    }
+  }, [open]);
+
+  const digitsOnly = (value: string) => value.replace(/\D/g, "");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    if (pin.length < MIN_PIN_LEN || pin.length > MAX_PIN_LEN) {
+      setError(`PIN must be between ${MIN_PIN_LEN} and ${MAX_PIN_LEN} digits`);
+      return;
+    }
+    if (pin !== confirmPin) {
+      setError("PINs do not match");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await invoke("setup_pin", { pinValue: pin });
+      onPinSet();
+      onOpenChange(false);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const canSubmit =
+    pin.length >= MIN_PIN_LEN &&
+    pin.length <= MAX_PIN_LEN &&
+    confirmPin.length >= MIN_PIN_LEN &&
+    !submitting;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Setup PIN</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <Lock size={16} className="text-accent" />
+            Set PIN
+          </DialogTitle>
           <DialogDescription>
-            PIN setup UI is provided by the PIN protection task.
+            Choose a {MIN_PIN_LEN} to {MAX_PIN_LEN} digit PIN. You will be
+            asked for it to open the app and before each shred operation.
           </DialogDescription>
         </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+              PIN
+            </span>
+            <input
+              type="password"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              autoComplete="off"
+              value={pin}
+              onChange={(e) => setPin(digitsOnly(e.target.value))}
+              maxLength={MAX_PIN_LEN}
+              disabled={submitting}
+              autoFocus
+              className="font-mono px-3 py-2 bg-surface border border-border focus:border-accent focus:outline-none disabled:opacity-50"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+              Confirm PIN
+            </span>
+            <input
+              type="password"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              autoComplete="off"
+              value={confirmPin}
+              onChange={(e) => setConfirmPin(digitsOnly(e.target.value))}
+              maxLength={MAX_PIN_LEN}
+              disabled={submitting}
+              className="font-mono px-3 py-2 bg-surface border border-border focus:border-accent focus:outline-none disabled:opacity-50"
+            />
+          </label>
+
+          {error && (
+            <p className="font-mono text-xs text-red-500 flex items-start gap-1.5">
+              <WarningCircle size={14} className="flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </p>
+          )}
+
+          <p className="font-mono text-xs text-muted-foreground">
+            Store your PIN safely. If you forget it, the app state must be
+            wiped, which destroys all saved vaults and configurations.
+            KnockKnock cannot recover a lost PIN.
+          </p>
+
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              disabled={submitting}
+              className="px-4 py-2 font-mono text-xs uppercase tracking-wider border border-border text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              className="px-4 py-2 font-mono text-xs uppercase tracking-wider bg-accent text-background transition-colors hover:bg-accent/90 disabled:opacity-50"
+            >
+              {submitting ? "Saving..." : "Save PIN"}
+            </button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

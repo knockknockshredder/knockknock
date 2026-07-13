@@ -6,8 +6,6 @@ use tauri::{AppHandle, Manager};
 ///
 /// Returns the number of paths found. Frontend listens on
 /// `tray-menu-action` for the user-facing confirmation flow.
-///
-/// TODO: Integrate with the shredder engine via `shred_files`.
 #[tauri::command]
 pub fn quick_shred_from_clipboard() -> Result<String, String> {
     Err("Not implemented".to_string())

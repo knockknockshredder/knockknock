@@ -21,7 +21,6 @@ const MAX_PIN_LEN: usize = 32;
 /// app restarts — without disk persistence, an attacker could simply
 /// relaunch the app to reset the counter.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PinState {
     pub failed_attempts: u32,
     pub lockout_until_unix: Option<u64>,
@@ -200,7 +199,6 @@ pub fn is_pin_enabled() -> bool {
     config::load_pin_hash().ok().flatten().is_some()
 }
 
-#[allow(dead_code)]
 pub fn disable_pin() -> Result<(), String> {
     config::remove_pin_hash()?;
     config::clear_lockout_state()?;
