@@ -24,12 +24,6 @@ impl PlatformIo for LinuxIo {
             .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
     }
 
-    fn write_data(&self, file: &mut File, data: &[u8]) -> Result<usize, ShredError> {
-        use std::io::Write;
-        file.write(data)
-            .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
-    }
-
     fn sync_to_disk(&self, file: &mut File) -> Result<(), ShredError> {
         file.sync_all()
             .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
@@ -85,8 +79,6 @@ impl PlatformIo for LinuxIo {
                         let rot = rot.trim();
                         if rot == "0" {
                             return Ok(MediaType::Ssd);
-                        } else if rot == "1" {
-                            return Ok(MediaType::Hdd);
                         }
                     }
                 }

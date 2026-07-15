@@ -32,8 +32,6 @@ pub fn shred_file(
     progress: &dyn ProgressReporter,
     cancel: &CancellationToken,
 ) -> Result<ShredResult, ShredError> {
-    let start = std::time::Instant::now();
-
     // 1. Validate path
     validation::validate_path(path)?;
 
@@ -79,9 +77,7 @@ pub fn shred_file(
             success: true,
             passes_completed: 0,
             bytes_written: 0,
-            verification_passed: true,
             errors: vec![],
-            duration: start.elapsed(),
         };
         progress.on_file_complete(path, &result);
         return Ok(result);
@@ -246,9 +242,7 @@ pub fn shred_file(
         success: errors.is_empty() && !was_cancelled,
         passes_completed: passes,
         bytes_written: bytes_written_total,
-        verification_passed: errors.is_empty(),
         errors,
-        duration: start.elapsed(),
     };
 
     progress.on_file_complete(path, &result);

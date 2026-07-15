@@ -106,60 +106,6 @@ fn check_lock_file(base_path: &std::path::Path, pattern: &str) -> bool {
     }
 }
 
-/// Detect what data types exist in a browser profile
-pub fn detect_data_types(profile_path: &Path) -> Vec<BrowserDataType> {
-    let mut types = Vec::new();
-
-    if !profile_path.exists() {
-        return types;
-    }
-
-    types.push(BrowserDataType::Profile);
-
-    // Check for cache
-    let cache_names = ["Cache", "cache2", "Code Cache", "GPUCache", "OfflineCache"];
-    for name in &cache_names {
-        if profile_path.join(name).exists() {
-            types.push(BrowserDataType::Cache);
-            break;
-        }
-    }
-
-    // Check for cookies
-    let cookie_files = [
-        "Cookies",
-        "cookies.sqlite",
-        "cookies.txt",
-        "Network/Cookies",
-    ];
-    for name in &cookie_files {
-        if profile_path.join(name).exists() {
-            types.push(BrowserDataType::Cookies);
-            break;
-        }
-    }
-
-    // Check for history
-    let history_files = ["History", "places.sqlite", "Favicons"];
-    for name in &history_files {
-        if profile_path.join(name).exists() {
-            types.push(BrowserDataType::History);
-            break;
-        }
-    }
-
-    // Check for passwords
-    let password_files = ["Login Data", "logins.json", "signons.sqlite"];
-    for name in &password_files {
-        if profile_path.join(name).exists() {
-            types.push(BrowserDataType::Passwords);
-            break;
-        }
-    }
-
-    types
-}
-
 /// Estimate directory size in bytes (iterative, capped, symlink-safe)
 pub fn estimate_directory_size(path: &Path) -> u64 {
     let mut size = 0u64;

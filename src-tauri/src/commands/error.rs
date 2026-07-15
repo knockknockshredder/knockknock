@@ -72,10 +72,6 @@ fn extract_path_and_action(err: &ShredError) -> (Option<String>, String) {
             Some(p.to_string_lossy().into_owned()),
             "Symlinks are refused to prevent shredding unintended targets. Resolve the link and retry with the real file.".to_string(),
         ),
-        ShredError::HardLinksDetected { path, .. } => (
-            Some(path.to_string_lossy().into_owned()),
-            "Files with multiple hard links are refused. Remove the additional links first, then retry.".to_string(),
-        ),
         ShredError::InvalidPathType(p) => (
             Some(p.to_string_lossy().into_owned()),
             "Select a regular file or directory. Special filesystem entries (sockets, pipes, devices) are not supported.".to_string(),
@@ -98,7 +94,6 @@ fn error_type_name(err: &ShredError) -> String {
         ShredError::NetworkDrive(_) => "NetworkDrive",
         ShredError::SystemFile(_) => "SystemFile",
         ShredError::SymlinkDetected(_) => "SymlinkDetected",
-        ShredError::HardLinksDetected { .. } => "HardLinksDetected",
         ShredError::InvalidPathType(_) => "InvalidPathType",
         ShredError::EmptyPath => "EmptyPath",
     }

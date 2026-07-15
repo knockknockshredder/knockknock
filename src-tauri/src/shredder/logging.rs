@@ -29,12 +29,6 @@ pub fn obfuscate_path(path: &Path, mode: LogObfuscation, index: usize) -> String
     }
 }
 
-/// Initialize tracing subscriber (call once at app startup)
-pub fn init_logging() {
-    // Simple eprintln-based logging for now
-    // Can be upgraded to tracing-subscriber later
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

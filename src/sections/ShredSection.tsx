@@ -9,27 +9,16 @@ import { ConfirmationDialog } from "@/components/shred/ConfirmationDialog";
 import { useShred } from "@/contexts/ShredContext";
 import { useBrowser } from "@/contexts/BrowserContext";
 import { useSettings } from "@/contexts/SettingsContext";
-import { cn } from "@/lib/utils";
 import type {
   ShredReport,
   ProgressEvent,
   ShredStatus,
   AlgorithmOption,
-  LogObfuscation,
 } from "@/types";
 
 function statusToString(status: ShredStatus): string {
   return status.type.toLowerCase();
 }
-
-const LOG_OBFUSCATION_MODES: ReadonlyArray<{
-  value: LogObfuscation;
-  label: string;
-}> = [
-  { value: "none", label: "Full Paths" },
-  { value: "numbered", label: "Numbered" },
-  { value: "partial_mask", label: "Partial Mask" },
-];
 
 export function ShredSection() {
   const {
@@ -47,7 +36,7 @@ export function ShredSection() {
   } = useShred();
 
   const { getSelectedCount, browsers } = useBrowser();
-  const { defaultAlgorithmIndex, logObfuscation, setLogObfuscation } = useSettings();
+  const { defaultAlgorithmIndex, logObfuscation } = useSettings();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [passes, setPasses] = useState(1);
@@ -224,28 +213,6 @@ export function ShredSection() {
             currentAlgorithm={currentAlgorithm}
           />
         )}
-        <div>
-          <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-            Log Path Display
-          </label>
-          <div className="flex gap-2 mt-2">
-            {LOG_OBFUSCATION_MODES.map((mode) => (
-              <button
-                key={mode.value}
-                type="button"
-                onClick={() => setLogObfuscation(mode.value)}
-                className={cn(
-                  "px-3 py-1 text-xs font-mono border transition-colors",
-                  logObfuscation === mode.value
-                    ? "border-accent bg-accent/10 text-accent"
-                    : "border-border hover:border-muted-foreground"
-                )}
-              >
-                {mode.label}
-              </button>
-            ))}
-          </div>
-        </div>
         <ShredButton
           fileCount={pendingFiles.length}
           profileCount={selectedProfileCount}

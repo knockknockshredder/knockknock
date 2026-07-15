@@ -34,9 +34,6 @@ pub enum ShredError {
     #[error("Symlink detected: {0}")]
     SymlinkDetected(PathBuf),
 
-    #[error("Hard links detected ({count} links): {path}")]
-    HardLinksDetected { path: PathBuf, count: u32 },
-
     #[error("Path is not a file or directory: {0}")]
     InvalidPathType(PathBuf),
 

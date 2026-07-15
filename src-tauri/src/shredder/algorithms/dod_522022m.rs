@@ -54,7 +54,6 @@ impl ShredAlgorithm for Dod522022M {
         progress: &dyn ProgressReporter,
         seed: Option<&PrngSeed>,
     ) -> Result<ShredResult, ShredError> {
-        let start = std::time::Instant::now();
         let mut total_written = 0u64;
         let mut buffer = vec![0u8; BUFFER_SIZE];
 
@@ -79,9 +78,7 @@ impl ShredAlgorithm for Dod522022M {
             success: true,
             passes_completed: passes,
             bytes_written: total_written,
-            verification_passed: true,
             errors: vec![],
-            duration: start.elapsed(),
         })
     }
 }

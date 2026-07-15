@@ -39,12 +39,6 @@ impl PlatformIo for MacOsIo {
         Ok(file)
     }
 
-    fn write_data(&self, file: &mut File, data: &[u8]) -> Result<usize, ShredError> {
-        use std::io::Write;
-        file.write(data)
-            .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
-    }
-
     fn sync_to_disk(&self, file: &mut File) -> Result<(), ShredError> {
         #[cfg(target_os = "macos")]
         {
@@ -109,8 +103,6 @@ impl PlatformIo for MacOsIo {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 if stdout.contains("<key>Solid State</key>") && stdout.contains("<true/>") {
                     Ok(MediaType::Ssd)
-                } else if stdout.contains("<key>Solid State</key>") && stdout.contains("<false/>") {
-                    Ok(MediaType::Hdd)
                 } else {
                     Ok(MediaType::Unknown)
                 }

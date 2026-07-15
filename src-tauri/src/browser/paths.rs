@@ -4,10 +4,7 @@ use std::path::PathBuf;
 
 pub struct BrowserPath {
     pub name: &'static str,
-    pub process_names: &'static [&'static str], // Process names to check
     pub windows_paths: &'static [&'static str], // Windows paths (can have multiple)
-    pub macos_paths: &'static [&'static str],   // macOS paths
-    pub linux_paths: &'static [&'static str],   // Linux paths
     pub lock_file_pattern: &'static str,        // Glob pattern for lock file
     pub profile_glob: &'static str,             // Glob pattern for profiles
 }
@@ -15,134 +12,74 @@ pub struct BrowserPath {
 pub const BROWSER_PATHS: &[BrowserPath] = &[
     BrowserPath {
         name: "Chrome",
-        process_names: &["chrome", "chrome.exe"],
         windows_paths: &[
             "Google\\Chrome\\User Data",
             "Google\\Chrome Beta\\User Data",
             "Google\\Chrome SxS\\User Data", // Chrome Canary
-        ],
-        macos_paths: &[
-            "Google/Chrome",
-            "Google/Chrome Beta",
-            "Google/Chrome Canary",
-        ],
-        linux_paths: &[
-            "google-chrome",
-            "google-chrome-beta",
-            "google-chrome-unstable",
         ],
         lock_file_pattern: "SingletonLock",
         profile_glob: "Default",
     },
     BrowserPath {
         name: "Firefox",
-        process_names: &["firefox", "firefox.exe"],
         windows_paths: &["Mozilla\\Firefox"],
-        macos_paths: &["Firefox"],
-        linux_paths: &[
-            ".mozilla/firefox",
-            "snap/firefox/common/.mozilla/firefox", // Snap
-            ".var/app/org.mozilla.firefox/.mozilla/firefox", // Flatpak
-        ],
         lock_file_pattern: "*.default*/lock",
         profile_glob: "*.default*",
     },
     BrowserPath {
         name: "Edge",
-        process_names: &["msedge", "msedge.exe"],
         windows_paths: &[
             "Microsoft\\Edge\\User Data",
             "Microsoft\\Edge Beta\\User Data",
-        ],
-        macos_paths: &["Microsoft Edge", "Microsoft Edge Beta"],
-        linux_paths: &[
-            "microsoft-edge",
-            "microsoft-edge-beta",
-            "microsoft-edge-dev",
         ],
         lock_file_pattern: "SingletonLock",
         profile_glob: "Default",
     },
     BrowserPath {
         name: "Brave",
-        process_names: &["brave", "brave.exe"],
         windows_paths: &[
             "BraveSoftware\\Brave-Browser\\User Data",
             "BraveSoftware\\Brave-Browser-Beta\\User Data",
-        ],
-        macos_paths: &[
-            "BraveSoftware/Brave-Browser",
-            "BraveSoftware/Brave-Browser-Beta",
-        ],
-        linux_paths: &[
-            "BraveSoftware/Brave-Browser",
-            "BraveSoftware/Brave-Browser-Beta",
-            "snap/brave/current/.config/BraveSoftware/Brave-Browser", // Snap
         ],
         lock_file_pattern: "SingletonLock",
         profile_glob: "Default",
     },
     BrowserPath {
         name: "Opera",
-        process_names: &["opera", "opera.exe"],
         windows_paths: &[
             "Opera Software\\Opera Stable",
             "Opera Software\\Opera Next", // Opera Beta
         ],
-        macos_paths: &["com.operasoftware.Opera"],
-        linux_paths: &["opera", "opera-beta", "opera-developer"],
         lock_file_pattern: "lock",
         profile_glob: "Default",
     },
     BrowserPath {
         name: "Vivaldi",
-        process_names: &["vivaldi", "vivaldi.exe"],
         windows_paths: &["Vivaldi\\User Data"],
-        macos_paths: &["Vivaldi"],
-        linux_paths: &["vivaldi", "vivaldi-snapshot"],
         lock_file_pattern: "SingletonLock",
         profile_glob: "Default",
     },
     BrowserPath {
         name: "Safari",
-        process_names: &["Safari"],
         windows_paths: &[], // Safari not on Windows
-        macos_paths: &["Safari"],
-        linux_paths: &[], // Safari not on Linux
         lock_file_pattern: "",
         profile_glob: "",
     },
     BrowserPath {
         name: "Tor Browser",
-        process_names: &["tor-browser", "firefox"], // Tor uses Firefox under the hood
         windows_paths: &["Tor Browser\\Browser\\TorBrowser\\Data\\Browser"],
-        macos_paths: &["TorBrowser-Data/Browser"],
-        linux_paths: &[
-            ".local/share/torbrowser/tbb/x86_64/tor-browser/Browser/TorBrowser/Data/Browser",
-            "tor-browser/Browser/TorBrowser/Data/Browser",
-        ],
         lock_file_pattern: "parent.lock",
         profile_glob: "*.default",
     },
     BrowserPath {
         name: "Chromium",
-        process_names: &["chromium", "chromium.exe"],
         windows_paths: &["Chromium\\User Data"],
-        macos_paths: &["Chromium"],
-        linux_paths: &[
-            "chromium",
-            "snap/chromium/common/chromium",                   // Snap
-            ".var/app/org.chromium.Chromium/.config/chromium", // Flatpak
-        ],
         lock_file_pattern: "SingletonLock",
         profile_glob: "Default",
     },
     BrowserPath {
         name: "Internet Explorer",
-        process_names: &["iexplore", "iexplore.exe"],
         windows_paths: &["Microsoft\\Internet Explorer"],
-        macos_paths: &[], // IE not on macOS
-        linux_paths: &[], // IE not on Linux
         lock_file_pattern: "",
         profile_glob: "",
     },

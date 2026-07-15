@@ -145,15 +145,7 @@ pub fn check_hard_links(path: &Path) -> Result<HardLinkInfo, ShredError> {
         }
     };
 
-    Ok(HardLinkInfo {
-        path: path.to_path_buf(),
-        link_count,
-        warning: if link_count > 1 {
-            Some(format!("File has {} hard links.", link_count))
-        } else {
-            None
-        },
-    })
+    Ok(HardLinkInfo { link_count })
 }
 
 /// Windows mapped-drive (DRIVE_REMOTE) check via `GetDriveTypeW`.

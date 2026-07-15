@@ -55,11 +55,7 @@ impl VerificationStrategy for NoVerification {
         _size: u64,
         _seed: Option<&PrngSeed>,
     ) -> Result<VerificationResult, ShredError> {
-        Ok(VerificationResult {
-            passed: true,
-            blocks_checked: 0,
-            mismatches: 0,
-        })
+        Ok(VerificationResult { passed: true })
     }
 }
 
@@ -115,11 +111,7 @@ impl VerificationStrategy for SampleVerification {
         seed: Option<&PrngSeed>,
     ) -> Result<VerificationResult, ShredError> {
         if size == 0 {
-            return Ok(VerificationResult {
-                passed: true,
-                blocks_checked: 0,
-                mismatches: 0,
-            });
+            return Ok(VerificationResult { passed: true });
         }
 
         let positions = [0u64, size / 2, size.saturating_sub(self.block_size as u64)];
@@ -143,8 +135,6 @@ impl VerificationStrategy for SampleVerification {
 
         Ok(VerificationResult {
             passed: mismatches == 0,
-            blocks_checked: 3,
-            mismatches,
         })
     }
 }
@@ -198,11 +188,7 @@ impl VerificationStrategy for FullVerification {
         seed: Option<&PrngSeed>,
     ) -> Result<VerificationResult, ShredError> {
         if size == 0 {
-            return Ok(VerificationResult {
-                passed: true,
-                blocks_checked: 0,
-                mismatches: 0,
-            });
+            return Ok(VerificationResult { passed: true });
         }
 
         file.seek(SeekFrom::Start(0))
@@ -212,7 +198,6 @@ impl VerificationStrategy for FullVerification {
         let mut mismatches = 0;
         let mut remaining = size;
         let mut pos = 0u64;
-        let mut blocks_checked = 0usize;
 
         while remaining > 0 {
             let to_read = std::cmp::min(remaining, buffer.len() as u64) as usize;
@@ -226,7 +211,6 @@ impl VerificationStrategy for FullVerification {
             if Self::check_block_mismatch(&mut buffer, n, pos, pattern, seed) {
                 mismatches += 1;
             }
-            blocks_checked += 1;
 
             pos += n as u64;
             remaining -= n as u64;
@@ -234,8 +218,6 @@ impl VerificationStrategy for FullVerification {
 
         Ok(VerificationResult {
             passed: mismatches == 0,
-            blocks_checked,
-            mismatches,
         })
     }
 }

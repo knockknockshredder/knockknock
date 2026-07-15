@@ -60,20 +60,11 @@ pub trait ProgressReporter: Send + Sync {
 /// Trait for platform-specific I/O operations
 pub trait PlatformIo: Send + Sync {
     fn open_for_shred(&self, path: &Path) -> Result<File, ShredError>;
-    fn write_data(&self, file: &mut File, data: &[u8]) -> Result<usize, ShredError>;
     fn sync_to_disk(&self, file: &mut File) -> Result<(), ShredError>;
     fn rename_random(&self, path: &Path) -> Result<std::path::PathBuf, ShredError>;
     fn truncate_to_zero(&self, file: &mut File) -> Result<(), ShredError>;
     fn delete(&self, path: &Path) -> Result<(), ShredError>;
     fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError>;
-
-    fn schedule_delete_on_reboot(&self, _path: &Path) -> Result<(), ShredError> {
-        Err(ShredError::IoError {
-            path: _path.to_path_buf(),
-            kind: "Unsupported".to_string(),
-            message: "Delete-on-reboot not supported on this platform".to_string(),
-        })
-    }
 
     fn find_locking_processes(&self, _path: &Path) -> Result<Vec<ProcessInfo>, ShredError> {
         Err(ShredError::IoError {

@@ -2,8 +2,6 @@
 
 use crate::shredder::errors::ShredError;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use std::time::Duration;
 
 /// Byte patterns for overwriting
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,19 +13,12 @@ pub enum PatternType {
 }
 
 impl PatternType {
-    pub fn byte_value(&self) -> Option<u8> {
-        match self {
-            PatternType::Zeros => Some(0x00),
-            PatternType::Ones => Some(0xFF),
-            PatternType::Random => None,
-        }
-    }
+    // PatternType is used for serialization/deserialization
 }
 
 /// Media type for SSD-aware shredding
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaType {
-    Hdd,
     Ssd,
     Unknown,
 }
@@ -37,10 +28,6 @@ pub enum MediaType {
 #[serde(tag = "type")]
 pub enum ShredStatus {
     Shredding,
-    Verifying,
-    Renaming,
-    Truncating,
-    Deleting,
     Complete,
     Warning { message: String },
     Error { message: String },
@@ -52,25 +39,19 @@ pub struct ShredResult {
     pub success: bool,
     pub passes_completed: u32,
     pub bytes_written: u64,
-    pub verification_passed: bool,
     pub errors: Vec<ShredError>,
-    pub duration: Duration,
 }
 
 /// Result of verification
 #[derive(Debug)]
 pub struct VerificationResult {
     pub passed: bool,
-    pub blocks_checked: usize,
-    pub mismatches: usize,
 }
 
 /// Information about a hard link
 #[derive(Debug)]
 pub struct HardLinkInfo {
-    pub path: PathBuf,
     pub link_count: u32,
-    pub warning: Option<String>,
 }
 
 /// Information about a process holding a file lock

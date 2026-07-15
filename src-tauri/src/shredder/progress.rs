@@ -212,16 +212,3 @@ impl ProgressReporter for TauriProgressReporter {
         });
     }
 }
-
-/// No-op reporter for testing
-pub struct NoopProgressReporter;
-
-impl ProgressReporter for NoopProgressReporter {
-    fn on_file_start(&self, _: &Path, _: u64) {}
-    fn on_pass_start(&self, _: u32, _: u32) {}
-    fn on_progress(&self, _: u64, _: u64) {}
-    fn on_pass_complete(&self, _: u32, _: u32) {}
-    fn on_file_complete(&self, _: &Path, _: &ShredResult) {}
-    fn on_error(&self, _: &Path, _: &ShredError) {}
-    fn on_warning(&self, _: &Path, _: &str) {}
-}

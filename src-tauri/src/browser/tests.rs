@@ -2,9 +2,8 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::browser::detection::{detect_browsers, detect_data_types, estimate_directory_size};
+    use crate::browser::detection::{detect_browsers, estimate_directory_size};
     use crate::browser::paths::{get_browser_base_paths, BROWSER_PATHS};
-    use crate::browser::types::BrowserDataType;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -20,11 +19,9 @@ mod tests {
     }
 
     #[test]
-    fn test_safari_only_has_macos() {
+    fn test_safari_only_has_windows_empty() {
         let safari = BROWSER_PATHS.iter().find(|b| b.name == "Safari").unwrap();
         assert!(safari.windows_paths.is_empty());
-        assert!(safari.linux_paths.is_empty());
-        assert!(!safari.macos_paths.is_empty());
     }
 
     #[test]
@@ -42,47 +39,6 @@ mod tests {
     fn test_detect_browsers_runs_without_panic() {
         // detect_browsers should never panic; it may return an empty vec.
         let _ = detect_browsers();
-    }
-
-    #[test]
-    fn test_detect_data_types_finds_profile_in_real_dir() {
-        let tmp = TempDir::new().unwrap();
-        let profile = tmp.path();
-        // Create a profile directory with a few recognizable artifacts.
-        fs::create_dir_all(profile.join("Cache")).unwrap();
-        fs::write(profile.join("Cookies"), b"cookies").unwrap();
-        fs::write(profile.join("History"), b"history").unwrap();
-        fs::write(profile.join("Login Data"), b"logins").unwrap();
-
-        let types = detect_data_types(profile);
-        assert!(types.contains(&BrowserDataType::Profile));
-        assert!(types.contains(&BrowserDataType::Cache));
-        assert!(types.contains(&BrowserDataType::Cookies));
-        assert!(types.contains(&BrowserDataType::History));
-        assert!(types.contains(&BrowserDataType::Passwords));
-    }
-
-    #[test]
-    fn test_detect_data_types_finds_firefox_layout() {
-        let tmp = TempDir::new().unwrap();
-        let profile = tmp.path();
-        fs::create_dir_all(profile.join("cache2")).unwrap();
-        fs::write(profile.join("cookies.sqlite"), b"cookies").unwrap();
-        fs::write(profile.join("places.sqlite"), b"places").unwrap();
-        fs::write(profile.join("logins.json"), b"{}").unwrap();
-
-        let types = detect_data_types(profile);
-        assert!(types.contains(&BrowserDataType::Cache));
-        assert!(types.contains(&BrowserDataType::Cookies));
-        assert!(types.contains(&BrowserDataType::History));
-        assert!(types.contains(&BrowserDataType::Passwords));
-    }
-
-    #[test]
-    fn test_detect_data_types_empty_for_nonexistent() {
-        let types = detect_data_types(std::path::Path::new("/nonexistent/path/zzz"));
-        // No data types should be reported for a non-existent path
-        assert!(types.is_empty());
     }
 
     #[test]
