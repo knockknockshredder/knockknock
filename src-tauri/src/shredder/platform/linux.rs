@@ -19,6 +19,7 @@ impl LinuxIo {
 impl PlatformIo for LinuxIo {
     fn open_for_shred(&self, path: &Path) -> Result<File, ShredError> {
         OpenOptions::new()
+            .read(true)
             .write(true)
             .open(path)
             .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
