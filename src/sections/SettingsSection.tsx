@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToggleSetting } from "@/components/settings/ToggleSetting";
 import { PinSetup } from "@/components/settings/PinSetup";
+import { PinVerify } from "@/components/settings/PinVerify";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useShred } from "@/contexts/ShredContext";
 import { cn } from "@/lib/utils";
@@ -37,6 +38,7 @@ export function SettingsSection() {
   const [pinSet, setPinSet] = useState(false);
   const [pinSetupOpen, setPinSetupOpen] = useState(false);
   const [pinSetupFromToggle, setPinSetupFromToggle] = useState(false);
+  const [pinVerifyOpen, setPinVerifyOpen] = useState(false);
 
   useEffect(() => {
     invoke<boolean>("is_pin_enabled").then(setPinEnabled);
@@ -79,11 +81,8 @@ export function SettingsSection() {
                   setPinSetupOpen(true);
                 }
               } else {
-                invoke("disable_pin")
-                  .then(() => {
-                    setPinEnabled(false);
-                    setPinSet(false);
-                  });
+                // Toggling OFF requires PIN verification first
+                setPinVerifyOpen(true);
               }
             }}
           />
@@ -113,6 +112,19 @@ export function SettingsSection() {
                 .then(() => setPinEnabled(true));
             }
           }}
+        />
+        <PinVerify
+          open={pinVerifyOpen}
+          onOpenChange={setPinVerifyOpen}
+          onVerified={() => {
+            invoke("disable_pin")
+              .then(() => {
+                setPinEnabled(false);
+                setPinSet(false);
+                setPinVerifyOpen(false);
+              });
+          }}
+          purpose="disable_pin"
         />
       </section>
 

@@ -24,7 +24,7 @@ import {
 const MIN_PIN_LEN = 6;
 const MAX_PIN_LEN = 32;
 
-export type PinVerifyPurpose = "app_open" | "shred" | "cancel";
+export type PinVerifyPurpose = "app_open" | "shred" | "cancel" | "disable_pin";
 
 interface PinVerifyProps {
   open: boolean;
@@ -45,6 +45,10 @@ const PURPOSE_COPY: Record<PinVerifyPurpose, { title: string; description: strin
   cancel: {
     title: "Authorize cancel",
     description: "Enter your PIN to cancel the shred in progress.",
+  },
+  disable_pin: {
+    title: "Authorize disable",
+    description: "Enter your PIN to disable PIN protection.",
   },
 };
 
