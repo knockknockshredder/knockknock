@@ -29,7 +29,7 @@ export type PinVerifyPurpose = "app_open" | "shred" | "cancel" | "disable_pin";
 interface PinVerifyProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onVerified: (pin: string) => void;
+  onVerified: (pin: string) => void | Promise<void>;
   purpose: PinVerifyPurpose;
 }
 
@@ -56,6 +56,7 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
   const [lockoutSeconds, setLockoutSeconds] = useState(0);
 
   // Reset on close.
@@ -64,6 +65,7 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
       setPin("");
       setError(null);
       setSubmitting(false);
+      setUnlocking(false);
       setLockoutSeconds(0);
     }
   }, [open]);
@@ -112,7 +114,10 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
     try {
       const ok = await invoke<boolean>("verify_pin", { pinValue: pin });
       if (ok) {
-        onVerified(pin);
+        // PIN verified — now give the caller time to do its work
+        // (e.g. decrypting the vault) before resetting the UI.
+        setUnlocking(true);
+        await onVerified(pin);
         onOpenChange(false);
       } else {
         setError("Incorrect PIN");
@@ -132,6 +137,7 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
       setPin("");
     } finally {
       setSubmitting(false);
+      setUnlocking(false);
     }
   };
 
@@ -203,7 +209,7 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
               disabled={submitting || isLocked || pin.length < MIN_PIN_LEN}
               className="px-4 py-2 font-mono text-xs uppercase tracking-wider bg-accent text-background transition-colors hover:bg-accent/90 disabled:opacity-50"
             >
-              {submitting ? "Verifying..." : "Unlock"}
+              {unlocking ? "Unlocking..." : submitting ? "Verifying..." : "Unlock"}
             </button>
           </DialogFooter>
         </form>
