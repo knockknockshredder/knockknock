@@ -5,6 +5,7 @@ import {
   useState,
   useCallback,
   useEffect,
+  useRef,
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -47,6 +48,8 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   const [algorithms, setAlgorithms] = useState<AlgorithmOption[]>([]);
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [vaultLoaded, setVaultLoaded] = useState(false);
+  const [vaultPin, setVaultPin] = useState<string | null>(null);
+  const skipNextSave = useRef(false);
 
   const addFiles = useCallback((newEntries: Array<{ path: string; name: string; size: number }>) => {
     setFiles((prev) => {
@@ -92,23 +95,30 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   // list. Files that no longer exist on disk are silently dropped by
   // validate_paths. Failures (wrong PIN, corrupted vault) are logged but
   // do not block app startup — the user can keep adding files normally.
+  // On success stores the PIN for future auto-saves.
   const loadVault = useCallback(async (pin: string) => {
     try {
       const exists = await invoke<boolean>("vault_exists");
       if (!exists) {
+        setVaultLoaded(true);
+        setVaultPin(pin);
         return;
       }
       const paths = await invoke<string[]>("load_vault", { pin });
       if (paths.length === 0) {
         setVaultLoaded(true);
+        setVaultPin(pin);
         return;
       }
       const [validFiles] = await invoke<[FileMetadata[], string[]]>(
         "validate_paths",
         { paths }
       );
+      // Skip the next auto-save on these files — they just came from the vault.
+      skipNextSave.current = true;
       addFiles(validFiles);
       setVaultLoaded(true);
+      setVaultPin(pin);
     } catch (err) {
       console.error("Failed to load vault:", err);
       addLogEntry("error", `Failed to restore session: ${err}`);
@@ -130,16 +140,21 @@ export function ShredProvider({ children }: { children: ReactNode }) {
     [files, addLogEntry]
   );
 
-  // Auto-save whenever the file list changes after the vault has been
-  // unlocked. We don't have the PIN here (PIN is only known to the
-  // settings layer), so this just emits a no-op when no PIN is set. The
-  // caller wires up the actual saveVault() call from SettingsContext.
+  // Auto-save the vault whenever the file list changes (debounced).
+  // Skips the first trigger after vault load to avoid re-saving data
+  // that was just deserialized.
   useEffect(() => {
-    if (vaultLoaded) {
-      // Marker effect — actual save is driven from the Settings layer
-      // when the user has unlocked their session with a PIN.
+    if (!vaultLoaded || !vaultPin) return;
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
     }
-  }, [files, vaultLoaded]);
+    const timer = setTimeout(() => {
+      invoke("save_vault", { paths: files.map((f) => f.path), pin: vaultPin })
+        .catch((err) => console.error("Auto-save vault failed:", err));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [files, vaultLoaded, vaultPin]);
 
   return (
     <ShredContext.Provider
