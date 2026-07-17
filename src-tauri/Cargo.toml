@@ -1,6 +1,6 @@
 [package]
 name = "knockknock"
-version = "0.2.0"
+version = "0.3.0"
 description = "Emergency file shredder with browser profile cleanup"
 authors = ["KnockKnock Contributors"]
 edition = "2021"

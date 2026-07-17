@@ -182,7 +182,7 @@ export function SettingsSection() {
         </h2>
         <div className="border border-border bg-surface p-4">
           <p className="font-mono text-sm font-semibold text-foreground">
-            KnockKnock v0.1.0
+            KnockKnock v0.3.0
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Emergency file shredder for Windows, macOS, and Linux. Implements
