@@ -29,7 +29,7 @@ export type PinVerifyPurpose = "app_open" | "shred" | "cancel";
 interface PinVerifyProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onVerified: () => void;
+  onVerified: (pin: string) => void;
   purpose: PinVerifyPurpose;
 }
 
@@ -108,7 +108,7 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
     try {
       const ok = await invoke<boolean>("verify_pin", { pinValue: pin });
       if (ok) {
-        onVerified();
+        onVerified(pin);
         onOpenChange(false);
       } else {
         setError("Incorrect PIN");

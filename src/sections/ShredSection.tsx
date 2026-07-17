@@ -9,6 +9,7 @@ import { ConfirmationDialog } from "@/components/shred/ConfirmationDialog";
 import { useShred } from "@/contexts/ShredContext";
 import { useBrowser } from "@/contexts/BrowserContext";
 import { useSettings } from "@/contexts/SettingsContext";
+import { PinVerify } from "@/components/settings/PinVerify";
 import type {
   ShredReport,
   ProgressEvent,
@@ -33,6 +34,7 @@ export function ShredSection() {
     algorithms,
     progress,
     setProgress,
+    saveVault,
   } = useShred();
 
   const { getSelectedCount, browsers } = useBrowser();
@@ -43,6 +45,28 @@ export function ShredSection() {
   const [pattern, setPattern] = useState<"random" | "zeros" | "ones">("random");
   const [verificationLevel, setVerificationLevel] = useState<"none" | "sample" | "full">("sample");
   const unlistenRef = useRef<(() => void) | null>(null);
+
+  // PIN verification gates
+  const [pinNeeded, setPinNeeded] = useState(false);
+  const [shredPinOpen, setShredPinOpen] = useState(false);
+  const [cancelPinOpen, setCancelPinOpen] = useState(false);
+  const [deferredShred, setDeferredShred] = useState<(() => void) | null>(null);
+
+  // Check if PIN is enabled on mount
+  useEffect(() => {
+    invoke<boolean>("is_pin_enabled").then(setPinNeeded).catch(() => setPinNeeded(false));
+  }, []);
+
+  // Auto-save vault when files change after PIN is known
+  const [pinForVault, setPinForVault] = useState("");
+  useEffect(() => {
+    if (pinForVault && files.length > 0) {
+      const timer = setTimeout(() => {
+        saveVault(pinForVault).catch(console.error);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [files, pinForVault, saveVault]);
 
   const pendingFiles = files.filter((f) => f.status === "pending");
   const selectedProfileCount = getSelectedCount();
@@ -72,7 +96,12 @@ export function ShredSection() {
   }, []);
 
   const handleShredClick = () => {
-    setDialogOpen(true);
+    if (pinNeeded) {
+      setDeferredShred(() => () => setDialogOpen(true));
+      setShredPinOpen(true);
+    } else {
+      setDialogOpen(true);
+    }
   };
 
   const executeShred = async () => {
@@ -188,6 +217,10 @@ export function ShredSection() {
   };
 
   const handleCancel = async () => {
+    if (pinNeeded) {
+      setCancelPinOpen(true);
+      return; // Shredding continues if PIN not entered
+    }
     try {
       await invoke("cancel_shred");
       addLogEntry("warning", "Cancellation requested...");
@@ -229,6 +262,25 @@ export function ShredSection() {
         profileCount={selectedProfileCount}
         runningBrowsers={runningBrowsers}
         onConfirm={executeShred}
+      />
+      <PinVerify
+        open={shredPinOpen}
+        onOpenChange={setShredPinOpen}
+        onVerified={(pin) => {
+          setPinForVault(pin);
+          setShredPinOpen(false);
+          deferredShred?.();
+        }}
+        purpose="shred"
+      />
+      <PinVerify
+        open={cancelPinOpen}
+        onOpenChange={setCancelPinOpen}
+        onVerified={(_pin) => {
+          setCancelPinOpen(false);
+          invoke("cancel_shred").catch(() => {});
+        }}
+        purpose="cancel"
       />
     </div>
   );
