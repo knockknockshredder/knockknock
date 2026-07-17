@@ -142,9 +142,13 @@ Registered in `generate_handler![]` in `lib.rs`.
 
 **Linux (WebKitGTK):** Use `WebviewWindowBuilder::data_directory()` with absolute path. Fully supported.
 
-**macOS (WKWebView):** `data_directory()` is **unsupported** — WKWebView always uses `~/Library/WebKit/{bundle-id}/`. Mitigation:
-- Scope via `dataStoreIdentifier` (macOS 14.0+) — use a fixed UUID `[0xD4, 0x7A, 0x11, 0xCB, 0x89, 0xF3, 0x4E, 0x2B, 0xA1, 0xC7, 0x55, 0x9E, 0xBF, 0x72, 0x81, 0x06]` to namespace WebKit data. Prevents collision with any other app using the same bundle ID.
-- Offer a setting to delete `~/Library/WebKit/{bundle-id}/` on app quit (off by default)
+**macOS (WKWebView):** `data_directory()` is **unsupported** — WKWebView always uses `~/Library/WebKit/{bundle-id}/`.
+
+**`dataStoreIdentifier` is NOT used.** Although it would namespace WebKit data within `~/Library/WebKit/`, the API crashes on macOS < 14 (the version-guard was unreliable — see Tauri PR #11817). The namespacing benefit doesn't justify the crash risk for users on older macOS versions. The WKWebView trace is accepted as a documented Tauri/WKWebView limitation.
+
+Mitigations:
+- The bundle ID `org.knockknockorg.shredder` namespaces our data within `~/Library/WebKit/` by directory name
+- Future enhancement: a setting to delete `~/Library/WebKit/{bundle-id}/` on app quit (out of scope for this spec)
 - Document the limitation in README
 
 ### 3.5 `Cargo.toml`
@@ -222,7 +226,7 @@ Update the build matrix to use platform-specific build commands (see 5.1). The `
 | Trace | Windows | Linux | macOS | Mitigation |
 |-------|---------|-------|-------|------------|
 | App data files | ✅ Portable | ✅ Portable | ✅ Portable | In `KnockKnock-data/` next to binary |
-| WebView engine data | ✅ Portable | ✅ Portable | ⚠️ `~/Library/WebKit/{id}/` | Scoped via `dataStoreIdentifier`. Optional quit-cleanup setting. |
+| WebView engine data | ✅ Portable | ✅ Portable | ⚠️ `~/Library/WebKit/{id}/` | Documented limitation. Bundle ID namespaces the directory. Optional quit-cleanup setting (future). |
 | Registry / package DB | ✅ None | ✅ None | ✅ None | No installer used |
 | WebView2 runtime | ⚠️ OS-level component | N/A | N/A | One-time system install. Not app-specific. |
 

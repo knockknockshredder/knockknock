@@ -138,7 +138,7 @@ fn app_root_dir() -> Result<PathBuf, String> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        // On Linux, if running as AppImage, current_exe() points to
+        // Linux: if running as AppImage, current_exe() points to
         // /tmp/.mount_*/usr/bin/knockknock — ephemeral. Prefer
         // APPIMAGE env var to find the actual file location.
         #[cfg(target_os = "linux")]
@@ -148,6 +148,17 @@ fn app_root_dir() -> Result<PathBuf, String> {
                 if let Some(parent) = p.parent() {
                     return Ok(parent.to_path_buf());
                 }
+            }
+
+            // APPIMAGE not set — guard against the /tmp/.mount_*
+            // case (manually extracted AppImage, custom wrapper, CI).
+            // Data written here is destroyed on app exit.
+            let path_str = exe_dir.to_string_lossy();
+            if path_str.starts_with("/tmp/.mount_") {
+                return Err(format!(
+                    "AppImage is not running from a mounted location.\n\
+                     Set APPIMAGE=/path/to/file.AppImage and relaunch."
+                ));
             }
         }
         Ok(exe_dir.to_path_buf())
@@ -181,7 +192,8 @@ pub fn portable_data_dir() -> Result<PathBuf, String> {
 /// (caches, GPU shaders, localStorage).
 ///
 /// Redirected here on Windows and Linux. macOS WKWebView uses a
-/// fixed system path (mitigated via `dataStoreIdentifier`).
+/// fixed system path (`~/Library/WebKit/{id}/`) — see spec section 6.
+#[cfg(not(target_os = "macos"))]
 pub fn webview_data_dir() -> Result<PathBuf, String> {
     Ok(portable_data_dir()?.join("webview"))
 }
@@ -268,17 +280,98 @@ Remove the `dirs` usage. The `create_dir_all` is already handled by `portable_da
 
 - [ ] **Step 3: Update `shredder/journal.rs`**
 
-Replace `journal_path()` (lines 13-18) with:
+Replace `journal_path()` and the I/O helpers with fail-loud versions using atomic writes. The journal is the shredder's orphan-recovery safety net — corruption silently breaks cleanup.
+
+Replace the top of the file (lines 1-95) with:
 
 ```rust
-fn journal_path() -> PathBuf {
-    crate::paths::portable_data_dir()
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
-        .join(".knockknock-journal.json")
+// src-tauri/src/shredder/journal.rs
+
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::io::Write;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JournalEntry {
+    pub original_path_hash: String,
+    pub renamed_path: PathBuf,
+    pub timestamp: u64,
+}
+
+fn journal_path() -> Result<PathBuf, String> {
+    Ok(crate::paths::portable_data_dir()?.join(".knockknock-journal.json"))
+}
+
+fn hash_path(path: &std::path::Path) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    path.to_string_lossy().hash(&mut hasher);
+    format!("{:x}", hasher.finish())
+}
+
+/// Atomic write with fsync — orphan tracking is critical-state, not cosmetic.
+/// If this fails the journal is silent data corruption.
+fn write_journal_atomic(entries: &[JournalEntry]) -> Result<(), String> {
+    let path = journal_path()?;
+    let json = serde_json::to_string_pretty(entries)
+        .map_err(|e| format!("Journal serialize failed: {e}"))?;
+
+    let tmp = path.with_extension("tmp");
+    let _ = std::fs::remove_file(&tmp);
+
+    let mut file = std::fs::File::create(&tmp)
+        .map_err(|e| format!("Journal tmp create failed: {e}"))?;
+    file.write_all(json.as_bytes())
+        .map_err(|e| format!("Journal tmp write failed: {e}"))?;
+    file.sync_all()
+        .map_err(|e| format!("Journal fsync failed: {e}"))?;
+    drop(file);
+
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| format!("Journal rename failed: {e}"))
+}
+
+pub fn write_orphan(original: &std::path::Path, renamed: &std::path::Path) {
+    let entry = JournalEntry {
+        original_path_hash: hash_path(original),
+        renamed_path: renamed.to_path_buf(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+    let mut entries = read_orphans();
+    entries.push(entry);
+    if let Err(e) = write_journal_atomic(&entries) {
+        eprintln!("[KnockKnock] Journal write failed: {e}");
+    }
+}
+
+pub fn clear_orphan(renamed: &std::path::Path) {
+    let mut entries = read_orphans();
+    entries.retain(|e| e.renamed_path != renamed);
+    if let Err(e) = write_journal_atomic(&entries) {
+        eprintln!("[KnockKnock] Journal clear failed: {e}");
+    }
+}
+
+pub fn read_orphans() -> Vec<JournalEntry> {
+    let path = match journal_path() {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    if !path.exists() {
+        return Vec::new();
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
 }
 ```
 
-The existing code also creates the parent directory via `portable_data_dir()` — the `.join(".knockknock-journal.json")` just appends the filename.
+The remaining functions (`cleanup_orphans`, `JournalEntry`, hash helpers, JOURNAL_TTL_SECS) stay unchanged.
 
 - [ ] **Step 4: Verify no remaining `dirs::` references**
 
@@ -315,10 +408,18 @@ git commit -m "feat: switch pin, vault, journal to portable data paths" -m "- Re
 // Portable settings persistence replacing browser localStorage.
 // Reads/writes settings.json in the portable data directory.
 // Uses atomic write (temp file → rename) to prevent corruption on crash.
+// Saves are serialized via Mutex to prevent concurrent rename races.
 // Falls back to defaults if file doesn't exist or is corrupted.
 
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+/// Serializes concurrent `save_settings` calls so the .tmp rename
+/// sequence is atomic across calls. Without this, two concurrent
+/// saves can race on the shared `.tmp` path and corrupt the file.
+static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppSettings {
@@ -343,25 +444,44 @@ pub fn get_settings() -> Result<AppSettings, String> {
     let data = std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read settings: {e}"))?;
 
-    serde_json::from_str(&data).map_err(|e| {
-        // Corrupted file — return defaults so the app always starts.
-        // The corrupted file will be overwritten on next save.
-        eprintln!("[KnockKnock] Corrupted settings.json, using defaults: {e}");
-        Ok(AppSettings::default())
-    })?
+    match serde_json::from_str(&data) {
+        Ok(s) => Ok(s),
+        Err(e) => {
+            // Corrupted file — return defaults so the app always starts.
+            // The corrupted file will be overwritten on next save.
+            eprintln!("[KnockKnock] Corrupted settings.json, using defaults: {e}");
+            Ok(AppSettings::default())
+        }
+    }
 }
 
 #[tauri::command]
 pub fn save_settings(settings: AppSettings) -> Result<(), String> {
+    let _guard = SAVE_LOCK.lock()
+        .map_err(|e| format!("Settings save lock poisoned: {e}"))?;
+
     let path = settings_path()?;
     let json = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
 
-    // Atomic write: write to .tmp, remove stale tmp, rename to target
     let tmp = path.with_extension("tmp");
     let _ = std::fs::remove_file(&tmp);
-    std::fs::write(&tmp, &json)
+
+    let mut file = std::fs::File::create(&tmp)
+        .map_err(|e| format!("Failed to create settings tmp: {e}"))?;
+    file.write_all(json.as_bytes())
         .map_err(|e| format!("Failed to write settings: {e}"))?;
+    file.sync_all()
+        .map_err(|e| format!("Failed to fsync settings: {e}"))?;
+    drop(file);
+
+    // On Windows pre-1.86, std::fs::rename may not be atomic. If target
+    // exists, remove it first (data already in tmp file via fsync).
+    #[cfg(windows)]
+    {
+        let _ = std::fs::remove_file(&path);
+    }
+
     std::fs::rename(&tmp, &path)
         .map_err(|e| format!("Failed to save settings: {e}"))
 }
@@ -422,19 +542,7 @@ pub fn run() {
     let data_dir = match crate::paths::portable_data_dir() {
         Ok(d) => d,
         Err(msg) => {
-            // Pre-Tauri error path. native-dialog works before Tauri
-            // is initialized.
-            let _ = native_dialog::MessageDialog::new()
-                .set_title("KnockKnock — Startup Error")
-                .set_text(&msg)
-                .set_type(native_dialog::MessageType::Error)
-                .show_alert();
-            // Also write to a file in case the dialog is suppressed
-            // (Linux without a graphical session, or auto-launch).
-            if let Ok(mut f) = std::fs::File::create("knockknock-startup-error.log") {
-                let _ = std::io::Write::write_all(&mut f, msg.as_bytes());
-            }
-            std::process::exit(1);
+            startup_fatal(&msg);
         }
     };
 
@@ -445,11 +553,14 @@ pub fn run() {
         eprintln!("[knockknock] failed to load PIN lockout state: {}", e);
     }
 
-    // Create webview data subdirectory
-    let webview_dir = data_dir.join("webview");
-    std::fs::create_dir_all(&webview_dir)
-        .map_err(|e| format!("Failed to create webview data dir: {e}"))
-        .expect("webview data dir");
+    // Create webview data subdirectory. Failure is fatal — without
+    // it, WebView will silently fall back to OS-managed location.
+    let webview_dir = match std::fs::create_dir_all(data_dir.join("webview")) {
+        Ok(_) => data_dir.join("webview"),
+        Err(e) => {
+            startup_fatal(&format!("Failed to create webview data dir: {e}"));
+        }
+    };
 
     // Windows: set WebView2 user data folder via env var (must be
     // set BEFORE Builder::run() — WebView2 reads it once).
@@ -461,10 +572,6 @@ pub fn run() {
         );
     }
 
-    // Build a single config-aware builder. For Linux we override the
-    // default webview data dir by creating the window manually in
-    // setup() — Tauri's auto-created windows (from tauri.conf.json)
-    // cannot have .data_directory() set after creation.
     let webview_dir_clone = webview_dir.clone();
 
     tauri::Builder::default()
@@ -477,14 +584,14 @@ pub fn run() {
             }
 
             // Linux: manually (re)create the main window with the
-            // portable webview data dir. This requires the default
-            // window config to be REMOVED from tauri.conf.json
-            // (see Task 7 update).
+            // portable webview data dir. Tauri's auto-created windows
+            // (from tauri.conf.json) cannot have .data_directory()
+            // set after creation.
             #[cfg(target_os = "linux")]
             {
                 use tauri::WebviewWindowBuilder;
                 use tauri::WebviewUrl;
-                WebviewWindowBuilder::new(
+                if let Err(e) = WebviewWindowBuilder::new(
                     app,
                     "main",
                     WebviewUrl::App("index.html".into()),
@@ -495,7 +602,11 @@ pub fn run() {
                 .decorations(false)
                 .drag_and_drop(true)
                 .data_directory(webview_dir_clone.clone())
-                .build()?;
+                .build()
+                {
+                    eprintln!("[KnockKnock] Failed to create main window: {e}");
+                    return Err(e.into());
+                }
             }
 
             // Windows/macOS: window already created by tauri.conf.json.
@@ -537,14 +648,35 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+/// Show a fatal startup error via native-dialog AND write a log
+/// to the OS temp dir (which is always writable). Always exits.
+fn startup_fatal(msg: &str) -> ! {
+    let _ = native_dialog::MessageDialog::new()
+        .set_title("KnockKnock — Startup Error")
+        .set_text(msg)
+        .set_type(native_dialog::MessageType::Error)
+        .show_alert();
+
+    // Fallback log file in OS temp dir — guaranteed writable even if
+    // the exe dir is read-only or CWD is a network mount.
+    let log_path = std::env::temp_dir().join("knockknock-startup-error.log");
+    if let Ok(mut f) = std::fs::File::create(&log_path) {
+        use std::io::Write;
+        let _ = writeln!(f, "KnockKnock failed to start:\n\n{msg}");
+        let _ = writeln!(f, "\nLog path: {}", log_path.display());
+    }
+
+    std::process::exit(1);
+}
 ```
 
 Key changes from the previous version:
-- **Linux explicitly sets `data_directory()`** via `WebviewWindowBuilder` — closes the silent fall-back gap to `~/.local/share/`
-- **Tray setup wrapped in non-fatal match** — tray failure no longer crashes startup
-- **Order corrected**: data_dir validation → lockout init → builder (was previously vulnerable to silent fallback in pin/config.rs)
-- **Error log file** written as a backup alongside the dialog — works on Linux auto-launch / headless
-- `webview_dir_clone` passed to `setup()` via `move` closure for Linux window construction
+- **`startup_fatal()` helper** — single source of truth for fatal startup errors: dialog + temp-dir log + exit
+- **Temp-dir log** — works even when CWD or exe dir is read-only (DMG mount, network share)
+- **No `.expect()`** — webview dir creation failure uses `startup_fatal()` instead of panicking
+- **Linux window builder wrapped in match** — error surfaces to user, not panic
+- `webview_dir_clone` passed to `setup()` via `move` closure
 
 Key changes from the current `lib.rs`:
 - `data_dir` validated BEFORE builder (with `native-dialog` error)
@@ -576,7 +708,7 @@ git commit -m "feat: add startup validation and WebView data redirect" -m "- Val
 **Files:**
 - Modify: `src-tauri/Cargo.toml`
 
-- [ ] **Step 1: Remove `dirs` dependency, add `native-dialog`**
+- [ ] **Step 1: Remove `dirs` dependency, add `native-dialog`, pin Rust 1.86**
 
 Edit `src-tauri/Cargo.toml`:
 
@@ -586,6 +718,8 @@ Add before `lazy_static` (line 38):
 ```toml
 native-dialog = "0.7"
 ```
+
+Change `rust-version = "1.77"` (line 5) to `rust-version = "1.86"`. This is required for `std::fs::rename` to use `FILE_RENAME_FLAG_POSIX_SEMANTICS` on Windows, making atomic writes reliable. The `save_settings` command's Windows `remove_file(&path)` fallback covers older Rust, but pinning 1.86+ removes the need for the fallback.
 
 - [ ] **Step 2: Full cargo check**
 
@@ -627,6 +761,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -673,6 +808,48 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [leftSidebarWidth, setLeftSidebarWidthState] = useState(260);
   const [rightSidebarWidth, setRightSidebarWidthState] = useState(260);
 
+  // Refs mirror state so debounced save can read freshest values
+  // without closure-staleness when many events fire rapidly
+  // (e.g. sidebar drag at 60Hz).
+  const stateRef = useRef({
+    autoClearLog,
+    defaultAlgorithmIndex,
+    logObfuscation,
+    leftSidebarWidth,
+    rightSidebarWidth,
+  });
+  stateRef.current = {
+    autoClearLog,
+    defaultAlgorithmIndex,
+    logObfuscation,
+    leftSidebarWidth,
+    rightSidebarWidth,
+  };
+
+  // Debounce save — collapse rapid events (sidebar drag) into one IPC.
+  const saveTimerRef = useRef<number | null>(null);
+  const scheduleSave = useCallback(() => {
+    if (!loaded) return;
+    if (saveTimerRef.current !== null) {
+      clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = window.setTimeout(() => {
+      const settings: AppSettings = {
+        auto_clear_log: stateRef.current.autoClearLog,
+        default_algorithm_index: stateRef.current.defaultAlgorithmIndex,
+        log_obfuscation: stateRef.current.logObfuscation,
+        left_sidebar_width: stateRef.current.leftSidebarWidth,
+        right_sidebar_width: stateRef.current.rightSidebarWidth,
+      };
+      invoke("save_settings", { settings }).catch((e) => {
+        // Surface to user — silent swallow means user doesn't know
+        // settings aren't persisting (privacy-critical tool).
+        console.error("[KnockKnock] Failed to save settings:", e);
+        // TODO: surface via toast/banner once notification system exists.
+      });
+    }, 250);
+  }, [loaded]);
+
   // Load settings from Rust on mount
   useEffect(() => {
     invoke<AppSettings>("get_settings")
@@ -694,78 +871,68 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       });
   }, []);
 
-  // Persist whenever any setting changes (skip initial load)
-  const save = useCallback(
-    (overrides: Partial<AppSettings>) => {
-      if (!loaded) return;
-      const settings: AppSettings = {
-        auto_clear_log: autoClearLog,
-        default_algorithm_index: defaultAlgorithmIndex,
-        log_obfuscation: logObfuscation,
-        left_sidebar_width: leftSidebarWidth,
-        right_sidebar_width: rightSidebarWidth,
-        ...overrides,
-      };
-      invoke("save_settings", { settings }).catch((e) => {
-        console.error("[KnockKnock] Failed to save settings:", e);
-      });
-    },
-    [
-      loaded,
-      autoClearLog,
-      defaultAlgorithmIndex,
-      logObfuscation,
-      leftSidebarWidth,
-      rightSidebarWidth,
-    ],
-  );
+  // Flush pending save on unmount so close-while-debouncing persists
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current !== null) {
+        clearTimeout(saveTimerRef.current);
+        const settings: AppSettings = {
+          auto_clear_log: stateRef.current.autoClearLog,
+          default_algorithm_index: stateRef.current.defaultAlgorithmIndex,
+          log_obfuscation: stateRef.current.logObfuscation,
+          left_sidebar_width: stateRef.current.leftSidebarWidth,
+          right_sidebar_width: stateRef.current.rightSidebarWidth,
+        };
+        // Synchronous-style IPC at unmount — async fire-and-forget.
+        invoke("save_settings", { settings }).catch(() => {});
+      }
+    };
+  }, []);
 
   const setAutoClearLog = useCallback(
     (v: boolean) => {
       setAutoClearLogState(v);
-      save({ auto_clear_log: v });
+      scheduleSave();
     },
-    [save],
+    [scheduleSave],
   );
 
   const setDefaultAlgorithmIndex = useCallback(
     (v: number) => {
       setDefaultAlgorithmIndexState(v);
-      save({ default_algorithm_index: v });
+      scheduleSave();
     },
-    [save],
+    [scheduleSave],
   );
 
   const setLogObfuscation = useCallback(
     (v: LogObfuscation) => {
       setLogObfuscationState(v);
-      save({ log_obfuscation: v });
+      scheduleSave();
     },
-    [save],
+    [scheduleSave],
   );
 
   const setLeftSidebarWidth = useCallback(
     (v: number | ((prev: number) => number)) => {
       setLeftSidebarWidthState((prev) => {
         const next = typeof v === "function" ? v(prev) : v;
-        const clamped = clampSidebarWidth(next);
-        save({ left_sidebar_width: clamped });
-        return clamped;
+        return clampSidebarWidth(next);
       });
+      scheduleSave();
     },
-    [save],
+    [scheduleSave],
   );
 
   const setRightSidebarWidth = useCallback(
     (v: number | ((prev: number) => number)) => {
       setRightSidebarWidthState((prev) => {
         const next = typeof v === "function" ? v(prev) : v;
-        const clamped = clampSidebarWidth(next);
-        save({ right_sidebar_width: clamped });
-        return clamped;
+        return clampSidebarWidth(next);
       });
+      scheduleSave();
     },
-    [save],
+    [scheduleSave],
   );
 
   return (
@@ -796,11 +963,16 @@ export function useSettings() {
 }
 ```
 
-Key changes from current:
+Key changes from the previous version:
+- **Debounced save (250ms)** — sidebar drags (60Hz events) collapse into one IPC call, eliminating IPC storm
+- **`stateRef` mirror** — saves read freshest values, no closure-staleness
+- **Unmount flush** — pending debounced save fires before close, so user changes aren't lost
+- Errors surface to console (and TODO toast once notification system exists) — not silent
+
+Key changes from current implementation:
 - `localStorage` removed entirely — replaced with `invoke("get_settings")` / `invoke("save_settings")`
-- `loaded` flag prevents save before initial load completes (avoids overwriting defaults before load)
-- `log_obfuscation` stored as `string` (matches Rust `String`) with validation
-- All state changes debounced through `useCallback` + `save()`
+- `loaded` flag prevents save before initial load completes
+- `log_obfuscation` validated against known values
 
 - [ ] **Step 2: TypeScript check**
 
@@ -943,21 +1115,28 @@ jobs:
             build_cmd: pnpm tauri build --bundles dmg --target aarch64-apple-darwin
             artifact_name: KnockKnock-macos-arm64.dmg
             artifact_path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/KnockKnock_*_aarch64.dmg
-          - platform: macos-14
+            min_size: 8000000
+          # Intel mac: run on macos-13 (Intel host) to avoid
+          # cross-compile issues — building x86_64 on ARM requires
+          # osxcross + Apple SDK setup that isn't worth the complexity.
+          - platform: macos-13
             target: x86_64-apple-darwin
             build_cmd: pnpm tauri build --bundles dmg --target x86_64-apple-darwin
             artifact_name: KnockKnock-macos-x64.dmg
             artifact_path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/KnockKnock_*_x64.dmg
+            min_size: 8000000
           - platform: ubuntu-22.04
             target: ''
             build_cmd: pnpm tauri build --bundles appimage
             artifact_name: KnockKnock-linux-x64.AppImage
             artifact_path: src-tauri/target/release/bundle/appimage/KnockKnock_*.AppImage
+            min_size: 60000000
           - platform: windows-latest
             target: ''
             build_cmd: pnpm tauri build --no-bundle
             artifact_name: KnockKnock-windows-x64.exe
             artifact_path: src-tauri/target/release/knockknock.exe
+            min_size: 5000000
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -993,18 +1172,72 @@ jobs:
       - name: Build
         run: ${{ matrix.build_cmd }}
 
+      # Verify the artifact is non-empty and plausibly sized BEFORE upload.
+      # Without this, a silent build failure could upload a stale or
+      # partial binary. Minimum sizes are empirically observed; actual
+      # builds are larger.
+      - name: Verify artifact
+        run: |
+          FILE=$(ls ${{ matrix.artifact_path }} 2>/dev/null | head -1)
+          if [ -z "$FILE" ]; then
+            echo "::error::Artifact not found at ${{ matrix.artifact_path }}"
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$FILE" 2>/dev/null || stat -f%z "$FILE")
+          echo "Artifact: $FILE ($SIZE bytes)"
+          if [ "$SIZE" -lt ${{ matrix.min_size }} ]; then
+            echo "::error::Artifact too small ($SIZE < ${{ matrix.min_size }}). Build likely failed silently."
+            exit 1
+          fi
+
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_path }}
 
+  checksums:
+    needs: release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          cd artifacts
+          find . -type f -name 'KnockKnock-*' -exec sha256sum {} \; > ../SHA256SUMS.txt
+          cat ../SHA256SUMS.txt
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v5
+        with:
+          name: SHA256SUMS
+          path: SHA256SUMS.txt
+
+  publish:
+    needs: [release, checksums]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           draft: true
-          files: ${{ matrix.artifact_path }}
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.AppImage
+            artifacts/**/*.exe
+            artifacts/**/SHA256SUMS.txt
           name: 'KnockKnock ${{ github.ref_name }}'
           body: |
             ## KnockKnock ${{ github.ref_name }}
@@ -1016,6 +1249,12 @@ jobs:
             - **macOS:** Open `.dmg`, drag `KnockKnock.app` to any writable folder, right-click → Open
             - **Linux:** Download `.AppImage`, `chmod +x`, run
 
+            ### Verification
+            Verify integrity with `SHA256SUMS.txt`:
+            ```sh
+            sha256sum -c SHA256SUMS.txt
+            ```
+
             ### Data
             All app data is stored in a `KnockKnock-data/` folder next to the app.
             Delete the folder to remove all traces.
@@ -1026,9 +1265,11 @@ Key changes:
 - Windows: `--no-bundle` → produces raw `.exe` (no NSIS/MSI installer)
 - macOS: `--bundles dmg` with explicit `--target` → produces signed DMG
 - Linux: `--bundles appimage` → produces AppImage
-- Uses `softprops/action-gh-release@v1` for release creation (more control than tauri-action)
-- Artifact upload via `actions/upload-artifact@v5` for per-build artifacts
-- Release body updated to describe portable usage
+- **Intel mac uses `macos-13` runner** — avoids ARM-to-Intel cross-compile complexity
+- **Artifact verification step** — checks non-empty + min-size before upload (catches silent build failures)
+- **Checksums job** — generates `SHA256SUMS.txt` from all artifacts, attached to release
+- **Publish job** — separate from per-platform builds, depends on all artifacts
+- Release body includes SHA256SUMS verification instructions
 
 - [ ] **Step 2: Commit**
 
@@ -1104,5 +1345,20 @@ Reviewed the plan after writing. Five issues found and fixed inline:
 | **MEDIUM** | Linux pre-Tauri error path used only `eprintln` — invisible when launched without terminal | Added `native-dialog` for all platforms plus `knockknock-startup-error.log` file fallback. Implemented in Task 4. |
 | **MEDIUM** | `tray::setup_tray` failure crashed whole startup | Wrapped in non-fatal match — logged, doesn't crash. Implemented in Task 4. |
 | **MEDIUM** | macOS `dataStoreIdentifier` would crash on macOS < 14 — code had no version guard | Removed `dataStoreIdentifier` entirely. Accept documented macOS WebKit limitation as per spec section 6. Updated Task 7. |
+
+## Oracle Review (round 2)
+
+Oracle review found 5 additional issues. All fixed inline:
+
+| Sev | Issue | Fix |
+|-----|-------|-----|
+| **CRITICAL** | `journal.rs` used `unwrap_or_else(current_dir)` fallback (silent CWD write if portable dir fails mid-shred) and plain `fs::write` (non-atomic) — corruption breaks orphan recovery | `journal_path()` returns `Result`. Atomic write with fsync via `write_journal_atomic()`. Mirrors `save_settings` pattern. Implemented in Task 2. |
+| **CRITICAL** | `SettingsContext.tsx` `save()` closes over stale state — rapid drag events (60Hz) write stale other-fields. Concurrent IPC calls race on `.tmp` rename — silent corruption swallowed by `.catch(console.error)`. | Frontend: 250ms debounce + `stateRef` mirror + unmount flush. Backend: `SAVE_LOCK` Mutex serializes saves. Errors surface to console (and TODO toast). Implemented in Task 3 and Task 6. |
+| **HIGH** | Linux AppImage fallback to `/tmp/.mount_*/` — data destroyed on app exit. `APPIMAGE` env var usually set, but not guaranteed (manual extraction, CI). | `app_root_dir()` validates `current_exe()` doesn't start with `/tmp/.mount_`. Returns explicit error if it does. Implemented in Task 1. |
+| **HIGH** | Startup error path uses `.expect()` (panic, no user message) + log to CWD (may be unwritable). DMG-mount failure gives generic "must be in writable folder" — doesn't identify cause. | `startup_fatal()` helper: native-dialog + `temp_dir()` log + exit. Replaces all `.expect()` and `.eprintln` startup paths. Implemented in Task 4. |
+| **HIGH** | Release workflow: no artifact verification (silent build failure could upload stale binary). macOS x86_64 cross-compile on ARM host. No checksums for download integrity. | `Verify artifact` step (size check). x86_64 uses `macos-13` runner. New `checksums` + `publish` jobs generate `SHA256SUMS.txt`. Implemented in Task 8. |
+| **LOW** | `webview_data_dir()` dead code on macOS (no consumer) | `#[cfg(not(target_os = "macos"))]` guard. Implemented in Task 1. |
+| **LOW** | Spec/plan conflict on `dataStoreIdentifier` | Updated spec section 3.4 and trace summary. |
+| **LOW** | Windows `std::fs::rename` atomicity pre-Rust-1.86 | Pinned `rust-version = "1.86"` in `Cargo.toml`. Implemented in Task 5. |
 
 **PLAN FULLY COMPLETE — ready for implementation.**
