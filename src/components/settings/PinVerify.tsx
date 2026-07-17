@@ -136,10 +136,11 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
   };
 
   const copy = PURPOSE_COPY[purpose];
+  const isGate = purpose === "app_open";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent showCloseButton={!isGate}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Lock size={16} className="text-accent" />
@@ -187,14 +188,16 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
           )}
 
           <DialogFooter>
-            <button
-              type="button"
-              onClick={() => onOpenChange(false)}
-              disabled={submitting}
-              className="px-4 py-2 font-mono text-xs uppercase tracking-wider border border-border text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
-            >
-              Cancel
-            </button>
+            {!isGate && (
+              <button
+                type="button"
+                onClick={() => onOpenChange(false)}
+                disabled={submitting}
+                className="px-4 py-2 font-mono text-xs uppercase tracking-wider border border-border text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            )}
             <button
               type="submit"
               disabled={submitting || isLocked || pin.length < MIN_PIN_LEN}

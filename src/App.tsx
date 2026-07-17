@@ -15,20 +15,25 @@ import { useBrowserDetection } from "@/hooks/useBrowserDetection";
 
 function AppGate() {
   const [pinNeeded, setPinNeeded] = useState<boolean | null>(null);
-  const [showPinVerify, setShowPinVerify] = useState(false);
+  const [gatePassed, setGatePassed] = useState(false);
   const { loadVault, addLogEntry } = useShred();
 
   useEffect(() => {
-    invoke<boolean>("is_pin_enabled").then((enabled) => {
-      setPinNeeded(enabled);
-      if (enabled) setShowPinVerify(true);
-    }).catch(() => setPinNeeded(false));
+    invoke<boolean>("is_pin_enabled")
+      .then((enabled) => {
+        setPinNeeded(enabled);
+        if (!enabled) setGatePassed(true);
+      })
+      .catch(() => {
+        setPinNeeded(false);
+        setGatePassed(true);
+      });
   }, []);
 
   const handleGateVerified = async (pin: string) => {
     try {
       await loadVault(pin);
-      setShowPinVerify(false);
+      setGatePassed(true);
     } catch {
       addLogEntry("error", "Failed to unlock vault");
     }
@@ -36,19 +41,20 @@ function AppGate() {
 
   if (pinNeeded === null) return null;
 
-  return (
-    <>
-      {pinNeeded && (
-        <PinVerify
-          open={showPinVerify}
-          onOpenChange={setShowPinVerify}
-          onVerified={handleGateVerified}
-          purpose="app_open"
-        />
-      )}
-      <AppContent />
-    </>
-  );
+  // Gate NOT passed: only show the PIN dialog, nothing else.
+  // The dialog cannot be dismissed — user MUST authenticate.
+  if (!gatePassed) {
+    return (
+      <PinVerify
+        open
+        onOpenChange={() => {}}
+        onVerified={handleGateVerified}
+        purpose="app_open"
+      />
+    );
+  }
+
+  return <AppContent />;
 }
 
 function AppContent() {
