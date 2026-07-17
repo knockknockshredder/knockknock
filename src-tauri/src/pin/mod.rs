@@ -195,12 +195,28 @@ pub fn reset_app(current_pin: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Returns `true` only when BOTH a PIN hash exists AND the user has
+/// explicitly enabled PIN protection via settings. Merely setting a PIN
+/// does not enable it — the user must toggle "Enable PIN" separately.
 pub fn is_pin_enabled() -> bool {
+    config::load_pin_hash().ok().flatten().is_some() && config::load_pin_enabled()
+}
+
+/// Toggle the PIN protection flag independently from the PIN hash.
+/// When `false`, no PIN prompt appears even if a PIN is configured.
+pub fn set_pin_enabled(enabled: bool) -> Result<(), String> {
+    config::save_pin_enabled(enabled)
+}
+
+/// Returns `true` when a PIN hash has been configured (regardless of
+/// whether PIN protection is currently enabled).
+pub fn has_pin() -> bool {
     config::load_pin_hash().ok().flatten().is_some()
 }
 
 pub fn disable_pin() -> Result<(), String> {
     config::remove_pin_hash()?;
+    config::save_pin_enabled(false)?;
     config::clear_lockout_state()?;
     let mut guard = PIN_STATE
         .lock()
@@ -358,6 +374,8 @@ mod tests {
     fn reset_app_requires_valid_pin() {
         reset_state();
         setup_pin("654321").unwrap();
+        // set_pin_enabled must be called separately to activate protection
+        set_pin_enabled(true).unwrap();
 
         // Wrong PIN -> error, state preserved
         assert!(reset_app("000000").is_err());

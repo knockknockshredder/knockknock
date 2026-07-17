@@ -18,6 +18,16 @@ pub fn is_pin_enabled() -> bool {
 }
 
 #[tauri::command]
+pub fn set_pin_enabled(enabled: bool) -> Result<(), String> {
+    pin::set_pin_enabled(enabled)
+}
+
+#[tauri::command]
+pub fn has_pin() -> bool {
+    pin::has_pin()
+}
+
+#[tauri::command]
 pub fn is_pin_locked() -> bool {
     pin::is_pin_locked().unwrap_or(false)
 }

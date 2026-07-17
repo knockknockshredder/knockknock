@@ -40,6 +40,8 @@ pub fn run() {
             commands::pin::setup_pin,
             commands::pin::verify_pin,
             commands::pin::is_pin_enabled,
+            commands::pin::set_pin_enabled,
+            commands::pin::has_pin,
             commands::pin::is_pin_locked,
             commands::pin::get_lockout_remaining,
             commands::pin::change_pin,

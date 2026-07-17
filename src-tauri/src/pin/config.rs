@@ -108,3 +108,31 @@ pub fn clear_lockout_state() -> Result<(), String> {
     }
     Ok(())
 }
+
+// --- PIN enabled flag (separate from PIN hash existence) ---
+
+fn get_enabled_path() -> PathBuf {
+    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    path.push("KnockKnock");
+    path.push("pin_enabled");
+    path
+}
+
+pub fn save_pin_enabled(enabled: bool) -> Result<(), String> {
+    let path = get_enabled_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    }
+    fs::write(&path, if enabled { "1" } else { "0" })
+        .map_err(|e| format!("Failed to write PIN enabled state: {}", e))
+}
+
+pub fn load_pin_enabled() -> bool {
+    let path = get_enabled_path();
+    if !path.exists() {
+        return false; // never been set → not enabled
+    }
+    fs::read_to_string(&path)
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false)
+}

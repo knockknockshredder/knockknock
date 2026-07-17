@@ -34,10 +34,13 @@ export function SettingsSection() {
   } = useSettings();
   const { algorithms } = useShred();
   const [pinEnabled, setPinEnabled] = useState(false);
+  const [pinSet, setPinSet] = useState(false);
   const [pinSetupOpen, setPinSetupOpen] = useState(false);
+  const [pinSetupFromToggle, setPinSetupFromToggle] = useState(false);
 
   useEffect(() => {
     invoke<boolean>("is_pin_enabled").then(setPinEnabled);
+    invoke<boolean>("has_pin").then(setPinSet);
   }, []);
 
   return (
@@ -67,16 +70,30 @@ export function SettingsSection() {
             checked={pinEnabled}
             onCheckedChange={(enabled) => {
               if (enabled) {
-                setPinSetupOpen(true);
+                if (pinSet) {
+                  invoke("set_pin_enabled", { enabled: true })
+                    .then(() => setPinEnabled(true));
+                } else {
+                  // No PIN configured yet — open setup; enable after success
+                  setPinSetupFromToggle(true);
+                  setPinSetupOpen(true);
+                }
               } else {
-                invoke("disable_pin").then(() => setPinEnabled(false));
+                invoke("disable_pin")
+                  .then(() => {
+                    setPinEnabled(false);
+                    setPinSet(false);
+                  });
               }
             }}
           />
-          {pinEnabled && (
+          {pinSet && (
             <button
               type="button"
-              onClick={() => setPinSetupOpen(true)}
+              onClick={() => {
+                setPinSetupFromToggle(false);
+                setPinSetupOpen(true);
+              }}
               className="px-4 py-2 text-sm font-mono border border-border hover:border-muted-foreground transition-colors"
             >
               Change PIN
@@ -86,7 +103,16 @@ export function SettingsSection() {
         <PinSetup
           open={pinSetupOpen}
           onOpenChange={setPinSetupOpen}
-          onPinSet={() => setPinEnabled(true)}
+          onPinSet={() => {
+            setPinSet(true);
+            // Auto-enable ONLY when setup was triggered by toggling ON
+            // with no PIN configured (first-time setup flow).
+            if (pinSetupFromToggle) {
+              setPinSetupFromToggle(false);
+              invoke("set_pin_enabled", { enabled: true })
+                .then(() => setPinEnabled(true));
+            }
+          }}
         />
       </section>
 
