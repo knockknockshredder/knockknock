@@ -7,6 +7,12 @@
 // No fallback. If the exe directory is unwritable, the caller
 // receives an Err with a user-facing message.
 
+// Functions in this module are added incrementally across multiple
+// tasks. Until all consumers are in place, `pub fn` in a private mod
+// triggers `dead_code` warnings that mask real issues. Allow until
+// the module is fully wired (Task 4 wires everything).
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 
 /// Directory containing the app executable on Windows/Linux, or the
