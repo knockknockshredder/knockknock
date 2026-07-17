@@ -103,26 +103,6 @@ pub fn exists() -> bool {
 mod tests {
     use super::*;
 
-    /// Vault tests touch the real config directory. To avoid clobbering a
-    /// user's actual vault, redirect `dirs::config_dir` via a unique
-    /// subdirectory per test. We achieve that by clearing after each call.
-
-    fn unique_temp_dir() -> PathBuf {
-        let mut dir = std::env::temp_dir();
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        dir.push(format!("knockknock-vault-test-{}", nonce));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// We can't easily mock `dirs::config_dir` without refactoring the
-    /// module's path logic, so we directly test save/load/clear against a
-    /// round-tripped in-memory copy of the file. The crypto round trip is
-    /// already covered by `crypto::tests`.
-
     #[test]
     fn save_then_clear_then_exists_is_false() {
         // Just exercise clear() / exists() against the real path — these

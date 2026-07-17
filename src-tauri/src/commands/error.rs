@@ -155,10 +155,6 @@ mod tests {
             ShredError::NetworkDrive(PathBuf::from("a")),
             ShredError::SystemFile(PathBuf::from("a")),
             ShredError::SymlinkDetected(PathBuf::from("a")),
-            ShredError::HardLinksDetected {
-                path: PathBuf::from("a"),
-                count: 2,
-            },
             ShredError::InvalidPathType(PathBuf::from("a")),
             ShredError::EmptyPath,
         ];

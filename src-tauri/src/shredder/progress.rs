@@ -9,6 +9,21 @@ use std::sync::Mutex;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
+/// No-op progress reporter for tests and contexts without a Tauri `AppHandle`.
+#[cfg(test)]
+pub struct NoopProgressReporter;
+
+#[cfg(test)]
+impl ProgressReporter for NoopProgressReporter {
+    fn on_file_start(&self, _path: &Path, _file_size: u64) {}
+    fn on_pass_start(&self, _pass: u32, _total_passes: u32) {}
+    fn on_progress(&self, _bytes_written: u64, _total: u64) {}
+    fn on_pass_complete(&self, _pass: u32, _total_passes: u32) {}
+    fn on_file_complete(&self, _path: &Path, _result: &ShredResult) {}
+    fn on_error(&self, _path: &Path, _error: &ShredError) {}
+    fn on_warning(&self, _path: &Path, _message: &str) {}
+}
+
 /// Stateful Tauri progress reporter with throttling
 pub struct TauriProgressReporter {
     app: AppHandle,
