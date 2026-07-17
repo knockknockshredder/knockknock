@@ -3,6 +3,7 @@
 mod browser;
 mod commands;
 mod drive;
+mod paths;
 mod pin;
 mod shredder;
 mod tray;
