@@ -5,6 +5,62 @@ All notable changes to KnockKnock will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-07-17
+
+### "PIN-Protected Emergency Preparation"
+
+This release introduces PIN-based security, encrypted session persistence, drive-aware file grouping, and ergonomic improvements throughout the UI. Users can now prepare files for emergency shredding across app restarts with military-grade encryption.
+
+### Added
+
+#### Security & Authentication
+- **PIN protection system** — 6-32 digit PIN with bcrypt-hashed storage. PIN required on app open, before shred operations, and before cancellation.
+- **Brute-force lockout** — 3 failed attempts trigger a 5-minute lockout. Lockout state is persisted to disk (`lockout.json`), surviving app restarts.
+- **PIN setup UI** — Full digits-only PIN entry with confirmation field, validation (6-32 digits, numeric-only), and disclaimer about safe storage.
+- **PIN verification dialogs** — Three-purpose dialog (app open / shred / cancel) with live lockout countdown and "Forgot PIN?" reset flow.
+
+#### Session Persistence
+- **Encrypted vault** — File/folder paths are encrypted to disk with AES-256-GCM and PBKDF2-HMAC-SHA256 (1,000,000 iterations). Vault format includes a version field for future migrations.
+- **Auto-save on file changes** — Vault is automatically saved (500ms debounce) whenever the shred list changes, so user preparations survive app restarts.
+- **Auto-load on startup** — After PIN verification, vault is decrypted and previous file selection is restored. Invalid/missing paths are silently dropped.
+
+#### Drive Type Grouping
+- **Drive-aware file grouping** — Files in the sidebar are grouped by drive letter (Windows) or mount point (macOS/Linux). Each group header shows drive type: SSD, HDD, Network, USB HDD, or Unknown.
+- **Collapsible groups** — Each drive group can be collapsed/expanded independently.
+- **Platform-aware key extraction** — `getDriveKey()` handles Windows drive letters, UNC paths, and Unix mount paths.
+
+#### Folder Selection
+- **Add Files / Add Folder buttons** — Separate buttons for selecting files or entire directories. Backend already handled recursive directory traversal.
+- **Updated drop zone text** — "Drop files or folders here" with two explicit action buttons.
+
+### Improved
+
+#### Confirmation & Progress
+- **Immediate dialog close** — Confirmation dialog closes as soon as the user clicks DESTROY, preventing the stale "Nothing to destroy" message.
+- **Real-time progress display** — Progress bar and file count (N/M files) shown under the shred button during operation.
+- **Cancel button** — During shredding, button turns into amber "Cancel Shredding" (requires PIN).
+
+#### Error Handling
+- **Permission denied distinction** — `ShredError` now distinguishes `FileLocked` (held by another process) from `PermissionDenied` (ACL/privilege), offering the right UI remedy for each.
+- **Elevation prompt** — New `ElevationPrompt` dialog guides the user to restart as administrator when insufficient privileges are detected.
+
+#### File Path Privacy
+- **Log filepath masking** — User-configurable obfuscation in Settings: Full Paths / Numbered (File_1) / Partial Mask (C:\***.txt). Applied to all progress events emitted during shredding.
+- **Log Path Display setting** — Configured in Settings section, persisted in localStorage.
+
+### Changed
+- **Log path selector moved to Settings** — The Log Path Display selector appears only in Settings section (not on the main shred page per user feedback).
+- **Version bumped** — `0.2.0` → `0.3.0` in `package.json`, `Cargo.toml`, and about dialog.
+
+### Removed
+- **All dead code** — ~356 lines of unused code removed across the codebase: unused enum variants (`Hdd`, `UsbSsd`, `HardLinksDetected`, `Verifying`, `Renaming`, etc.), unused functions (`detect_data_types`, `init_logging`, `byte_value`), unused trait methods (`write_data`, `schedule_delete_on_reboot`), unused struct/impl (`NoopProgressReporter`), unused imports, and stale TODO comments.
+
+### Security
+- **PIN brute-force protection persisted** — Lockout state stored to disk prevents bypass via app restart.
+- **AES-256-GCM vault** — Paths encrypted with AEAD authentication (tampering detected). Key derived via PBKDF2-SHA256 at 1M iterations.
+- **`reset_app` requires PIN** — Unauthorized wipe of settings and vault prevented.
+- **Digits-only PIN enforcement** — Three-layer validation: HTML `inputMode="numeric"`, JS `replace(/\D/g, "")`, and Rust `is_ascii_digit()`.
+
 ## [0.2.0] — 2025-07-10
 
 ### "Unstoppable Shredding"
