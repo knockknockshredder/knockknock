@@ -26,9 +26,13 @@ interface PinSetupProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onPinSet: () => void;
+  /** When true, an "Old PIN" field is shown and `change_pin` is called
+   *  instead of `setup_pin` so the vault gets re-encrypted. */
+  requireOldPin?: boolean;
 }
 
-export function PinSetup({ open, onOpenChange, onPinSet }: PinSetupProps) {
+export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }: PinSetupProps) {
+  const [oldPin, setOldPin] = useState("");
   const [pin, setPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +42,7 @@ export function PinSetup({ open, onOpenChange, onPinSet }: PinSetupProps) {
   // input never leaks into a fresh setup attempt.
   useEffect(() => {
     if (!open) {
+      setOldPin("");
       setPin("");
       setConfirmPin("");
       setError(null);
@@ -51,6 +56,10 @@ export function PinSetup({ open, onOpenChange, onPinSet }: PinSetupProps) {
     e.preventDefault();
     setError(null);
 
+    if (requireOldPin && oldPin.length < MIN_PIN_LEN) {
+      setError(`Old PIN must be at least ${MIN_PIN_LEN} digits`);
+      return;
+    }
     if (pin.length < MIN_PIN_LEN || pin.length > MAX_PIN_LEN) {
       setError(`PIN must be between ${MIN_PIN_LEN} and ${MAX_PIN_LEN} digits`);
       return;
@@ -62,7 +71,11 @@ export function PinSetup({ open, onOpenChange, onPinSet }: PinSetupProps) {
 
     setSubmitting(true);
     try {
-      await invoke("setup_pin", { pinValue: pin });
+      if (requireOldPin) {
+        await invoke("change_pin", { oldPin, newPin: pin });
+      } else {
+        await invoke("setup_pin", { pinValue: pin });
+      }
       onPinSet();
       onOpenChange(false);
     } catch (err) {
@@ -76,6 +89,7 @@ export function PinSetup({ open, onOpenChange, onPinSet }: PinSetupProps) {
     pin.length >= MIN_PIN_LEN &&
     pin.length <= MAX_PIN_LEN &&
     confirmPin.length >= MIN_PIN_LEN &&
+    (!requireOldPin || oldPin.length >= MIN_PIN_LEN) &&
     !submitting;
 
   return (
@@ -84,15 +98,36 @@ export function PinSetup({ open, onOpenChange, onPinSet }: PinSetupProps) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Lock size={16} className="text-accent" />
-            Set PIN
+            {requireOldPin ? "Change PIN" : "Set PIN"}
           </DialogTitle>
           <DialogDescription>
-            Choose a {MIN_PIN_LEN} to {MAX_PIN_LEN} digit PIN. You will be
-            asked for it to open the app and before each shred operation.
+            {requireOldPin
+              ? "Enter your current PIN, then choose a new one."
+              : `Choose a ${MIN_PIN_LEN} to ${MAX_PIN_LEN} digit PIN. You will be
+            asked for it to open the app and before each shred operation.`}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          {requireOldPin && (
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+                Old PIN
+              </span>
+              <input
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoComplete="off"
+                value={oldPin}
+                onChange={(e) => setOldPin(digitsOnly(e.target.value))}
+                maxLength={MAX_PIN_LEN}
+                disabled={submitting}
+                autoFocus
+                className="font-mono px-3 py-2 bg-surface border border-border focus:border-accent focus:outline-none disabled:opacity-50"
+              />
+            </label>
+          )}
           <label className="flex flex-col gap-1">
             <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
               PIN
@@ -106,7 +141,7 @@ export function PinSetup({ open, onOpenChange, onPinSet }: PinSetupProps) {
               onChange={(e) => setPin(digitsOnly(e.target.value))}
               maxLength={MAX_PIN_LEN}
               disabled={submitting}
-              autoFocus
+              autoFocus={!requireOldPin}
               className="font-mono px-3 py-2 bg-surface border border-border focus:border-accent focus:outline-none disabled:opacity-50"
             />
           </label>

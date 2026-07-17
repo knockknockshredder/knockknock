@@ -99,6 +99,30 @@ pub fn exists() -> bool {
     vault_path().map(|p| p.exists()).unwrap_or(false)
 }
 
+/// Re-encrypt the on-disk vault from `old_pin` to `new_pin`.
+///
+/// Best-effort: if no vault exists or decryption fails, the PIN change
+/// still succeeds (the user can start a fresh session). Only an I/O error
+/// during the re-save is surfaced as an `Err`.
+pub fn rekey(old_pin: &str, new_pin: &str) -> Result<(), String> {
+    let path = vault_path()?;
+    if !path.exists() {
+        return Ok(());
+    }
+
+    // Load with old PIN — if this fails the vault was already
+    // corrupted or encrypted with yet another PIN; don't block the
+    // change, just leave the old vault orphaned.
+    let paths = match load(old_pin) {
+        Ok(p) => p,
+        Err(_) => return Ok(()),
+    };
+
+    // Re-save with new PIN. This is the critical step — if it fails
+    // we surface the error so the caller knows the vault was lost.
+    save(&paths, new_pin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

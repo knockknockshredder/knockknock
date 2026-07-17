@@ -169,12 +169,21 @@ pub fn lockout_remaining() -> Result<Option<u64>, String> {
 }
 
 /// Change an existing PIN. Requires the current PIN to be valid
-/// (and not in a lockout window).
+/// (and not in a lockout window). After updating the PIN hash,
+/// re-encrypts the on-disk vault so the stored session survives
+/// the PIN change. If the vault cannot be re-encrypted (e.g. it
+/// was already corrupted), the PIN change still succeeds — the
+/// user simply starts with a fresh session.
 pub fn change_pin(old_pin: &str, new_pin: &str) -> Result<(), String> {
     if !verify_pin(old_pin)? {
         return Err("Current PIN is incorrect".to_string());
     }
-    setup_pin(new_pin)
+    setup_pin(new_pin)?;
+
+    // Re-encrypt vault from old PIN to new PIN (best-effort).
+    let _ = crate::vault::storage::rekey(old_pin, new_pin);
+
+    Ok(())
 }
 
 /// Wipe ALL app state (PIN, lockout counter, config). Requires the

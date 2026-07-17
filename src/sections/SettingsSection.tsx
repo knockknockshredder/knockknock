@@ -102,6 +102,7 @@ export function SettingsSection() {
         <PinSetup
           open={pinSetupOpen}
           onOpenChange={setPinSetupOpen}
+          requireOldPin={pinSet}
           onPinSet={() => {
             setPinSet(true);
             // Auto-enable ONLY when setup was triggered by toggling ON
