@@ -45,6 +45,7 @@ export function ShredSection() {
   const [pattern, setPattern] = useState<"random" | "zeros" | "ones">("random");
   const [verificationLevel, setVerificationLevel] = useState<"none" | "sample" | "full">("sample");
   const unlistenRef = useRef<(() => void) | null>(null);
+  const isExecutingRef = useRef(false); // guards against StrictMode double-fire
 
   // PIN verification gates
   const [pinNeeded, setPinNeeded] = useState(false);
@@ -105,8 +106,10 @@ export function ShredSection() {
   };
 
   const executeShred = async () => {
+    if (isExecutingRef.current) return;
     if (pendingFiles.length === 0 && selectedProfileCount === 0) return;
 
+    isExecutingRef.current = true;
     setIsShredding(true);
     addLogEntry(
       "command",
@@ -213,6 +216,7 @@ export function ShredSection() {
       unlistenRef.current = null;
       setProgress(null);
       setIsShredding(false);
+      isExecutingRef.current = false;
     }
   };
 
