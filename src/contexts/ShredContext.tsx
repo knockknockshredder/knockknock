@@ -37,7 +37,7 @@ interface ShredState {
   updateFileStatus: (id: string, status: ShredFile["status"], error?: string) => void;
   setVaultPin: (pin: string | null) => void;
   loadVault: (pin: string) => Promise<void>;
-  saveVault: (pin: string) => Promise<void>;
+  saveVault: (pin: string) => Promise<boolean>;
 }
 
 const ShredContext = createContext<ShredState | null>(null);
@@ -130,16 +130,21 @@ export function ShredProvider({ children }: { children: ReactNode }) {
     }
   }, [addFiles, addLogEntry]);
 
-  // Encrypt the current shred list and persist it. Best-effort: a save
-  // failure is logged but never blocks the user's workflow.
+  // Encrypt the current shred list and persist it. Returns `true` on
+  // success and `false` on failure (after logging the error). Callers
+  // performing destructive operations (e.g. the shred pipeline) must
+  // check the return value — a failed auto-save is non-fatal, but a
+  // failed pre-shred checkpoint is a hard abort to avoid data loss.
   const saveVault = useCallback(
     async (pin: string) => {
       try {
         const paths = files.map((f) => f.path);
         await invoke("save_vault", { paths, pin });
+        return true;
       } catch (err) {
         console.error("Failed to save vault:", err);
         addLogEntry("error", `Failed to save session: ${err}`);
+        return false;
       }
     },
     [files, addLogEntry]
@@ -152,8 +157,16 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!vaultLoaded || !vaultPin || isShredding) return;
     if (Date.now() - lastLoadCompletedAt.current < 500) return;
+    // Capture the PIN at effect entry. The setTimeout fires after a 1s
+    // debounce; if the user changed PIN during that window the effect
+    // was cancelled (cleanup below) AND the latest vaultPin will
+    // differ from this snapshot — the re-check at fire time suppresses
+    // the stale-PIN save.
+    const pinSnapshot = vaultPin;
     const timer = setTimeout(() => {
-      void saveVault(vaultPin);
+      if (pinSnapshot === vaultPin) {
+        void saveVault(vaultPin);
+      }
     }, 1000);
     return () => clearTimeout(timer);
   }, [files, vaultLoaded, vaultPin, isShredding, saveVault]);

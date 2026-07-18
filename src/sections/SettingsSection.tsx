@@ -147,6 +147,11 @@ export function SettingsSection() {
                 .then(() => {
                   setPinEnabled(false);
                   setPinSet(false);
+                  // Backend just wiped the hash AND the on-disk vault.
+                  // Clear the cached PIN so the auto-save effect won't
+                  // silently recreate a vault under the now-deleted key —
+                  // contradicting the "not saved between sessions" notice.
+                  setVaultPin(null);
                 })
                 .catch((err) => addLogEntry("error", `Failed to disable PIN: ${err}`));
             } else if (pendingPinAction === "enable") {

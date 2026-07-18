@@ -64,7 +64,7 @@ pub fn save(paths: &[String], pin: &str) -> Result<(), String> {
 
     std::fs::write(&tmp_path, json).map_err(|e| format!("Failed to write vault tmp: {}", e))?;
     std::fs::rename(&tmp_path, &path).map_err(|e| format!("Failed to write vault: {}", e))?;
-    set_owner_only(&path);
+    set_owner_only(&path)?;
 
     Ok(())
 }

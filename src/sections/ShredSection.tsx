@@ -104,9 +104,17 @@ export function ShredSection() {
     setIsShredding(true);
     // Persist the pending shred list one last time before the destructive
     // operation. The auto-save effect is suppressed while isShredding is
-    // true, so this explicit call is the final checkpoint.
+    // true, so this explicit call is the final checkpoint. If the save
+    // fails we MUST abort — proceeding would shred the files without a
+    // recoverable session backup.
     if (vaultPin) {
-      await saveVault(vaultPin);
+      const ok = await saveVault(vaultPin);
+      if (!ok) {
+        addLogEntry("error", "Refusing to shred: vault save failed");
+        setIsShredding(false);
+        isExecutingRef.current = false;
+        return;
+      }
     }
     addLogEntry(
       "command",
