@@ -93,12 +93,24 @@ pub fn load_lockout_state() -> Result<LockoutState, String> {
     let content =
         fs::read_to_string(&path).map_err(|e| format!("Failed to read lockout state: {}", e))?;
 
-    // If the file is corrupt, fail safe to defaults — better to lose the counter
-    // than to refuse to start the app.
     let state: LockoutState = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse lockout state: {}", e))?;
 
     Ok(state)
+}
+
+/// `true` only if the lockout file exists and is parseable but the file's
+/// content is empty / corrupt / not a valid `LockoutState`. Used by the
+/// startup path to decide whether to refuse to start (tampering signal).
+pub fn lockout_file_is_corrupt() -> bool {
+    let path = get_lockout_path();
+    if !path.exists() {
+        return false;
+    }
+    let Ok(content) = fs::read_to_string(&path) else {
+        return true;
+    };
+    serde_json::from_str::<LockoutState>(&content).is_err()
 }
 
 pub fn clear_lockout_state() -> Result<(), String> {

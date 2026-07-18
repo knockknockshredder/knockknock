@@ -3,8 +3,8 @@
 use crate::pin;
 
 #[tauri::command]
-pub fn setup_pin(pin_value: String) -> Result<(), String> {
-    pin::setup_pin(&pin_value)
+pub fn setup_pin(old_pin: Option<String>, new_pin: String) -> Result<(), String> {
+    pin::setup_pin(old_pin.as_deref(), &new_pin)
 }
 
 #[tauri::command]
@@ -18,8 +18,8 @@ pub fn is_pin_enabled() -> bool {
 }
 
 #[tauri::command]
-pub fn set_pin_enabled(enabled: bool) -> Result<(), String> {
-    pin::set_pin_enabled(enabled)
+pub fn set_pin_enabled(current_pin: String, enabled: bool) -> Result<(), String> {
+    pin::set_pin_enabled(&current_pin, enabled)
 }
 
 #[tauri::command]
@@ -52,6 +52,6 @@ pub fn reset_app(current_pin: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn disable_pin() -> Result<(), String> {
-    pin::disable_pin()
+pub fn disable_pin(current_pin: String) -> Result<(), String> {
+    pin::disable_pin(&current_pin)
 }

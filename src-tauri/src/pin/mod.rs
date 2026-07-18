@@ -13,6 +13,12 @@ pub const MAX_ATTEMPTS: u32 = 3;
 /// Duration of the lockout window after `MAX_ATTEMPTS` consecutive failures.
 pub const LOCKOUT_DURATION: u64 = 300; // seconds
 
+/// Duration of the lockout applied when the persisted lockout file is found
+/// in a corrupt state — signals tampering rather than normal user failure.
+/// Long enough to be a real obstacle but short enough that a legitimate user
+/// who caused corruption by other means isn't permanently locked out.
+pub const LOCKOUT_DURATION_TAMPERED: u64 = 86400; // 24 hours
+
 /// Minimum and maximum allowed PIN lengths (digits only).
 const MIN_PIN_LEN: usize = 6;
 const MAX_PIN_LEN: usize = 32;
@@ -42,7 +48,23 @@ lazy_static! {
 /// Load lockout state from disk into the in-memory mutex. Call once at
 /// app startup so a previously locked-out user cannot bypass the lockout
 /// by relaunching the app.
+///
+/// If the on-disk lockout file is corrupt (missing but unparseable, or
+/// reads back invalid JSON), treat it as a tampering signal: load a
+/// 24-hour lockout into memory and return `Err` so the caller can surface
+/// the condition. A missing file or a clean parse behaves as before.
 pub fn init_lockout_state() -> Result<(), String> {
+    if config::lockout_file_is_corrupt() {
+        let mut guard = PIN_STATE
+            .lock()
+            .map_err(|e| format!("Lock poisoned: {}", e))?;
+        *guard = PinState {
+            failed_attempts: MAX_ATTEMPTS + 1,
+            lockout_until_unix: Some(now_unix() + LOCKOUT_DURATION_TAMPERED),
+        };
+        return Err("Lockout state file is corrupt — treating as tampering signal.".to_string());
+    }
+
     let loaded = config::load_lockout_state()?;
     let mut guard = PIN_STATE
         .lock()
@@ -81,12 +103,22 @@ fn persist_state(state: &PinState) -> Result<(), String> {
     })
 }
 
-/// Configure a new PIN. Any existing PIN is replaced. Resets the
-/// lockout counter on success.
-pub fn setup_pin(pin: &str) -> Result<(), String> {
-    validate_pin_format(pin)?;
+/// Configure a new PIN. Resets the lockout counter on success.
+///
+/// When a PIN hash already exists, `old_pin` must be the current PIN and
+/// is verified before the new hash is written. When no hash exists,
+/// `old_pin` is ignored (forward-compat: callers can always pass `Some`).
+pub fn setup_pin(old_pin: Option<&str>, new_pin: &str) -> Result<(), String> {
+    if config::load_pin_hash()?.is_some() {
+        let old = old_pin.ok_or_else(|| "Old PIN required to replace existing PIN".to_string())?;
+        if !verify_pin(old)? {
+            return Err("Old PIN is incorrect".to_string());
+        }
+    }
 
-    let hashed = hash(pin, DEFAULT_COST).map_err(|e| format!("Failed to hash PIN: {}", e))?;
+    validate_pin_format(new_pin)?;
+
+    let hashed = hash(new_pin, DEFAULT_COST).map_err(|e| format!("Failed to hash PIN: {}", e))?;
     config::save_pin_hash(&hashed)?;
 
     // Successful setup clears any prior lockout state.
@@ -169,30 +201,29 @@ pub fn lockout_remaining() -> Result<Option<u64>, String> {
 }
 
 /// Change an existing PIN. Requires the current PIN to be valid
-/// (and not in a lockout window). After updating the PIN hash,
-/// re-encrypts the on-disk vault so the stored session survives
-/// the PIN change. If the vault cannot be re-encrypted (e.g. it
-/// was already corrupted), the PIN change still succeeds — the
-/// user simply starts with a fresh session.
+/// (and not in a lockout window). The on-disk vault is re-encrypted
+/// from the old PIN to the new PIN BEFORE the PIN hash is updated;
+/// if the rekey fails the PIN must not change (otherwise the user
+/// would be locked out of a still-old-key vault).
 pub fn change_pin(old_pin: &str, new_pin: &str) -> Result<(), String> {
     if !verify_pin(old_pin)? {
         return Err("Current PIN is incorrect".to_string());
     }
-    setup_pin(new_pin)?;
-
-    // Re-encrypt vault from old PIN to new PIN (best-effort).
-    let _ = crate::vault::storage::rekey(old_pin, new_pin);
-
-    Ok(())
+    // Rekey first — if it fails, the PIN must not change.
+    crate::vault::storage::rekey(old_pin, new_pin)?;
+    setup_pin(Some(old_pin), new_pin)
 }
 
-/// Wipe ALL app state (PIN, lockout counter, config). Requires the
-/// current PIN to be valid as a safety check before destruction.
+/// Wipe ALL app state (PIN, lockout counter, config, encrypted vault).
+/// Requires the current PIN to be valid as a safety check before destruction.
+/// The vault is also cleared so no encrypted blob keyed by the now-deleted
+/// PIN can linger on disk and fail to decrypt on a future setup.
 pub fn reset_app(current_pin: &str) -> Result<(), String> {
     if !verify_pin(current_pin)? {
         return Err("Current PIN is incorrect".to_string());
     }
 
+    crate::vault::storage::clear()?;
     config::remove_pin_hash()?;
     config::clear_lockout_state()?;
 
@@ -213,7 +244,12 @@ pub fn is_pin_enabled() -> bool {
 
 /// Toggle the PIN protection flag independently from the PIN hash.
 /// When `false`, no PIN prompt appears even if a PIN is configured.
-pub fn set_pin_enabled(enabled: bool) -> Result<(), String> {
+/// Requires the current PIN to be valid so an attacker with WebView
+/// access cannot bypass the gate by toggling the flag.
+pub fn set_pin_enabled(current_pin: &str, enabled: bool) -> Result<(), String> {
+    if !verify_pin(current_pin)? {
+        return Err("Current PIN is incorrect".to_string());
+    }
     config::save_pin_enabled(enabled)
 }
 
@@ -223,7 +259,14 @@ pub fn has_pin() -> bool {
     config::load_pin_hash().ok().flatten().is_some()
 }
 
-pub fn disable_pin() -> Result<(), String> {
+/// Delete the PIN hash and clear the enabled flag. Requires the current
+/// PIN. Also wipes the encrypted vault so a vault keyed by the now-
+/// deleted PIN cannot linger on disk and fail to decrypt on next setup.
+pub fn disable_pin(current_pin: &str) -> Result<(), String> {
+    if !verify_pin(current_pin)? {
+        return Err("Current PIN is incorrect".to_string());
+    }
+    crate::vault::storage::clear()?;
     config::remove_pin_hash()?;
     config::save_pin_enabled(false)?;
     config::clear_lockout_state()?;
@@ -303,7 +346,7 @@ mod tests {
         }
         assert!(is_pin_locked().unwrap());
 
-        setup_pin("123456").unwrap();
+        setup_pin(None, "123456").unwrap();
         assert!(!is_pin_locked().unwrap());
         assert_eq!(lockout_remaining().unwrap(), None);
     }
@@ -382,9 +425,9 @@ mod tests {
     #[test]
     fn reset_app_requires_valid_pin() {
         reset_state();
-        setup_pin("654321").unwrap();
+        setup_pin(None, "654321").unwrap();
         // set_pin_enabled must be called separately to activate protection
-        set_pin_enabled(true).unwrap();
+        set_pin_enabled("654321", true).unwrap();
 
         // Wrong PIN -> error, state preserved
         assert!(reset_app("000000").is_err());
@@ -400,7 +443,7 @@ mod tests {
     #[test]
     fn change_pin_rejects_wrong_old_pin() {
         reset_state();
-        setup_pin("111111").unwrap();
+        setup_pin(None, "111111").unwrap();
 
         assert!(change_pin("000000", "222222").is_err());
         // Original PIN still works
@@ -413,11 +456,76 @@ mod tests {
     #[test]
     fn change_pin_accepts_correct_old_pin() {
         reset_state();
-        setup_pin("111111").unwrap();
+        setup_pin(None, "111111").unwrap();
         change_pin("111111", "222222").unwrap();
 
         assert_eq!(verify_pin("222222").unwrap(), true);
         assert_eq!(verify_pin("111111").unwrap(), false);
+
+        reset_state();
+    }
+
+    #[test]
+    fn setup_pin_succeeds_with_correct_old_pin() {
+        reset_state();
+        setup_pin(None, "123456").unwrap();
+        assert!(setup_pin(Some("123456"), "654321").is_ok());
+
+        // New PIN works, old does not
+        assert_eq!(verify_pin("654321").unwrap(), true);
+        assert_eq!(verify_pin("123456").unwrap(), false);
+
+        reset_state();
+    }
+
+    #[test]
+    fn setup_pin_requires_old_when_hash_exists() {
+        reset_state();
+        setup_pin(None, "123456").unwrap();
+
+        // Wrong old PIN -> error, original PIN still works
+        assert!(setup_pin(Some("000000"), "654321").is_err());
+        assert_eq!(verify_pin("123456").unwrap(), true);
+        assert_eq!(verify_pin("654321").unwrap(), false);
+
+        reset_state();
+    }
+
+    #[test]
+    fn setup_pin_rejects_missing_old_pin_when_hash_exists() {
+        reset_state();
+        setup_pin(None, "123456").unwrap();
+
+        // Missing old PIN -> error
+        assert!(setup_pin(None, "654321").is_err());
+        // Original PIN still works
+        assert_eq!(verify_pin("123456").unwrap(), true);
+
+        reset_state();
+    }
+
+    #[test]
+    fn init_lockout_state_24h_lockout_when_corrupt() {
+        reset_state();
+        // Write a deliberately corrupt lockout file to disk.
+        let path = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("KnockKnock")
+            .join("lockout.json");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, "not valid json {{{").unwrap();
+
+        // init must return Err and pre-load a tamper lockout.
+        assert!(init_lockout_state().is_err());
+        assert!(is_pin_locked().unwrap());
+        let remaining = lockout_remaining().unwrap().unwrap();
+        assert!(
+            remaining > LOCKOUT_DURATION,
+            "expected tamper lockout > LOCKOUT_DURATION, got {}",
+            remaining
+        );
 
         reset_state();
     }

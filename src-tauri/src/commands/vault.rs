@@ -4,7 +4,7 @@
 // the user's pending shred list (Vec<String> of paths). The PIN is passed
 // per-call and never persisted by the frontend.
 
-use crate::vault;
+use crate::{pin, vault};
 
 #[tauri::command]
 pub fn save_vault(paths: Vec<String>, pin: String) -> Result<(), String> {
@@ -17,7 +17,10 @@ pub fn load_vault(pin: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub fn clear_vault() -> Result<(), String> {
+pub fn clear_vault(current_pin: String) -> Result<(), String> {
+    if !pin::verify_pin(&current_pin)? {
+        return Err("PIN is incorrect".to_string());
+    }
     vault::storage::clear()
 }
 
