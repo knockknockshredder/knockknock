@@ -39,7 +39,15 @@ function AppGate() {
     }
   };
 
-  if (pinNeeded === null) return null;
+  if (pinNeeded === null) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+          Loading…
+        </div>
+      </div>
+    );
+  }
 
   // Gate NOT passed: only show the PIN dialog, nothing else.
   // The dialog cannot be dismissed — user MUST authenticate.

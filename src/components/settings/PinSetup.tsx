@@ -18,9 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-
-const MIN_PIN_LEN = 6;
-const MAX_PIN_LEN = 32;
+import { MIN_PIN_LEN, MAX_PIN_LEN } from "@/lib/pin-constants";
 
 interface PinSetupProps {
   open: boolean;

@@ -280,7 +280,9 @@ export function ShredSection() {
         onVerified={(pin) => {
           setVaultPin(pin);
           setCancelPinOpen(false);
-          invoke("cancel_shred").catch(() => {});
+          invoke("cancel_shred").catch((err) =>
+            addLogEntry("error", `Failed to cancel shred: ${err}`)
+          );
         }}
         purpose="cancel"
       />

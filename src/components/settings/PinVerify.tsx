@@ -20,11 +20,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { MIN_PIN_LEN, MAX_PIN_LEN } from "@/lib/pin-constants";
 
-const MIN_PIN_LEN = 6;
-const MAX_PIN_LEN = 32;
-
-export type PinVerifyPurpose = "app_open" | "shred" | "cancel" | "disable_pin";
+export type PinVerifyPurpose =
+  | "app_open"
+  | "shred"
+  | "cancel"
+  | "disable_pin"
+  | "set_pin_enabled";
 
 interface PinVerifyProps {
   open: boolean;
@@ -49,6 +52,10 @@ const PURPOSE_COPY: Record<PinVerifyPurpose, { title: string; description: strin
   disable_pin: {
     title: "Authorize disable",
     description: "Enter your PIN to disable PIN protection.",
+  },
+  set_pin_enabled: {
+    title: "Authorize enable",
+    description: "Enter your PIN to enable PIN protection.",
   },
 };
 

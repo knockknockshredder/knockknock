@@ -33,17 +33,24 @@ export function SettingsSection() {
     logObfuscation,
     setLogObfuscation,
   } = useSettings();
-  const { algorithms, setVaultPin } = useShred();
+  const { algorithms, setVaultPin, addLogEntry } = useShred();
   const [pinEnabled, setPinEnabled] = useState(false);
   const [pinSet, setPinSet] = useState(false);
   const [pinSetupOpen, setPinSetupOpen] = useState(false);
   const [pinSetupFromToggle, setPinSetupFromToggle] = useState(false);
   const [pinVerifyOpen, setPinVerifyOpen] = useState(false);
+  // Tracks which PIN-gated action follows a successful PinVerify, since
+  // enabling and disabling both reuse the same dialog.
+  const [pendingPinAction, setPendingPinAction] = useState<"enable" | "disable" | null>(null);
 
   useEffect(() => {
-    invoke<boolean>("is_pin_enabled").then(setPinEnabled);
-    invoke<boolean>("has_pin").then(setPinSet);
-  }, []);
+    invoke<boolean>("is_pin_enabled")
+      .then(setPinEnabled)
+      .catch((err) => addLogEntry("error", `Failed to read PIN status: ${err}`));
+    invoke<boolean>("has_pin")
+      .then(setPinSet)
+      .catch((err) => addLogEntry("error", `Failed to read PIN presence: ${err}`));
+  }, [addLogEntry]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -73,8 +80,9 @@ export function SettingsSection() {
             onCheckedChange={(enabled) => {
               if (enabled) {
                 if (pinSet) {
-                  invoke("set_pin_enabled", { enabled: true })
-                    .then(() => setPinEnabled(true));
+                  // PIN already configured — verify it before flipping the gate
+                  setPendingPinAction("enable");
+                  setPinVerifyOpen(true);
                 } else {
                   // No PIN configured yet — open setup; enable after success
                   setPinSetupFromToggle(true);
@@ -82,6 +90,7 @@ export function SettingsSection() {
                 }
               } else {
                 // Toggling OFF requires PIN verification first
+                setPendingPinAction("disable");
                 setPinVerifyOpen(true);
               }
             }}
@@ -98,6 +107,12 @@ export function SettingsSection() {
               Change PIN
             </button>
           )}
+          {!pinEnabled && !pinSet && (
+            <p className="font-mono text-xs text-muted-foreground">
+              Note: when PIN protection is disabled, your shred list is not saved
+              between sessions.
+            </p>
+          )}
         </div>
         <PinSetup
           open={pinSetupOpen}
@@ -110,26 +125,39 @@ export function SettingsSection() {
             // the auto-save would silently destroy the session.
             setVaultPin(newPin);
             // Auto-enable ONLY when setup was triggered by toggling ON
-            // with no PIN configured (first-time setup flow).
+            // with no PIN configured (first-time setup flow). The backend
+            // requires the freshly-set PIN to authorize enabling.
             if (pinSetupFromToggle) {
               setPinSetupFromToggle(false);
-              invoke("set_pin_enabled", { enabled: true })
-                .then(() => setPinEnabled(true));
+              invoke("set_pin_enabled", { currentPin: newPin, enabled: true })
+                .then(() => setPinEnabled(true))
+                .catch((err) => addLogEntry("error", `Failed to enable PIN: ${err}`));
             }
           }}
         />
         <PinVerify
           open={pinVerifyOpen}
-          onOpenChange={setPinVerifyOpen}
-          onVerified={() => {
-            invoke("disable_pin")
-              .then(() => {
-                setPinEnabled(false);
-                setPinSet(false);
-                setPinVerifyOpen(false);
-              });
+          onOpenChange={(open) => {
+            setPinVerifyOpen(open);
+            if (!open) setPendingPinAction(null);
           }}
-          purpose="disable_pin"
+          onVerified={(pin) => {
+            if (pendingPinAction === "disable") {
+              invoke("disable_pin", { currentPin: pin })
+                .then(() => {
+                  setPinEnabled(false);
+                  setPinSet(false);
+                })
+                .catch((err) => addLogEntry("error", `Failed to disable PIN: ${err}`));
+            } else if (pendingPinAction === "enable") {
+              invoke("set_pin_enabled", { currentPin: pin, enabled: true })
+                .then(() => setPinEnabled(true))
+                .catch((err) => addLogEntry("error", `Failed to enable PIN: ${err}`));
+            }
+            setPinVerifyOpen(false);
+            setPendingPinAction(null);
+          }}
+          purpose={pendingPinAction === "disable" ? "disable_pin" : "set_pin_enabled"}
         />
       </section>
 
