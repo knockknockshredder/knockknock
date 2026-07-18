@@ -6,6 +6,7 @@
 // File layout: <config_dir>/KnockKnock/vault.json
 
 use super::crypto::{self, EncryptedData};
+use crate::pin::config::set_owner_only;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -29,6 +30,10 @@ fn vault_path() -> Result<PathBuf, String> {
 }
 
 /// Encrypt `paths` under `pin` and write to disk, replacing any existing vault.
+///
+/// Writes are atomic: serialize -> write to `<path>.tmp` -> `rename` onto the
+/// final path. A crash mid-write leaves the previous vault intact rather than
+/// a half-written file that cannot be decrypted.
 pub fn save(paths: &[String], pin: &str) -> Result<(), String> {
     let plaintext =
         serde_json::to_vec(paths).map_err(|e| format!("Failed to serialize paths: {}", e))?;
@@ -45,7 +50,21 @@ pub fn save(paths: &[String], pin: &str) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&vault_file)
         .map_err(|e| format!("Failed to serialize vault: {}", e))?;
 
-    std::fs::write(vault_path()?, json).map_err(|e| format!("Failed to write vault: {}", e))?;
+    let path = vault_path()?;
+    let tmp_path = {
+        let mut p = path.clone();
+        let mut name = p
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_else(|| std::ffi::OsString::from("vault.json"));
+        name.push(".tmp");
+        p.set_file_name(name);
+        p
+    };
+
+    std::fs::write(&tmp_path, json).map_err(|e| format!("Failed to write vault tmp: {}", e))?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Failed to write vault: {}", e))?;
+    set_owner_only(&path);
 
     Ok(())
 }

@@ -2,7 +2,43 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+// --- Permission helpers ---
+//
+// All sensitive files live under <config_dir>/KnockKnock/. On Unix we tighten
+// the directory to 0o700 (owner-only traversable) and every file to 0o600
+// (owner-only readable/writable). On Windows the default ACL for files
+// inside a user profile directory already restricts access to the owning
+// user, so these are no-ops there.
+
+#[cfg(unix)]
+pub(crate) fn set_owner_only(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o600);
+        let _ = std::fs::set_permissions(path, perms);
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn set_owner_only(_path: &Path) {
+    // Windows: default ACL is owner-only for files in user profile dirs.
+    // Future: explicit ACL hardening if multi-user scenarios arise.
+}
+
+#[cfg(unix)]
+pub(crate) fn set_owner_only_dir(path: &Path) {
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o700);
+        let _ = std::fs::set_permissions(path, perms);
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn set_owner_only_dir(_path: &Path) {}
 
 fn get_config_path() -> PathBuf {
     let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -22,11 +58,13 @@ pub fn save_pin_hash(hash: &str) -> Result<(), String> {
     let path = get_config_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
+        set_owner_only_dir(parent);
     }
 
     let config = serde_json::json!({ "pin_hash": hash });
     fs::write(&path, config.to_string())
         .map_err(|e| format!("Failed to write PIN config: {}", e))?;
+    set_owner_only(&path);
 
     Ok(())
 }
@@ -75,11 +113,13 @@ pub fn save_lockout_state(state: &LockoutState) -> Result<(), String> {
     let path = get_lockout_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
+        set_owner_only_dir(parent);
     }
 
     let json = serde_json::to_string_pretty(state)
         .map_err(|e| format!("Failed to serialize lockout state: {}", e))?;
     fs::write(&path, json).map_err(|e| format!("Failed to write lockout state: {}", e))?;
+    set_owner_only(&path);
 
     Ok(())
 }
@@ -134,9 +174,12 @@ pub fn save_pin_enabled(enabled: bool) -> Result<(), String> {
     let path = get_enabled_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
+        set_owner_only_dir(parent);
     }
     fs::write(&path, if enabled { "1" } else { "0" })
-        .map_err(|e| format!("Failed to write PIN enabled state: {}", e))
+        .map_err(|e| format!("Failed to write PIN enabled state: {}", e))?;
+    set_owner_only(&path);
+    Ok(())
 }
 
 pub fn load_pin_enabled() -> bool {
