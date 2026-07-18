@@ -25,7 +25,10 @@ const MAX_PIN_LEN = 32;
 interface PinSetupProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onPinSet: () => void;
+  /** Called after the backend confirms `setup_pin` / `change_pin`. The
+   *  argument is the newly-active PIN so callers can update any cached
+   *  copies (e.g. the vault auto-save key) without re-prompting. */
+  onPinSet: (newPin: string) => void;
   /** When true, an "Old PIN" field is shown and `change_pin` is called
    *  instead of `setup_pin` so the vault gets re-encrypted. */
   requireOldPin?: boolean;
@@ -76,7 +79,7 @@ export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }
       } else {
         await invoke("setup_pin", { pinValue: pin });
       }
-      onPinSet();
+      onPinSet(pin);
       onOpenChange(false);
     } catch (err) {
       setError(String(err));

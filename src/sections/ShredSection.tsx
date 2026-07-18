@@ -34,6 +34,8 @@ export function ShredSection() {
     algorithms,
     progress,
     setProgress,
+    vaultPin,
+    setVaultPin,
     saveVault,
   } = useShred();
 
@@ -57,17 +59,6 @@ export function ShredSection() {
   useEffect(() => {
     invoke<boolean>("is_pin_enabled").then(setPinNeeded).catch(() => setPinNeeded(false));
   }, []);
-
-  // Auto-save vault when files change after PIN is known
-  const [pinForVault, setPinForVault] = useState("");
-  useEffect(() => {
-    if (pinForVault && files.length > 0) {
-      const timer = setTimeout(() => {
-        saveVault(pinForVault).catch(console.error);
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [files, pinForVault, saveVault]);
 
   const pendingFiles = files.filter((f) => f.status === "pending");
   const selectedProfileCount = getSelectedCount();
@@ -111,6 +102,12 @@ export function ShredSection() {
 
     isExecutingRef.current = true;
     setIsShredding(true);
+    // Persist the pending shred list one last time before the destructive
+    // operation. The auto-save effect is suppressed while isShredding is
+    // true, so this explicit call is the final checkpoint.
+    if (vaultPin) {
+      await saveVault(vaultPin);
+    }
     addLogEntry(
       "command",
       `shredding ${pendingFiles.length} file(s) and ${selectedProfileCount} browser profile(s)...`
@@ -271,7 +268,7 @@ export function ShredSection() {
         open={shredPinOpen}
         onOpenChange={setShredPinOpen}
         onVerified={(pin) => {
-          setPinForVault(pin);
+          setVaultPin(pin);
           setShredPinOpen(false);
           deferredShred?.();
         }}
@@ -280,7 +277,8 @@ export function ShredSection() {
       <PinVerify
         open={cancelPinOpen}
         onOpenChange={setCancelPinOpen}
-        onVerified={(_pin) => {
+        onVerified={(pin) => {
+          setVaultPin(pin);
           setCancelPinOpen(false);
           invoke("cancel_shred").catch(() => {});
         }}

@@ -33,7 +33,7 @@ export function SettingsSection() {
     logObfuscation,
     setLogObfuscation,
   } = useSettings();
-  const { algorithms } = useShred();
+  const { algorithms, setVaultPin } = useShred();
   const [pinEnabled, setPinEnabled] = useState(false);
   const [pinSet, setPinSet] = useState(false);
   const [pinSetupOpen, setPinSetupOpen] = useState(false);
@@ -103,8 +103,12 @@ export function SettingsSection() {
           open={pinSetupOpen}
           onOpenChange={setPinSetupOpen}
           requireOldPin={pinSet}
-          onPinSet={() => {
+          onPinSet={(newPin) => {
             setPinSet(true);
+            // Keep the cached vault PIN in sync with the new value so the
+            // next auto-save re-encrypts under the new key. Without this
+            // the auto-save would silently destroy the session.
+            setVaultPin(newPin);
             // Auto-enable ONLY when setup was triggered by toggling ON
             // with no PIN configured (first-time setup flow).
             if (pinSetupFromToggle) {

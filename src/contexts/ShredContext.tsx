@@ -24,6 +24,7 @@ interface ShredState {
   algorithms: AlgorithmOption[];
   progress: ProgressState | null;
   vaultLoaded: boolean;
+  vaultPin: string | null;
   addFiles: (files: Array<{ path: string; name: string; size: number }>) => void;
   removeFile: (id: string) => void;
   clearFiles: () => void;
@@ -34,6 +35,7 @@ interface ShredState {
   setAlgorithms: (algorithms: AlgorithmOption[]) => void;
   setProgress: (progress: ProgressState | null) => void;
   updateFileStatus: (id: string, status: ShredFile["status"], error?: string) => void;
+  setVaultPin: (pin: string | null) => void;
   loadVault: (pin: string) => Promise<void>;
   saveVault: (pin: string) => Promise<void>;
 }
@@ -49,7 +51,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [vaultLoaded, setVaultLoaded] = useState(false);
   const [vaultPin, setVaultPin] = useState<string | null>(null);
-  const skipNextSave = useRef(false);
+  const lastLoadCompletedAt = useRef<number>(0);
 
   const addFiles = useCallback((newEntries: Array<{ path: string; name: string; size: number }>) => {
     setFiles((prev) => {
@@ -97,31 +99,34 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   // do not block app startup — the user can keep adding files normally.
   // On success stores the PIN for future auto-saves.
   const loadVault = useCallback(async (pin: string) => {
+    // Tracks whether we got past the initial `vault_exists` probe so the
+    // finally block can safely mark the vault as loaded. If the probe
+    // itself fails (e.g. IPC error), we leave vaultLoaded false — the
+    // auto-save effect will not fire until a future successful load.
+    let pastExistsCheck = false;
     try {
       const exists = await invoke<boolean>("vault_exists");
-      if (!exists) {
-        setVaultLoaded(true);
-        setVaultPin(pin);
-        return;
-      }
+      pastExistsCheck = true;
+      if (!exists) return;
       const paths = await invoke<string[]>("load_vault", { pin });
-      if (paths.length === 0) {
-        setVaultLoaded(true);
-        setVaultPin(pin);
-        return;
-      }
+      if (paths.length === 0) return;
       const [validFiles] = await invoke<[FileMetadata[], string[]]>(
         "validate_paths",
         { paths }
       );
-      // Skip the next auto-save on these files — they just came from the vault.
-      skipNextSave.current = true;
+      // Stamps the completion time so the auto-save effect can suppress
+      // its first run after a vault load — the files just came from disk
+      // and don't need to be re-encrypted immediately.
+      lastLoadCompletedAt.current = Date.now();
       addFiles(validFiles);
-      setVaultLoaded(true);
-      setVaultPin(pin);
     } catch (err) {
       console.error("Failed to load vault:", err);
       addLogEntry("error", `Failed to restore session: ${err}`);
+    } finally {
+      if (pastExistsCheck) {
+        setVaultLoaded(true);
+        setVaultPin(pin);
+      }
     }
   }, [addFiles, addLogEntry]);
 
@@ -141,20 +146,17 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   );
 
   // Auto-save the vault whenever the file list changes (debounced).
-  // Skips the first trigger after vault load to avoid re-saving data
-  // that was just deserialized.
+  // Skips the first trigger within 500ms of a vault load to avoid
+  // re-saving data that was just deserialized. Suppressed during an
+  // active shred (status churn would otherwise trigger a save storm).
   useEffect(() => {
-    if (!vaultLoaded || !vaultPin) return;
-    if (skipNextSave.current) {
-      skipNextSave.current = false;
-      return;
-    }
+    if (!vaultLoaded || !vaultPin || isShredding) return;
+    if (Date.now() - lastLoadCompletedAt.current < 500) return;
     const timer = setTimeout(() => {
-      invoke("save_vault", { paths: files.map((f) => f.path), pin: vaultPin })
-        .catch((err) => console.error("Auto-save vault failed:", err));
+      void saveVault(vaultPin);
     }, 1000);
     return () => clearTimeout(timer);
-  }, [files, vaultLoaded, vaultPin]);
+  }, [files, vaultLoaded, vaultPin, isShredding, saveVault]);
 
   return (
     <ShredContext.Provider
@@ -166,6 +168,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         algorithms,
         progress,
         vaultLoaded,
+        vaultPin,
         addFiles,
         removeFile,
         clearFiles,
@@ -176,6 +179,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         setAlgorithms,
         setProgress,
         updateFileStatus,
+        setVaultPin,
         loadVault,
         saveVault,
       }}
