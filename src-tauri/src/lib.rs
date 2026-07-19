@@ -63,27 +63,7 @@ pub fn run() {
             // and recreate it with the portable webview data dir.
             #[cfg(target_os = "linux")]
             {
-                use tauri::WebviewWindowBuilder;
-                use tauri::WebviewUrl;
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.close();
-                }
-                if let Err(e) = WebviewWindowBuilder::new(
-                    app,
-                    "main",
-                    WebviewUrl::App("index.html".into()),
-                )
-                .title("KnockKnock")
-                .inner_size(1200.0, 800.0)
-                .min_inner_size(900.0, 600.0)
-                .decorations(false)
-                .drag_and_drop(true)
-                .data_directory(webview_dir_clone.clone())
-                .build()
-                {
-                    eprintln!("[KnockKnock] Failed to create main window: {e}");
-                    return Err(e.into());
-                }
+                create_main_window_linux(app, &webview_dir_clone)?;
             }
 
             // Windows/macOS: window already created by tauri.conf.json.
@@ -146,4 +126,28 @@ fn startup_fatal(msg: &str) -> ! {
     }
 
     std::process::exit(1);
+}
+
+/// Close the auto-created main window from tauri.conf.json and
+/// recreate it with a custom data directory for portable WebView.
+#[cfg(target_os = "linux")]
+fn create_main_window_linux(
+    app: &tauri::AppHandle,
+    webview_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::WebviewUrl;
+    use tauri::WebviewWindowBuilder;
+
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.close();
+    }
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .title("KnockKnock")
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(900.0, 600.0)
+        .decorations(false)
+        .drag_and_drop(true)
+        .data_directory(webview_dir.to_path_buf())
+        .build()?;
+    Ok(())
 }
