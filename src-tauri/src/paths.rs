@@ -122,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn portable_data_dir_returns_err_for_read_only_location() {
+    fn portable_data_dir_ok_in_test_env() {
         // The real test environment is writable, so we test the error
         // formatting path indirectly: verify that the error message
         // contains the expected portable guidance.

@@ -111,7 +111,11 @@ pub fn run() {
 fn startup_fatal(msg: &str) -> ! {
     let _ = native_dialog::DialogBuilder::message()
         .set_title("KnockKnock — Startup Error")
-        .set_text(msg)
+        .set_text(&format!(
+            "{}\n\nTip: KnockKnock is portable — move the app to a\n\
+             writable folder (e.g. Desktop, Documents, or ~/Applications).",
+            msg
+        ))
         .set_level(native_dialog::MessageLevel::Error)
         .alert()
         .show();

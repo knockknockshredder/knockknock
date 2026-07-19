@@ -72,9 +72,9 @@ export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }
     setSubmitting(true);
     try {
       if (requireOldPin) {
-        await invoke("change_pin", { oldPin, newPin: pin });
+        await invoke("change_pin", { old_pin: oldPin, new_pin: pin });
       } else {
-        await invoke("setup_pin", { pinValue: pin });
+        await invoke("setup_pin", { pin_value: pin });
       }
       onPinSet();
       onOpenChange(false);
