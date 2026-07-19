@@ -76,3 +76,8 @@ local_cache/
 .slim/
 !slim/worktrees.json
 .worktrees/
+
+# BEGIN oh-my-opencode-slim worktrees
+.slim/worktrees/
+.slim/worktrees.json
+# END oh-my-opencode-slim worktrees
