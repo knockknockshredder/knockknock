@@ -16,6 +16,7 @@ import { useBrowserDetection } from "@/hooks/useBrowserDetection";
 function AppGate() {
   const [pinNeeded, setPinNeeded] = useState<boolean | null>(null);
   const [gatePassed, setGatePassed] = useState(false);
+  const [configError, setConfigError] = useState(false);
   const { loadVault, addLogEntry } = useShred();
 
   useEffect(() => {
@@ -25,10 +26,25 @@ function AppGate() {
         if (!enabled) setGatePassed(true);
       })
       .catch(() => {
-        setPinNeeded(false);
-        setGatePassed(true);
+        setPinNeeded(true);  // assume PIN required on error
+        // DO NOT set gatePassed — keep showing gate
       });
-  }, []);
+
+    // Defensive: verify configuration consistency
+    if (pinNeeded) {
+      invoke<boolean>("has_pin").then((has) => {
+        if (!has) {
+          // Inconsistent state — enabled flag set but no hash. Show error.
+          setConfigError(true);
+          setPinNeeded(false);  // don't show normal gate — show error screen
+        }
+      }).catch(() => {
+        // If has_pin IPC fails, treat as config error too
+        setConfigError(true);
+        setPinNeeded(false);
+      });
+    }
+  }, [pinNeeded]);
 
   const handleGateVerified = async (pin: string) => {
     try {
@@ -51,6 +67,22 @@ function AppGate() {
 
   // Gate NOT passed: only show the PIN dialog, nothing else.
   // The dialog cannot be dismissed — user MUST authenticate.
+  if (configError) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background p-6">
+        <div className="max-w-md text-center">
+          <h2 className="font-sans text-xl font-semibold text-destructive">
+            Configuration Error
+          </h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            The PIN configuration is inconsistent. Please reinstall the app or
+            contact support.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!gatePassed) {
     return (
       <PinVerify

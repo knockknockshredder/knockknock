@@ -57,7 +57,9 @@ export function ShredSection() {
 
   // Check if PIN is enabled on mount
   useEffect(() => {
-    invoke<boolean>("is_pin_enabled").then(setPinNeeded).catch(() => setPinNeeded(false));
+    invoke<boolean>("is_pin_enabled")
+      .then(setPinNeeded)
+      .catch(() => setPinNeeded(true));  // fail closed — assume PIN required
   }, []);
 
   const pendingFiles = files.filter((f) => f.status === "pending");
