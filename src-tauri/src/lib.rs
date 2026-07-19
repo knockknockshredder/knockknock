@@ -47,7 +47,7 @@ pub fn run() {
         );
     }
 
-    let webview_dir_clone = webview_dir.clone();
+    let _webview_dir_clone = webview_dir.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
