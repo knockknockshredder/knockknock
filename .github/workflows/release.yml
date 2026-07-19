@@ -16,17 +16,32 @@ jobs:
       matrix:
         include:
           - platform: macos-14
-            args: --target aarch64-apple-darwin
-            rust_target: aarch64-apple-darwin
-          - platform: macos-14
-            args: --target x86_64-apple-darwin
-            rust_target: x86_64-apple-darwin
+            target: aarch64-apple-darwin
+            build_cmd: pnpm tauri build --bundles dmg --target aarch64-apple-darwin
+            artifact_name: KnockKnock-macos-arm64.dmg
+            artifact_path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/KnockKnock_*_aarch64.dmg
+            min_size: 8000000
+          # Intel mac: run on macos-13 (Intel host) to avoid
+          # cross-compile issues — building x86_64 on ARM requires
+          # osxcross + Apple SDK setup that isn't worth the complexity.
+          - platform: macos-13
+            target: x86_64-apple-darwin
+            build_cmd: pnpm tauri build --bundles dmg --target x86_64-apple-darwin
+            artifact_name: KnockKnock-macos-x64.dmg
+            artifact_path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/KnockKnock_*_x64.dmg
+            min_size: 8000000
           - platform: ubuntu-22.04
-            args: ''
-            rust_target: ''
+            target: ''
+            build_cmd: pnpm tauri build --bundles appimage
+            artifact_name: KnockKnock-linux-x64.AppImage
+            artifact_path: src-tauri/target/release/bundle/appimage/KnockKnock_*.AppImage
+            min_size: 60000000
           - platform: windows-latest
-            args: ''
-            rust_target: ''
+            target: ''
+            build_cmd: pnpm tauri build --no-bundle
+            artifact_name: KnockKnock-windows-x64.exe
+            artifact_path: src-tauri/target/release/knockknock.exe
+            min_size: 5000000
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -52,40 +67,99 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust_target }}
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build
+        run: ${{ matrix.build_cmd }}
+
+      # Verify the artifact is non-empty and plausibly sized BEFORE upload.
+      # Without this, a silent build failure could upload a stale or
+      # partial binary. Minimum sizes are empirically observed; actual
+      # builds are larger.
+      - name: Verify artifact
+        run: |
+          FILE=$(ls ${{ matrix.artifact_path }} 2>/dev/null | head -1)
+          if [ -z "$FILE" ]; then
+            echo "::error::Artifact not found at ${{ matrix.artifact_path }}"
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$FILE" 2>/dev/null || stat -f%z "$FILE")
+          echo "Artifact: $FILE ($SIZE bytes)"
+          if [ "$SIZE" -lt ${{ matrix.min_size }} ]; then
+            echo "::error::Artifact too small ($SIZE < ${{ matrix.min_size }}). Build likely failed silently."
+            exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'KnockKnock ${{ github.ref_name }}'
-          releaseBody: |
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+
+  checksums:
+    needs: release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          cd artifacts
+          find . -type f -name 'KnockKnock-*' -exec sha256sum {} \; > ../SHA256SUMS.txt
+          cat ../SHA256SUMS.txt
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v5
+        with:
+          name: SHA256SUMS
+          path: SHA256SUMS.txt
+
+  publish:
+    needs: [release, checksums]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          draft: true
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.AppImage
+            artifacts/**/*.exe
+            artifacts/**/SHA256SUMS.txt
+          name: 'KnockKnock ${{ github.ref_name }}'
+          body: |
             ## KnockKnock ${{ github.ref_name }}
-            
+
             Emergency file shredder with browser profile cleanup.
-            
-            ### Downloads
-            Download the installer for your platform below.
-            
-            ### Installation
-            - **Windows:** Run the `.exe` installer or `.msi` package
-            - **macOS:** Open `.dmg`, drag to Applications, right-click → Open on first launch
-            - **Linux:** `sudo dpkg -i *.deb` or run the `.AppImage` directly
-            
-            ### What's New
-            - Initial release
-            - One-click file shredding (NIST 800-88 Clear)
-            - Browser profile cleanup (Chrome, Firefox, Edge, Safari, Brave, Opera, Vivaldi)
-            - SSD-aware shredding with TRIM
-            - PIN protection
-            - System tray support
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+
+            ### Downloads (Portable)
+            - **Windows:** Download `KnockKnock-windows-x64.exe`, place in any writable folder, double-click
+            - **macOS:** Open `.dmg`, drag `KnockKnock.app` to any writable folder, right-click → Open
+            - **Linux:** Download `.AppImage`, `chmod +x`, run
+
+            ### Verification
+            Verify integrity with `SHA256SUMS.txt`:
+            ```sh
+            sha256sum -c SHA256SUMS.txt
+            ```
+
+            ### Data
+            All app data is stored in a `KnockKnock-data/` folder next to the app.
+            Delete the folder to remove all traces.
