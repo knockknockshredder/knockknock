@@ -5,13 +5,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useShred } from "@/contexts/ShredContext";
-import { cn } from "@/lib/utils";
-
-interface FileMetadata {
-  path: string;
-  name: string;
-  size: number;
-}
+import { cn, isWindows } from "@/lib/utils";
+import type { FileMetadata } from "@/types";
 
 interface FileDropZoneProps {
   compact?: boolean;
@@ -66,17 +61,30 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
 
   const handleFileClick = async () => {
     try {
-      const selected = await open({
-        multiple: true,
-        directory: false,
-        title: "Select files to shred",
-      });
-      if (selected) {
-        const paths = Array.isArray(selected) ? selected : [selected];
+      let paths: string[];
+      if (isWindows()) {
+        // Custom IFileOpenDialog with FOS_NODEREFERENCELINKS so `.lnk`
+        // shortcuts return as the link file itself, not their resolved target.
+        paths = await invoke<string[]>("open_files_windows");
+      } else {
+        const selected = await open({
+          multiple: true,
+          directory: false,
+          title: "Select files to shred",
+        });
+        if (!selected) return;
+        paths = Array.isArray(selected) ? selected : [selected];
+      }
+      if (paths.length > 0) {
         await validateAndAdd(paths);
       }
     } catch (err) {
-      addLogEntry("error", `File dialog failed: ${err}`);
+      const msg = String(err);
+      // IFileDialog::Show returns HRESULT_FROM_WIN32(ERROR_CANCELLED)
+      // (0x800704C7) when the user dismisses the dialog. Treat that as a
+      // silent no-op so cancellation doesn't pollute the log.
+      if (/cancel/i.test(msg) || /0x800704C7/i.test(msg)) return;
+      addLogEntry("error", `File dialog failed: ${msg}`);
     }
   };
 

@@ -30,6 +30,7 @@ pub fn run() {
             commands::shred::cleanup_orphans,
             commands::shred::get_algorithms,
             commands::shred::validate_paths,
+            commands::shred::open_files_windows,
             commands::shred::get_drive_info,
             commands::shred::get_all_drive_info,
             commands::shred::request_elevation,

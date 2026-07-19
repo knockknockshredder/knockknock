@@ -43,6 +43,10 @@ pub enum PathClassification {
 }
 
 pub fn validate_path(path: &Path, allow_shortcut: bool) -> Result<(), ShredError> {
+    if path.as_os_str().is_empty() {
+        return Err(ShredError::EmptyPath);
+    }
+
     let classification = classify_path(path)?;
     match classification {
         PathClassification::Normal => validate_path_inner(path),

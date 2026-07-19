@@ -15,6 +15,11 @@ pub mod verification;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashSet;
+use std::path::PathBuf;
+
+use crate::shredder::validation::{classify_path, PathClassification};
+
 pub use cancel::CancellationToken;
 pub use errors::ShredError;
 pub use traits::{PlatformIo, ProgressReporter, ShredAlgorithm, VerificationStrategy};
@@ -22,8 +27,147 @@ pub use types::{
     MediaType, PatternType, ShredReport, ShredReportError, ShredResult, VerificationLevel,
 };
 
-/// Shred a single file with full pipeline
+/// Shred a single file with full pipeline, including shortcut/symlink dispatch.
+///
+/// `shred_targets` controls whether shortcut targets are also shredded after the
+/// link file itself. `visited` is the recursion guard — a `HashSet` of paths
+/// already processed in this batch. If `path` is already present, the call
+/// returns a successful no-op result (the path was handled by an earlier
+/// invocation, possibly via a circular shortcut chain).
 pub fn shred_file(
+    path: &std::path::Path,
+    algorithm: &dyn ShredAlgorithm,
+    passes: u32,
+    pattern: PatternType,
+    verification_level: VerificationLevel,
+    progress: &dyn ProgressReporter,
+    shred_targets: bool,
+    visited: &mut HashSet<PathBuf>,
+    cancel: &CancellationToken,
+) -> Result<ShredResult, ShredError> {
+    // Recursion guard. Insert the path BEFORE classifying so a circular
+    // shortcut chain (A -> B -> A) cannot recurse indefinitely. If the path
+    // is already in the set, the caller has already shredded (or decided not
+    // to shred) it in this batch — return a successful no-op.
+    if !visited.insert(path.to_path_buf()) {
+        eprintln!(
+            "[KnockKnock] Warning: Circular shortcut reference detected at {:?}; skipping.",
+            path
+        );
+        progress.on_file_complete(
+            path,
+            &ShredResult {
+                success: true,
+                passes_completed: 0,
+                bytes_written: 0,
+                errors: vec![],
+            },
+        );
+        return Ok(ShredResult {
+            success: true,
+            passes_completed: 0,
+            bytes_written: 0,
+            errors: vec![],
+        });
+    }
+
+    // Classify the path as Normal or Shortcut (any link type: .lnk, NTFS
+    // symlink, junction, Unix symlink). The classification result drives the
+    // dispatch below.
+    let classification = classify_path(path)?;
+
+    match classification {
+        PathClassification::Normal => {
+            // Existing shred pipeline, untouched.
+            shred_file_inner(
+                path,
+                algorithm,
+                passes,
+                pattern,
+                verification_level,
+                progress,
+                cancel,
+            )
+        }
+        PathClassification::Shortcut { target } => {
+            // Always shred the link file itself first — that is what the user
+            // selected. The .lnk (or symlink) is a real file on disk and goes
+            // through the standard pipeline.
+            let link_result = shred_file_inner(
+                path,
+                algorithm,
+                passes,
+                pattern,
+                verification_level,
+                progress,
+                cancel,
+            )?;
+
+            if !shred_targets {
+                // User did NOT opt in to shredding targets. Surface this loudly
+                // so the operator is aware the target survived.
+                eprintln!(
+                    "[KnockKnock] Shortcut shredded. Target {} was NOT shredded.",
+                    target.display()
+                );
+                return Ok(link_result);
+            }
+
+            // User opted in. Enforce depth limit 1: if the target is itself
+            // a shortcut, stop. We refuse to follow shortcut chains because
+            // each hop multiplies the surface area for unintended shreds.
+            let target_class = classify_path(&target)?;
+            if matches!(target_class, PathClassification::Shortcut { .. }) {
+                eprintln!(
+                    "[KnockKnock] Target {} is itself a shortcut or symlink; \
+                     refusing to follow (depth limit 1). Enable 'Also shred linked targets' \
+                     and run again to destroy the chain manually.",
+                    target.display()
+                );
+                return Ok(link_result);
+            }
+
+            // Target is a Normal file/dir. Run the full validation pipeline on
+            // it (allow_shortcut: false — if the TOCTOU window revealed a
+            // symlink we still refuse).
+            crate::shredder::validation::validate_path(&target, false)?;
+
+            // Recurse into the target. The visited set already contains `path`,
+            // so the target gets inserted normally and is shredded in full.
+            let target_result = shred_file(
+                &target,
+                algorithm,
+                passes,
+                pattern,
+                verification_level,
+                progress,
+                shred_targets,
+                visited,
+                cancel,
+            )?;
+
+            // Combine the two results. Success requires BOTH halves to succeed;
+            // errors from either side propagate in the merged vector.
+            let mut combined_errors = link_result.errors;
+            combined_errors.extend(target_result.errors);
+            let combined_success = link_result.success && target_result.success;
+            let combined_passes = link_result.passes_completed + target_result.passes_completed;
+            let combined_bytes = link_result.bytes_written + target_result.bytes_written;
+
+            Ok(ShredResult {
+                success: combined_success,
+                passes_completed: combined_passes,
+                bytes_written: combined_bytes,
+                errors: combined_errors,
+            })
+        }
+    }
+}
+
+/// Inner shred pipeline — the actual overwrite/rename/truncate/delete sequence
+/// for a single path. Assumes the caller has already validated and classified
+/// the path; this function never re-checks for shortcuts.
+fn shred_file_inner(
     path: &std::path::Path,
     algorithm: &dyn ShredAlgorithm,
     passes: u32,
@@ -32,8 +176,13 @@ pub fn shred_file(
     progress: &dyn ProgressReporter,
     cancel: &CancellationToken,
 ) -> Result<ShredResult, ShredError> {
-    // 1. Validate path
-    validation::validate_path(path)?;
+    // 1. Validate path. `allow_shortcut: false` mirrors the original
+    //    behavior (reject symlinks with an error). The outer `shred_file`
+    //    wrapper already classified this path as Normal before calling
+    //    here, so the shortcut check is a defense-in-depth guard against
+    //    a TOCTOU race where the file becomes a link between classification
+    //    and validation. Failing loud beats shredding a symlink target.
+    validation::validate_path(path, false)?;
 
     // 2. Reject network drives
     if validation::is_network_drive(path) {
@@ -249,7 +398,11 @@ pub fn shred_file(
     Ok(result)
 }
 
-/// Shred multiple files, continuing on error
+/// Shred multiple files, continuing on error.
+///
+/// `shred_targets` propagates to each individual `shred_file` call. A fresh
+/// `visited` set is created per batch — cross-batch deduplication is not
+/// required (each user-initiated shred is a distinct operation).
 pub fn shred_files(
     paths: Vec<std::path::PathBuf>,
     algorithm: std::sync::Arc<dyn ShredAlgorithm>,
@@ -257,6 +410,7 @@ pub fn shred_files(
     pattern: PatternType,
     verification_level: VerificationLevel,
     progress: std::sync::Arc<dyn ProgressReporter>,
+    shred_targets: bool,
 ) -> ShredReport {
     use crate::commands::error::ShredErrorDto;
 
@@ -268,6 +422,9 @@ pub fn shred_files(
     let mut total_bytes = 0u64;
 
     let cancel_token = crate::shredder::cancel::get_global_token();
+
+    // Fresh visited set per batch.
+    let mut visited: HashSet<PathBuf> = HashSet::new();
 
     for path in &paths {
         if cancel_token.is_cancelled() {
@@ -282,6 +439,8 @@ pub fn shred_files(
             pattern,
             verification_level,
             progress.as_ref(),
+            shred_targets,
+            &mut visited,
             &cancel_token,
         ) {
             Ok(result) => {

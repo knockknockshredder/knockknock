@@ -5,6 +5,7 @@ use crate::shredder::algorithms::all_algorithms;
 use crate::shredder::logging::LogObfuscation;
 use crate::shredder::progress::TauriProgressReporter;
 use crate::shredder::types::*;
+use crate::shredder::validation::{PathClassification, classify_path};
 use crate::shredder::VerificationLevel;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,6 +20,7 @@ pub async fn shred_files(
     pattern: PatternType,
     verification_level: VerificationLevel,
     log_obfuscation: String,
+    shred_targets: bool,
 ) -> Result<ShredReport, String> {
     let obfuscation = match log_obfuscation.as_str() {
         "numbered" => LogObfuscation::Numbered,
@@ -45,7 +47,15 @@ pub async fn shred_files(
     let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
 
     let report = tokio::task::spawn_blocking(move || {
-        crate::shredder::shred_files(path_bufs, algorithm, passes, pattern, verification_level, progress)
+        crate::shredder::shred_files(
+            path_bufs,
+            algorithm,
+            passes,
+            pattern,
+            verification_level,
+            progress,
+            shred_targets,
+        )
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?;
@@ -152,15 +162,16 @@ pub fn get_algorithms() -> Vec<AlgorithmInfo> {
         .collect()
 }
 
-#[derive(serde::Serialize)]
-pub struct FileMetadata {
-    pub path: String,
-    pub name: String,
-    pub size: u64,
-}
-
-/// Collect metadata for a single file
-fn collect_file_metadata(path: &std::path::Path, path_str: &str) -> Option<FileMetadata> {
+/// Collect metadata for a single path.
+///
+/// `is_shortcut` and `shortcut_target` are populated only when the caller
+/// passed a non-`Normal` classification. Normal files pass `false, None`.
+fn collect_file_metadata(
+    path: &std::path::Path,
+    path_str: &str,
+    is_shortcut: bool,
+    shortcut_target: Option<String>,
+) -> Option<FileMetadata> {
     let metadata = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(_) => return None,
@@ -175,10 +186,12 @@ fn collect_file_metadata(path: &std::path::Path, path_str: &str) -> Option<FileM
         path: path_str.to_string(),
         name,
         size: metadata.len(),
+        is_shortcut,
+        shortcut_target,
     })
 }
 
-/// Recursively collect all files from a directory
+/// Recursively collect all files from a directory, classifying each entry.
 fn collect_files_from_dir(
     dir: &std::path::Path,
     valid: &mut Vec<FileMetadata>,
@@ -205,25 +218,48 @@ fn collect_files_from_dir(
     for entry in entries.flatten() {
         let path = entry.path();
 
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(m) => m,
+        // Classify first — shortcuts are surfaced in `valid` with their
+        // resolved target rather than silently skipped. A symlink-to-directory
+        // would short-circuit here and never recurse, which is the desired
+        // safety behaviour for the no-`shred_targets` mode.
+        let classification = match classify_path(&path) {
+            Ok(c) => c,
             Err(e) => {
-                errors.push(format!("Cannot stat {:?}: {}", path, e));
+                errors.push(format!("Cannot classify {:?}: {}", path, e));
                 continue;
             }
         };
 
-        if metadata.file_type().is_symlink() {
-            continue; // Skip symlinks
-        }
-
-        if metadata.file_type().is_file() {
-            let path_str = path.to_string_lossy().to_string();
-            if let Some(meta) = collect_file_metadata(&path, &path_str) {
-                valid.push(meta);
+        match classification {
+            PathClassification::Shortcut { target } => {
+                let path_str = path.to_string_lossy().to_string();
+                if let Some(meta) = collect_file_metadata(
+                    &path,
+                    &path_str,
+                    true,
+                    Some(target.to_string_lossy().to_string()),
+                ) {
+                    valid.push(meta);
+                }
             }
-        } else if metadata.file_type().is_dir() {
-            collect_files_from_dir(&path, valid, errors, depth + 1);
+            PathClassification::Normal => {
+                let metadata = match std::fs::symlink_metadata(&path) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        errors.push(format!("Cannot stat {:?}: {}", path, e));
+                        continue;
+                    }
+                };
+
+                if metadata.file_type().is_file() {
+                    let path_str = path.to_string_lossy().to_string();
+                    if let Some(meta) = collect_file_metadata(&path, &path_str, false, None) {
+                        valid.push(meta);
+                    }
+                } else if metadata.file_type().is_dir() {
+                    collect_files_from_dir(&path, valid, errors, depth + 1);
+                }
+            }
         }
     }
 }
@@ -237,28 +273,132 @@ pub fn validate_paths(
     for path_str in paths {
         let path = std::path::Path::new(&path_str);
 
-        // Use symlink_metadata so a symlink to a missing target isn't silently
-        // treated as an existing file (path.exists()/is_file() follow links).
-        let sym_meta = match std::fs::symlink_metadata(path) {
-            Ok(m) => m,
+        // Classify via the same logic the shredder uses, so the metadata
+        // surfaced to the UI matches what the shredder will see. A
+        // classification error (e.g. file disappeared between selection and
+        // validation) is silently skipped — `validate_path` already reports
+        // hard failures during shred.
+        let classification = match classify_path(path) {
+            Ok(c) => c,
             Err(_) => continue,
         };
 
-        if sym_meta.file_type().is_symlink() {
-            // Symlinks are never shredded — skip, never recurse. The actual
-            // target is also rejected by validate_path() during shred.
-            continue;
-        }
-
-        if sym_meta.file_type().is_file() {
-            if let Some(meta) = collect_file_metadata(path, &path_str) {
-                valid.push(meta);
+        match classification {
+            PathClassification::Shortcut { target } => {
+                // Surface the shortcut with its resolved target. The frontend
+                // uses `is_shortcut` to render the warning badge and
+                // `shortcut_target` for the tooltip.
+                if let Some(meta) = collect_file_metadata(
+                    path,
+                    &path_str,
+                    true,
+                    Some(target.to_string_lossy().to_string()),
+                ) {
+                    valid.push(meta);
+                }
             }
-        } else if sym_meta.file_type().is_dir() {
-            collect_files_from_dir(path, &mut valid, &mut errors, 0);
+            PathClassification::Normal => {
+                // `Normal` covers both files and directories. Recurse into
+                // directories; treat plain files as shred candidates.
+                let sym_meta = match std::fs::symlink_metadata(path) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+
+                if sym_meta.file_type().is_file() {
+                    if let Some(meta) = collect_file_metadata(path, &path_str, false, None) {
+                        valid.push(meta);
+                    }
+                } else if sym_meta.file_type().is_dir() {
+                    collect_files_from_dir(path, &mut valid, &mut errors, 0);
+                }
+            }
         }
     }
     Ok((valid, errors))
+}
+
+/// Open a multi-select file dialog that returns raw `.lnk` paths without
+/// resolving shortcut targets.
+///
+/// The bug being fixed: `@tauri-apps/plugin-dialog` invokes the standard
+/// `IFileOpenDialog` without `FOS_NODEREFERENCELINKS`, so when a user picks a
+/// `.lnk` file, the OS resolves it to the target `.exe` and the backend
+/// shreds the wrong file. This command calls `IFileOpenDialog` directly with
+/// the flag set, so the returned paths are the link files themselves.
+///
+/// Drag-drop already passes raw paths (no resolution), so this command is
+/// only used by the explicit "Add Files" button on Windows.
+#[cfg(windows)]
+#[tauri::command]
+pub fn open_files_windows() -> Result<Vec<String>, String> {
+    use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+    use windows::Win32::UI::Shell::{
+        FOS_FILEMUSTEXIST, FOS_NODEREFERENCELINKS, FOS_PATHMUSTEXIST, FileOpenDialog,
+        FILEOPENDIALOGOPTIONS, IFileOpenDialog, SIGDN,
+    };
+
+    unsafe {
+        // CoCreateInstance returns a COM pointer; bind it to the
+        // IFileOpenDialog interface so we can use the high-level methods.
+        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| format!("Failed to create file dialog: {}", e))?;
+
+        // Combine the three required flags into the FILEOPENDIALOGOPTIONS
+        // bitfield. The `.0` accessors strip the newtype wrappers.
+        let options = FILEOPENDIALOGOPTIONS(
+            FOS_FILEMUSTEXIST.0 | FOS_PATHMUSTEXIST.0 | FOS_NODEREFERENCELINKS.0,
+        );
+        dialog
+            .SetOptions(options)
+            .map_err(|e| format!("Failed to set dialog options: {}", e))?;
+
+        // `None` here means no parent HWND — fine for a modeless top-level
+        // dialog. Tauri commands run on their own thread and we do not have
+        // access to the window handle here.
+        dialog
+            .Show(None)
+            .map_err(|e| format!("Failed to show dialog: {}", e))?;
+
+        let results = dialog
+            .GetResults()
+            .map_err(|e| format!("Failed to get dialog results: {}", e))?;
+        let count = results
+            .GetCount()
+            .map_err(|e| format!("Failed to get result count: {}", e))?;
+        let mut paths = Vec::with_capacity(count as usize);
+
+        for i in 0..count {
+            let item = results
+                .GetItemAt(i)
+                .map_err(|e| format!("Failed to get item at index {}: {}", i, e))?;
+            // SIGDN_FILESYSPATH (= 0x80058000) returns the filesystem path
+            // verbatim. The spec example showed `GetDisplayName(0)` which is
+            // SIGDN_NORMALDISPLAY — that returns a human-friendly display
+            // name like "Notepad.lnk", NOT a filesystem path. We need the
+            // path so the shredder receives the raw `.lnk` file, not its
+            // display label. SIGDN_FILESYSPATH is the correct constant.
+            let display_name = item
+                .GetDisplayName(SIGDN(0x80058000u32 as i32))
+                .map_err(|e| format!("Failed to get display name for item {}: {}", i, e))?;
+            // PWSTR -> String. `to_string()` is unsafe (reads the raw wide
+            // pointer); in windows-rs 0.59 it returns `Result<String,
+            // windows_core::Error>`. We are already inside an unsafe block
+            // for COM, so this is the right scope.
+            let path_str = display_name
+                .to_string()
+                .map_err(|e| format!("Failed to convert display name for item {}: {}", i, e))?;
+            paths.push(path_str);
+        }
+
+        Ok(paths)
+    }
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn open_files_windows() -> Result<Vec<String>, String> {
+    Err("This command is only available on Windows".to_string())
 }
 
 /// Detect drive info for a single path.

@@ -84,6 +84,9 @@ pub async fn shred_browser_data(
         Arc::new(TauriProgressReporter::new(app, LogObfuscation::None));
 
     let report = tokio::task::spawn_blocking(move || {
+        // Browser profile data is plain files inside the profile directory;
+        // shortcuts are not expected there and we never want to follow them
+        // (a stray .lnk in a profile should not drag in user files outside it).
         crate::shredder::shred_files(
             files_to_shred,
             algorithm,
@@ -91,6 +94,7 @@ pub async fn shred_browser_data(
             request.pattern,
             request.verification_level,
             progress,
+            false,
         )
     })
     .await

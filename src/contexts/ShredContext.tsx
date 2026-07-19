@@ -14,6 +14,7 @@ import type {
   LogEntry,
   AlgorithmOption,
   ProgressState,
+  FileMetadata,
 } from "@/types";
 
 interface ShredState {
@@ -25,7 +26,7 @@ interface ShredState {
   progress: ProgressState | null;
   vaultLoaded: boolean;
   vaultPin: string | null;
-  addFiles: (files: Array<{ path: string; name: string; size: number }>) => void;
+  addFiles: (files: FileMetadata[]) => void;
   removeFile: (id: string) => void;
   clearFiles: () => void;
   setAlgorithmIndex: (index: number) => void;
@@ -53,7 +54,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   const [vaultPin, setVaultPin] = useState<string | null>(null);
   const lastLoadCompletedAt = useRef<number>(0);
 
-  const addFiles = useCallback((newEntries: Array<{ path: string; name: string; size: number }>) => {
+  const addFiles = useCallback((newEntries: FileMetadata[]) => {
     setFiles((prev) => {
       const existingPaths = new Set(prev.map((f) => f.path));
       const newFiles: ShredFile[] = newEntries
@@ -64,6 +65,8 @@ export function ShredProvider({ children }: { children: ReactNode }) {
           name: entry.name,
           size: entry.size,
           status: "pending" as const,
+          is_shortcut: entry.is_shortcut,
+          shortcut_target: entry.shortcut_target,
         }));
       return [...prev, ...newFiles];
     });
@@ -200,13 +203,6 @@ export function ShredProvider({ children }: { children: ReactNode }) {
       {children}
     </ShredContext.Provider>
   );
-}
-
-/** Minimal shape returned by the Rust `validate_paths` command. */
-interface FileMetadata {
-  path: string;
-  name: string;
-  size: number;
 }
 
 export function useShred() {

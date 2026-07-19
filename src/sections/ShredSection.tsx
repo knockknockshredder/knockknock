@@ -46,6 +46,7 @@ export function ShredSection() {
   const [passes, setPasses] = useState(1);
   const [pattern, setPattern] = useState<"random" | "zeros" | "ones">("random");
   const [verificationLevel, setVerificationLevel] = useState<"none" | "sample" | "full">("sample");
+  const [shredTargets, setShredTargets] = useState(false);
   const unlistenRef = useRef<(() => void) | null>(null);
   const isExecutingRef = useRef(false); // guards against StrictMode double-fire
 
@@ -66,6 +67,9 @@ export function ShredSection() {
   const selectedProfileCount = getSelectedCount();
   const currentAlgorithm = algorithms[algorithmIndex];
   const runningBrowsers = browsers.filter((b) => b.isRunning).map((b) => b.name);
+  // Count of shortcut/symlink entries (pending or otherwise). Drives the
+  // visibility of the "Also shred linked targets" opt-in checkbox.
+  const shortcutCount = files.filter((f) => f.is_shortcut).length;
 
   // Load algorithms on mount and sync default from settings
   useEffect(() => {
@@ -152,6 +156,7 @@ export function ShredSection() {
         pattern,
         verificationLevel,
         logObfuscation,
+        shredTargets,
       });
 
       // Map report errors to per-file status
@@ -265,6 +270,16 @@ export function ShredSection() {
           onCancel={handleCancel}
           progress={progress}
         />
+        {shortcutCount > 0 && (
+          <label className="flex items-center gap-2 text-sm text-amber-400 mt-2">
+            <input
+              type="checkbox"
+              checked={shredTargets}
+              onChange={(e) => setShredTargets(e.target.checked)}
+            />
+            Also shred linked targets ({shortcutCount})
+          </label>
+        )}
       </div>
       <ConfirmationDialog
         open={dialogOpen}

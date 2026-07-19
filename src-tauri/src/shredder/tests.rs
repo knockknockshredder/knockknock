@@ -167,14 +167,17 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn test_validation_rejects_system_paths() {
-        let result = validate_path(std::path::Path::new("C:\\Windows\\system32\\cmd.exe"));
+        let result = validate_path(
+            std::path::Path::new("C:\\Windows\\system32\\cmd.exe"),
+            false,
+        );
         assert!(matches!(result, Err(ShredError::SystemFile(_))));
     }
 
     #[test]
     fn test_validation_rejects_empty_path() {
         assert!(matches!(
-            validate_path(std::path::Path::new("")),
+            validate_path(std::path::Path::new(""), false),
             Err(ShredError::EmptyPath)
         ));
     }

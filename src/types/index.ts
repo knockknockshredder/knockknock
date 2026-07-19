@@ -9,6 +9,22 @@ export interface ShredFile {
   size: number;
   status: "pending" | "shredding" | "done" | "error";
   error?: string;
+  is_shortcut: boolean;
+  shortcut_target: string | null;
+}
+
+/**
+ * Metadata returned by the Rust `validate_paths` command.
+ * `is_shortcut` flags `.lnk` shell shortcuts, NTFS symlinks, junctions,
+ * and Unix symlinks. `shortcut_target` is the resolved target path when
+ * classification found one (null for normal files).
+ */
+export interface FileMetadata {
+  path: string;
+  name: string;
+  size: number;
+  is_shortcut: boolean;
+  shortcut_target: string | null;
 }
 
 export type LogLevel = "info" | "success" | "warning" | "error" | "command";

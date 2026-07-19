@@ -100,3 +100,18 @@ pub enum VerificationLevel {
     Sample,
     Full,
 }
+
+/// Metadata returned to the frontend for each file discovered during
+/// `validate_paths`.
+///
+/// `is_shortcut` flags `.lnk` shell shortcuts, NTFS symlinks, junctions, and
+/// Unix symlinks — any path whose target would survive the link's destruction.
+/// `shortcut_target` is the resolved target path when classification found one.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileMetadata {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    pub is_shortcut: bool,
+    pub shortcut_target: Option<String>,
+}

@@ -46,7 +46,21 @@ export function FileListItem({ file }: { file: ShredFile }) {
     <div className="flex items-center gap-3 border-b border-border bg-surface px-4 py-2 hover:bg-elevated">
       <StatusIcon status={file.status} />
       <div className="min-w-0 flex-1">
-        <p className="truncate font-mono text-sm text-foreground">{file.name}</p>
+        <div className="flex items-center gap-1 min-w-0">
+          <p className="truncate font-mono text-sm text-foreground">{file.name}</p>
+          {file.is_shortcut && (
+            <span
+              title={
+                file.shortcut_target
+                  ? `Shortcut to: ${file.shortcut_target}`
+                  : "Shortcut"
+              }
+              className="shrink-0 text-amber-500"
+            >
+              ⚠️
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <p className="font-mono text-xs text-muted-foreground">
             {file.size > 0
