@@ -34,7 +34,7 @@ libc = "0.2"
 tokio = { version = "1", features = ["rt"] }
 tauri-plugin-dialog = "2.7.1"
 bcrypt = "0.15"
-native-dialog = "0.7"
+native-dialog = "0.9"
 lazy_static = "1.5"
 aes-gcm = "0.10"
 pbkdf2 = { version = "0.12", features = ["hmac"] }

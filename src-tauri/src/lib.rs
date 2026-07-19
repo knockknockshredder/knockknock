@@ -129,11 +129,12 @@ pub fn run() {
 /// Show a fatal startup error via native-dialog AND write a log
 /// to the OS temp dir (which is always writable). Always exits.
 fn startup_fatal(msg: &str) -> ! {
-    let _ = native_dialog::MessageDialog::new()
+    let _ = native_dialog::DialogBuilder::message()
         .set_title("KnockKnock — Startup Error")
         .set_text(msg)
-        .set_type(native_dialog::MessageType::Error)
-        .show_alert();
+        .set_level(native_dialog::MessageLevel::Error)
+        .alert()
+        .show();
 
     // Fallback log file in OS temp dir — guaranteed writable even if
     // the exe dir is read-only or CWD is a network mount.
