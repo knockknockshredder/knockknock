@@ -2,7 +2,7 @@
 
 use crate::shredder::errors::ShredError;
 use crate::shredder::types::HardLinkInfo;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const SYSTEM_PATHS: &[&str] = &[
     // Windows
@@ -30,7 +30,92 @@ const SYSTEM_PATHS: &[&str] = &[
     "/var",
 ];
 
-pub fn validate_path(path: &Path) -> Result<(), ShredError> {
+/// Result of classifying a path before shredding.
+///
+/// `Normal` covers regular files and directories (including broken or malformed
+/// `.lnk` files — see `classify_path`). `Shortcut` covers any link type whose
+/// target would be exposed if the link were shredded in place: Unix symlinks,
+/// Windows NTFS symlinks/junctions, and Windows `.lnk` shell shortcuts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathClassification {
+    Normal,
+    Shortcut { target: PathBuf },
+}
+
+pub fn validate_path(path: &Path, allow_shortcut: bool) -> Result<(), ShredError> {
+    let classification = classify_path(path)?;
+    match classification {
+        PathClassification::Normal => validate_path_inner(path),
+        PathClassification::Shortcut { target } => {
+            if allow_shortcut {
+                Ok(())
+            } else {
+                Err(ShredError::ShortcutDetected {
+                    path: path.to_path_buf(),
+                    target: target.to_string_lossy().to_string(),
+                })
+            }
+        }
+    }
+}
+
+/// Classify a path as either a regular file/directory or a shortcut/symlink.
+///
+/// A shortcut is any of:
+/// - Unix symlink (`ln -s`)
+/// - Windows NTFS symlink (`mklink`)
+/// - Windows directory junction (`mklink /J`)
+/// - Windows `.lnk` shell shortcut
+///
+/// Broken or malformed `.lnk` files are classified as `Normal` with a warning
+/// logged to stderr — the user's intent (shred this file) is preserved.
+pub fn classify_path(path: &Path) -> Result<PathClassification, ShredError> {
+    // 1. Check if symlink (Unix symlinks, Windows NTFS symlinks, junctions).
+    let sym_meta = std::fs::symlink_metadata(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => ShredError::FileNotFound(path.to_path_buf()),
+        std::io::ErrorKind::PermissionDenied => ShredError::PermissionDenied(path.to_path_buf()),
+        _ => ShredError::from_io_error(path.to_path_buf(), e),
+    })?;
+
+    if sym_meta.file_type().is_symlink() {
+        let target = std::fs::read_link(path)
+            .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
+        return Ok(PathClassification::Shortcut { target });
+    }
+
+    // 2. Check if Windows `.lnk` (separate — not a reparse point).
+    #[cfg(windows)]
+    {
+        if is_windows_lnk(path) {
+            match lnks::Shortcut::load(path) {
+                Ok(shortcut) => {
+                    if let Some(target) = shortcut.target_path {
+                        return Ok(PathClassification::Shortcut { target });
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[KnockKnock] Warning: Failed to parse .lnk {:?}: {}",
+                        path, e
+                    );
+                    // Fall through — treat as normal file.
+                }
+            }
+        }
+    }
+
+    Ok(PathClassification::Normal)
+}
+
+#[cfg(windows)]
+fn is_windows_lnk(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("lnk"))
+        .unwrap_or(false)
+}
+
+fn validate_path_inner(path: &Path) -> Result<(), ShredError> {
     if path.as_os_str().is_empty() {
         return Err(ShredError::EmptyPath);
     }
@@ -43,7 +128,9 @@ pub fn validate_path(path: &Path) -> Result<(), ShredError> {
         return Err(ShredError::NetworkDrive(path.to_path_buf()));
     }
 
-    // Use symlink_metadata to NOT follow symlinks
+    // Use symlink_metadata to NOT follow symlinks. The shortcut/symlink check
+    // has already been handled by `classify_path`, so any symlink that reaches
+    // here indicates a TOCTOU race — fail closed as InvalidPathType.
     let metadata = std::fs::symlink_metadata(path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => ShredError::FileNotFound(path.to_path_buf()),
         std::io::ErrorKind::PermissionDenied => ShredError::PermissionDenied(path.to_path_buf()),
@@ -51,7 +138,7 @@ pub fn validate_path(path: &Path) -> Result<(), ShredError> {
     })?;
 
     if metadata.file_type().is_symlink() {
-        return Err(ShredError::SymlinkDetected(path.to_path_buf()));
+        return Err(ShredError::InvalidPathType(path.to_path_buf()));
     }
 
     let canonical = std::fs::canonicalize(path)

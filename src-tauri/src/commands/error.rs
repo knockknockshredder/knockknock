@@ -68,9 +68,12 @@ fn extract_path_and_action(err: &ShredError) -> (Option<String>, String) {
             Some(p.to_string_lossy().into_owned()),
             "This is a protected system file. Do not shred it — this operation has been refused for your safety.".to_string(),
         ),
-        ShredError::SymlinkDetected(p) => (
-            Some(p.to_string_lossy().into_owned()),
-            "Symlinks are refused to prevent shredding unintended targets. Resolve the link and retry with the real file.".to_string(),
+        ShredError::ShortcutDetected { path, target } => (
+            Some(path.to_string_lossy().into_owned()),
+            format!(
+                "Shortcut or symlink detected. To shred the target ({}) too, enable 'Also shred linked targets'.",
+                target
+            ),
         ),
         ShredError::InvalidPathType(p) => (
             Some(p.to_string_lossy().into_owned()),
@@ -93,7 +96,7 @@ fn error_type_name(err: &ShredError) -> String {
         ShredError::VerificationFailed { .. } => "VerificationFailed",
         ShredError::NetworkDrive(_) => "NetworkDrive",
         ShredError::SystemFile(_) => "SystemFile",
-        ShredError::SymlinkDetected(_) => "SymlinkDetected",
+        ShredError::ShortcutDetected { .. } => "ShortcutDetected",
         ShredError::InvalidPathType(_) => "InvalidPathType",
         ShredError::EmptyPath => "EmptyPath",
     }
@@ -154,7 +157,10 @@ mod tests {
             },
             ShredError::NetworkDrive(PathBuf::from("a")),
             ShredError::SystemFile(PathBuf::from("a")),
-            ShredError::SymlinkDetected(PathBuf::from("a")),
+            ShredError::ShortcutDetected {
+                path: PathBuf::from("a"),
+                target: "target".into(),
+            },
             ShredError::InvalidPathType(PathBuf::from("a")),
             ShredError::EmptyPath,
         ];

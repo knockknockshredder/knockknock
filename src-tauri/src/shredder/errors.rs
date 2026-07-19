@@ -31,8 +31,8 @@ pub enum ShredError {
     #[error("System file protected: {0}")]
     SystemFile(PathBuf),
 
-    #[error("Symlink detected: {0}")]
-    SymlinkDetected(PathBuf),
+    #[error("Shortcut or symlink detected: {path} -> {target}. Enable 'Also shred linked targets' to shred the target.")]
+    ShortcutDetected { path: PathBuf, target: String },
 
     #[error("Path is not a file or directory: {0}")]
     InvalidPathType(PathBuf),
