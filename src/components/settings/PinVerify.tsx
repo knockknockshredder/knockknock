@@ -36,6 +36,8 @@ interface PinVerifyProps {
   purpose: PinVerifyPurpose;
 }
 
+const LOCKOUT_ERROR_FALLBACK_SECONDS = 86_400;
+
 const PURPOSE_COPY: Record<PinVerifyPurpose, { title: string; description: string }> = {
   app_open: {
     title: "Enter PIN",
@@ -86,12 +88,10 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
     let cancelled = false;
 
     const refresh = async () => {
-      try {
-        const remaining = await invoke<number>("get_lockout_remaining");
-        if (!cancelled) setLockoutSeconds(remaining);
-      } catch {
-        if (!cancelled) setLockoutSeconds(0);
-      }
+      const remaining = await invoke<number>("get_lockout_remaining").catch(
+        () => LOCKOUT_ERROR_FALLBACK_SECONDS,
+      );
+      if (!cancelled) setLockoutSeconds(remaining);
     };
 
     void refresh();
@@ -135,12 +135,10 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
       // also re-poll the remaining time so the countdown updates.
       const msg = String(err);
       setError(msg);
-      try {
-        const remaining = await invoke<number>("get_lockout_remaining");
-        setLockoutSeconds(remaining);
-      } catch {
-        // ignore — polling errors aren't actionable here
-      }
+      const remaining = await invoke<number>("get_lockout_remaining").catch(
+        () => LOCKOUT_ERROR_FALLBACK_SECONDS,
+      );
+      setLockoutSeconds(remaining);
       setPin("");
     } finally {
       setSubmitting(false);

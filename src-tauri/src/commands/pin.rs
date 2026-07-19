@@ -28,20 +28,20 @@ pub fn has_pin() -> bool {
 }
 
 #[tauri::command]
-pub fn is_pin_locked() -> bool {
-    pin::is_pin_locked().unwrap_or(false)
+pub fn is_pin_locked() -> Result<bool, String> {
+    pin::is_pin_locked()
 }
 
 /// Seconds remaining on the current lockout window, or 0 when not locked.
 /// Returns a flat `u64` for easy consumption from the frontend.
 #[tauri::command]
-pub fn get_lockout_remaining() -> u64 {
-    pin::lockout_remaining().ok().flatten().unwrap_or(0)
+pub fn get_lockout_remaining() -> Result<u64, String> {
+    pin::lockout_remaining().map(|o| o.unwrap_or(0))
 }
 
 #[tauri::command]
 pub fn change_pin(old_pin: String, new_pin: String) -> Result<(), String> {
-    pin::change_pin(&old_pin, &new_pin)
+    pin::change_pin(old_pin, new_pin)
 }
 
 /// Wipe the entire app state (PIN + lockout + vault callers). Requires

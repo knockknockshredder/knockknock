@@ -18,7 +18,7 @@ pub fn load_vault(pin: String) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub fn clear_vault(current_pin: String) -> Result<(), String> {
-    if !pin::verify_pin(&current_pin)? {
+    if pin::has_pin() && !pin::verify_pin(&current_pin)? {
         return Err("PIN is incorrect".to_string());
     }
     vault::storage::clear()

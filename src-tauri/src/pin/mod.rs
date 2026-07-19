@@ -201,17 +201,20 @@ pub fn lockout_remaining() -> Result<Option<u64>, String> {
 }
 
 /// Change an existing PIN. Requires the current PIN to be valid
-/// (and not in a lockout window). The on-disk vault is re-encrypted
-/// from the old PIN to the new PIN BEFORE the PIN hash is updated;
-/// if the rekey fails the PIN must not change (otherwise the user
-/// would be locked out of a still-old-key vault).
-pub fn change_pin(old_pin: &str, new_pin: &str) -> Result<(), String> {
-    if !verify_pin(old_pin)? {
-        return Err("Current PIN is incorrect".to_string());
+/// (and not in a lockout window). The new PIN hash is written before the
+/// vault is re-encrypted, then restored if rekeying fails so the user can
+/// still unlock with the old PIN.
+pub fn change_pin(old_pin: String, new_pin: String) -> Result<(), String> {
+    let old_hash = config::load_pin_hash()?.ok_or_else(|| "No PIN configured".to_string())?;
+    // Step 1: write new hash (after verifying old PIN matches).
+    setup_pin(Some(&old_pin), &new_pin)?;
+    // Step 2: rekey vault to new PIN.
+    if let Err(e) = crate::vault::storage::rekey(&old_pin, &new_pin) {
+        // Rollback: restore old hash so user can still unlock.
+        let _ = config::save_pin_hash(&old_hash);
+        return Err(e);
     }
-    // Rekey first — if it fails, the PIN must not change.
-    crate::vault::storage::rekey(old_pin, new_pin)?;
-    setup_pin(Some(old_pin), new_pin)
+    Ok(())
 }
 
 /// Wipe ALL app state (PIN, lockout counter, config, encrypted vault).
@@ -239,7 +242,16 @@ pub fn reset_app(current_pin: &str) -> Result<(), String> {
 /// explicitly enabled PIN protection via settings. Merely setting a PIN
 /// does not enable it — the user must toggle "Enable PIN" separately.
 pub fn is_pin_enabled() -> bool {
-    config::load_pin_hash().ok().flatten().is_some() && config::load_pin_enabled()
+    let hash_present = match config::load_pin_hash() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(_) => true, // fail closed — treat unreadable hash as protected
+    };
+    let enabled = match config::load_pin_enabled() {
+        Ok(b) => b,
+        Err(_) => true, // fail closed
+    };
+    hash_present && enabled
 }
 
 /// Toggle the PIN protection flag independently from the PIN hash.
@@ -256,7 +268,11 @@ pub fn set_pin_enabled(current_pin: &str, enabled: bool) -> Result<(), String> {
 /// Returns `true` when a PIN hash has been configured (regardless of
 /// whether PIN protection is currently enabled).
 pub fn has_pin() -> bool {
-    config::load_pin_hash().ok().flatten().is_some()
+    match config::load_pin_hash() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(_) => true, // fail closed
+    }
 }
 
 /// Delete the PIN hash and clear the enabled flag. Requires the current
@@ -445,7 +461,7 @@ mod tests {
         reset_state();
         setup_pin(None, "111111").unwrap();
 
-        assert!(change_pin("000000", "222222").is_err());
+        assert!(change_pin("000000".to_string(), "222222".to_string()).is_err());
         // Original PIN still works
         assert_eq!(verify_pin("111111").unwrap(), true);
         assert_eq!(verify_pin("222222").unwrap(), false);
@@ -457,7 +473,7 @@ mod tests {
     fn change_pin_accepts_correct_old_pin() {
         reset_state();
         setup_pin(None, "111111").unwrap();
-        change_pin("111111", "222222").unwrap();
+        change_pin("111111".to_string(), "222222".to_string()).unwrap();
 
         assert_eq!(verify_pin("222222").unwrap(), true);
         assert_eq!(verify_pin("111111").unwrap(), false);
