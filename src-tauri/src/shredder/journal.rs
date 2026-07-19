@@ -1,6 +1,7 @@
 // src-tauri/src/shredder/journal.rs
 
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -10,11 +11,8 @@ pub struct JournalEntry {
     pub timestamp: u64,
 }
 
-fn journal_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-        .join("KnockKnock")
-        .join(".knockknock-journal.json")
+fn journal_path() -> Result<PathBuf, String> {
+    Ok(crate::paths::portable_data_dir()?.join(".knockknock-journal.json"))
 }
 
 fn hash_path(path: &std::path::Path) -> String {
@@ -23,6 +21,27 @@ fn hash_path(path: &std::path::Path) -> String {
     let mut hasher = DefaultHasher::new();
     path.to_string_lossy().hash(&mut hasher);
     format!("{:x}", hasher.finish())
+}
+
+/// Atomic write with fsync — orphan tracking is critical-state, not cosmetic.
+/// If this fails the journal is silent data corruption.
+fn write_journal_atomic(entries: &[JournalEntry]) -> Result<(), String> {
+    let path = journal_path()?;
+    let json = serde_json::to_string_pretty(entries)
+        .map_err(|e| format!("Journal serialize failed: {e}"))?;
+
+    let tmp = path.with_extension("tmp");
+    let _ = std::fs::remove_file(&tmp);
+
+    let mut file =
+        std::fs::File::create(&tmp).map_err(|e| format!("Journal tmp create failed: {e}"))?;
+    file.write_all(json.as_bytes())
+        .map_err(|e| format!("Journal tmp write failed: {e}"))?;
+    file.sync_all()
+        .map_err(|e| format!("Journal fsync failed: {e}"))?;
+    drop(file);
+
+    std::fs::rename(&tmp, &path).map_err(|e| format!("Journal rename failed: {e}"))
 }
 
 pub fn write_orphan(original: &std::path::Path, renamed: &std::path::Path) {
@@ -36,53 +55,24 @@ pub fn write_orphan(original: &std::path::Path, renamed: &std::path::Path) {
     };
     let mut entries = read_orphans();
     entries.push(entry);
-    let path = journal_path();
-    let tmp = path.with_extension("tmp");
-    match serde_json::to_string_pretty(&entries) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(&tmp, &json) {
-                eprintln!("[KnockKnock] Journal write failed for {:?}: {}", tmp, e);
-                return;
-            }
-            if let Err(e) = std::fs::rename(&tmp, &path) {
-                eprintln!(
-                    "[KnockKnock] Journal rename failed {:?} -> {:?}: {}",
-                    tmp, path, e
-                );
-            }
-        }
-        Err(e) => {
-            eprintln!("[KnockKnock] Journal serialize failed: {}", e);
-        }
+    if let Err(e) = write_journal_atomic(&entries) {
+        eprintln!("[KnockKnock] Journal write failed: {e}");
     }
 }
 
 pub fn clear_orphan(renamed: &std::path::Path) {
     let mut entries = read_orphans();
     entries.retain(|e| e.renamed_path != renamed);
-    let path = journal_path();
-    let tmp = path.with_extension("tmp");
-    match serde_json::to_string_pretty(&entries) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(&tmp, &json) {
-                eprintln!("[KnockKnock] Journal write failed for {:?}: {}", tmp, e);
-                return;
-            }
-            if let Err(e) = std::fs::rename(&tmp, &path) {
-                eprintln!(
-                    "[KnockKnock] Journal rename failed {:?} -> {:?}: {}",
-                    tmp, path, e
-                );
-            }
-        }
-        Err(e) => {
-            eprintln!("[KnockKnock] Journal serialize failed: {}", e);
-        }
+    if let Err(e) = write_journal_atomic(&entries) {
+        eprintln!("[KnockKnock] Journal clear failed: {e}");
     }
 }
 
 pub fn read_orphans() -> Vec<JournalEntry> {
-    let path = journal_path();
+    let path = match journal_path() {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
     if !path.exists() {
         return Vec::new();
     }

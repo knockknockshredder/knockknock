@@ -5,15 +5,13 @@ use std::fs;
 use std::path::PathBuf;
 
 fn get_config_path() -> PathBuf {
-    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("KnockKnock");
+    let mut path = crate::paths::portable_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     path.push("pin.json");
     path
 }
 
 fn get_lockout_path() -> PathBuf {
-    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("KnockKnock");
+    let mut path = crate::paths::portable_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     path.push("lockout.json");
     path
 }
@@ -112,8 +110,7 @@ pub fn clear_lockout_state() -> Result<(), String> {
 // --- PIN enabled flag (separate from PIN hash existence) ---
 
 fn get_enabled_path() -> PathBuf {
-    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("KnockKnock");
+    let mut path = crate::paths::portable_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     path.push("pin_enabled");
     path
 }
