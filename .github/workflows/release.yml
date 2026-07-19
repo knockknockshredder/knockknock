@@ -82,6 +82,7 @@ jobs:
       # partial binary. Minimum sizes are empirically observed; actual
       # builds are larger.
       - name: Verify artifact
+        shell: bash
         run: |
           FILE=$(ls ${{ matrix.artifact_path }} 2>/dev/null | head -1)
           if [ -z "$FILE" ]; then

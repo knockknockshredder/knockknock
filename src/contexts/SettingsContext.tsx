@@ -86,10 +86,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         right_sidebar_width: stateRef.current.rightSidebarWidth,
       };
       invoke("save_settings", { settings }).catch((e) => {
-        // Surface to user — silent swallow means user doesn't know
-        // settings aren't persisting (privacy-critical tool).
         console.error("[KnockKnock] Failed to save settings:", e);
-        // TODO: surface via toast/banner once notification system exists.
       });
     }, 250);
   }, [loaded]);
@@ -128,7 +125,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
           right_sidebar_width: stateRef.current.rightSidebarWidth,
         };
         // Synchronous-style IPC at unmount — async fire-and-forget.
-        invoke("save_settings", { settings }).catch(() => {});
+        invoke("save_settings", { settings }).catch((e) => {
+          console.error("[KnockKnock] Failed to flush settings on close:", e);
+        });
       }
     };
   }, []);

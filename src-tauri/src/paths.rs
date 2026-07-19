@@ -7,12 +7,6 @@
 // No fallback. If the exe directory is unwritable, the caller
 // receives an Err with a user-facing message.
 
-// Functions in this module are added incrementally across multiple
-// tasks. Until all consumers are in place, `pub fn` in a private mod
-// triggers `dead_code` warnings that mask real issues. Allow until
-// the module is fully wired (Task 4 wires everything).
-#![allow(dead_code)]
-
 use std::path::PathBuf;
 
 /// Directory containing the app executable on Windows/Linux, or the
@@ -90,14 +84,4 @@ pub fn portable_data_dir() -> Result<PathBuf, String> {
     })?;
 
     Ok(data_dir)
-}
-
-/// `KnockKnock-data/webview/` — WebView engine runtime data
-/// (caches, GPU shaders, localStorage).
-///
-/// Redirected here on Windows and Linux. macOS WKWebView uses a
-/// fixed system path (`~/Library/WebKit/{id}/`) — see spec section 6.
-#[cfg(not(target_os = "macos"))]
-pub fn webview_data_dir() -> Result<PathBuf, String> {
-    Ok(portable_data_dir()?.join("webview"))
 }

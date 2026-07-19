@@ -71,12 +71,8 @@ pub fn save_settings(settings: AppSettings) -> Result<(), String> {
         .map_err(|e| format!("Failed to fsync settings: {e}"))?;
     drop(file);
 
-    // On Windows pre-1.86, std::fs::rename may not be atomic. If target
-    // exists, remove it first (data already in tmp file via fsync).
-    #[cfg(windows)]
-    {
-        let _ = std::fs::remove_file(&path);
-    }
-
+    // Rust 1.86+ uses FILE_RENAME_FLAG_POSIX_SEMANTICS on Windows,
+    // making std::fs::rename atomic. The MSRV in Cargo.toml guarantees
+    // this, so no explicit remove_file fallback is needed.
     std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to save settings: {e}"))
 }

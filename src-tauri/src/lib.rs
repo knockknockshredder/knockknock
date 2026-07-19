@@ -25,7 +25,7 @@ pub fn run() {
     // init_lockout_state() writes to a path derived from the portable
     // dir. If portable dir failed, we already exited above.
     if let Err(e) = pin::init_lockout_state() {
-        eprintln!("[knockknock] failed to load PIN lockout state: {}", e);
+        eprintln!("[KnockKnock] failed to load PIN lockout state: {}", e);
     }
 
     // Create webview data subdirectory. Failure is fatal — without
@@ -47,7 +47,8 @@ pub fn run() {
         );
     }
 
-    let _webview_dir_clone = webview_dir.clone();
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    let webview_dir_clone = webview_dir.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -58,14 +59,15 @@ pub fn run() {
                 eprintln!("[KnockKnock] Tray setup failed (non-fatal): {e}");
             }
 
-            // Linux: manually (re)create the main window with the
-            // portable webview data dir. Tauri's auto-created windows
-            // (from tauri.conf.json) cannot have .data_directory()
-            // set after creation.
+            // Linux: close the auto-created window from tauri.conf.json
+            // and recreate it with the portable webview data dir.
             #[cfg(target_os = "linux")]
             {
                 use tauri::WebviewWindowBuilder;
                 use tauri::WebviewUrl;
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.close();
+                }
                 if let Err(e) = WebviewWindowBuilder::new(
                     app,
                     "main",
