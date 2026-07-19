@@ -3,7 +3,7 @@
 // File-based persistence for the encrypted vault. Each save generates a new
 // salt and nonce, so the file is safe to keep on disk without the PIN.
 //
-// File layout: <config_dir>/KnockKnock/vault.json
+// File layout: <KnockKnock-data>/vault.json
 
 use super::crypto::{self, EncryptedData};
 use crate::pin::config::set_owner_only;
@@ -21,11 +21,7 @@ struct VaultFile {
 }
 
 fn vault_path() -> Result<PathBuf, String> {
-    let config_dir =
-        dirs::config_dir().ok_or_else(|| "Cannot find config directory".to_string())?;
-    let app_dir = config_dir.join("KnockKnock");
-    std::fs::create_dir_all(&app_dir)
-        .map_err(|e| format!("Failed to create app directory: {}", e))?;
+    let app_dir = crate::paths::portable_data_dir()?;
     Ok(app_dir.join("vault.json"))
 }
 
