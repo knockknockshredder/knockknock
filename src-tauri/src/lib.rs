@@ -63,7 +63,7 @@ pub fn run() {
             // and recreate it with the portable webview data dir.
             #[cfg(target_os = "linux")]
             {
-                create_main_window_linux(app, &webview_dir_clone)?;
+                create_main_window_linux(app.handle(), &webview_dir_clone)?;
             }
 
             // Windows/macOS: window already created by tauri.conf.json.
@@ -140,6 +140,7 @@ fn create_main_window_linux(
     app: &tauri::AppHandle,
     webview_dir: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::Manager;
     use tauri::WebviewUrl;
     use tauri::WebviewWindowBuilder;
 
@@ -151,7 +152,6 @@ fn create_main_window_linux(
         .inner_size(1200.0, 800.0)
         .min_inner_size(900.0, 600.0)
         .decorations(false)
-        .drag_and_drop(true)
         .data_directory(webview_dir.to_path_buf())
         .build()?;
     Ok(())

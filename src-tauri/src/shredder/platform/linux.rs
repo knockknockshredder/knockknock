@@ -5,7 +5,6 @@ use crate::shredder::platform::common::generate_random_name;
 use crate::shredder::traits::PlatformIo;
 use crate::shredder::types::{MediaType, ProcessInfo};
 use std::fs::{File, OpenOptions};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub struct LinuxIo;
