@@ -524,9 +524,8 @@ mod tests {
     fn init_lockout_state_24h_lockout_when_corrupt() {
         reset_state();
         // Write a deliberately corrupt lockout file to disk.
-        let path = dirs::config_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("KnockKnock")
+        let path = crate::paths::portable_data_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
             .join("lockout.json");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
