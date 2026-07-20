@@ -14,8 +14,10 @@ use std::path::Path;
 #[serde(rename_all = "snake_case")]
 pub enum DriveType {
     /// Network-attached share / UNC path / mapped drive
+    #[cfg(windows)]
     Network,
     /// USB-attached HDD
+    #[cfg(windows)]
     UsbHdd,
     /// Unknown / not detected
     Unknown,

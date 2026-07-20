@@ -21,7 +21,27 @@ impl PlatformIo for MacOsIo {
             .read(true)
             .write(true)
             .open(path)
-            .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    match self.find_locking_processes(path) {
+                        Ok(processes) if !processes.is_empty() => {
+                            let summary = processes
+                                .iter()
+                                .take(3)
+                                .map(|p| p.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            ShredError::FileLocked {
+                                path: path.to_path_buf(),
+                                process: summary,
+                            }
+                        }
+                        _ => ShredError::from_io_error(path.to_path_buf(), e),
+                    }
+                } else {
+                    ShredError::from_io_error(path.to_path_buf(), e)
+                }
+            })?;
 
         #[cfg(unix)]
         {

@@ -318,6 +318,7 @@ mod tests {
         }
         let _ = config::clear_lockout_state();
         let _ = config::remove_pin_hash();
+        let _ = config::save_pin_enabled(false);
     }
 
     #[test]
