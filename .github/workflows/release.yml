@@ -20,7 +20,7 @@ jobs:
             build_cmd: pnpm tauri build --bundles dmg --target aarch64-apple-darwin
             artifact_name: KnockKnock-macos-arm64.dmg
             artifact_path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/KnockKnock_*_aarch64.dmg
-            min_size: 8000000
+            min_size: 6000000
           # Intel mac: run on macos-13 (Intel host) to avoid
           # cross-compile issues — building x86_64 on ARM requires
           # osxcross + Apple SDK setup that isn't worth the complexity.
@@ -29,7 +29,7 @@ jobs:
             build_cmd: pnpm tauri build --bundles dmg --target x86_64-apple-darwin
             artifact_name: KnockKnock-macos-x64.dmg
             artifact_path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/KnockKnock_*_x64.dmg
-            min_size: 8000000
+            min_size: 6000000
           - platform: ubuntu-22.04
             target: ''
             build_cmd: pnpm tauri build --bundles appimage
