@@ -5,6 +5,44 @@ All notable changes to KnockKnock will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-07-21
+
+### "Portable App & Shortcut Awareness"
+
+This release converts KnockKnock into a fully portable application with no localStorage dependency, adds Windows shortcut awareness for the shredder, and hardens PIN security with fail-closed gates and atomic config writes.
+
+### Added
+
+#### Portable App Architecture
+- **Portable data paths** — Settings, vault, journal, and lockout state now stored alongside the executable (Windows) or in `~/.local/share/KnockKnock` (macOS/Linux). No AppData or localStorage dependency.
+- **Rust-backed settings** — `get_settings` / `save_settings` Tauri commands replace localStorage. Settings validated on save and stored as JSON via `serde_json`.
+- **macOS dataStoreIdentifier** — WKWebView data namespaced per app install on macOS 14+, preventing Safari data collisions.
+- **Windows WebView2 embed** — Portable Windows .exe bundles the WebView2 bootstrapper, removing the runtime dependency.
+- **Portable release artifacts** — Windows: raw `.exe` via `--no-bundle`. macOS: `.dmg` via `--bundles dmg`. Linux: AppImage via `--bundles appimage`.
+
+#### Shortcut Awareness
+- **`lnks` crate integration** — Windows shortcut (.lnk) resolution via the `lnks` crate.
+- **`FileMetadata` type** — New struct with `is_shortcut` and `shortcut_target` fields for shortcut-aware file handling.
+- **`ShortcutDetected` error** — New error variant for Windows shortcuts pointing to unexpected targets.
+- **Shortcut-aware UI** — `FileDropZone` and `FileListItem` now display shortcut indicators and resolve targets.
+
+#### PIN Security Hardening
+- **Fail-closed PIN gates** — PIN verification dialogs cannot be bypassed by closing; app remains locked until valid PIN entered.
+- **Atomic config writes** — Settings and lockout state written to temp file then renamed, preventing corruption on crash.
+- **Vault auto-save reliability** — Vault persisted on every file list change with 500ms debounce.
+
+### Changed
+- **Dependencies upgraded** — `native-dialog` 0.7 → 0.9 (deadlock fix, modern objc2 bindings).
+- **Version bumped** — `0.3.0` → `0.4.0` in `package.json`, `Cargo.toml`, and about dialog.
+
+### Fixed
+- **PIN arg names** — `PinVerify` and `PinSetup` now pass `snake_case` parameter names matching Rust backend.
+- **macOS startup guidance** — `startup_fatal` now includes writable-folder tip for macOS users.
+- **PIN lock bypass** — Closing PIN dialog no longer reveals the full app.
+- **Vault decryption after PIN change** — Vault re-encrypted when user changes PIN.
+- **Double-shred from React StrictMode** — Dialog re-fire no longer triggers duplicate shred operations.
+- **File handle read access** — Verification step now opens files with read permissions.
+
 ## [0.3.0] — 2026-07-17
 
 ### "PIN-Protected Emergency Preparation"
