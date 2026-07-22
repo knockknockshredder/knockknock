@@ -16,13 +16,25 @@ use std::sync::Mutex;
 /// saves can race on the shared `.tmp` path and corrupt the file.
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub auto_clear_log: bool,
     pub default_algorithm_index: usize,
     pub log_obfuscation: String, // "none" | "numbered" | "partial_mask"
-    pub left_sidebar_width: u32,
-    pub right_sidebar_width: u32,
+    pub left_sidebar_width: f64,
+    pub right_sidebar_width: f64,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            auto_clear_log: false,
+            default_algorithm_index: 0,
+            log_obfuscation: "none".into(),
+            left_sidebar_width: 33.33,
+            right_sidebar_width: 33.33,
+        }
+    }
 }
 
 fn settings_path() -> Result<PathBuf, String> {

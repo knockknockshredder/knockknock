@@ -36,7 +36,7 @@ interface SettingsState {
 const SettingsContext = createContext<SettingsState | null>(null);
 
 function clampSidebarWidth(value: number): number {
-  return Math.max(160, Math.min(400, value));
+  return Math.max(20.0, Math.min(33.33, value));
 }
 
 function isValidLogObfuscation(v: string): v is LogObfuscation {
@@ -49,8 +49,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [defaultAlgorithmIndex, setDefaultAlgorithmIndexState] = useState(0);
   const [logObfuscation, setLogObfuscationState] =
     useState<LogObfuscation>("none");
-  const [leftSidebarWidth, setLeftSidebarWidthState] = useState(260);
-  const [rightSidebarWidth, setRightSidebarWidthState] = useState(260);
+  const [leftSidebarWidth, setLeftSidebarWidthState] = useState(33.33);
+  const [rightSidebarWidth, setRightSidebarWidthState] = useState(33.33);
 
   // Refs mirror state so debounced save can read freshest values
   // without closure-staleness when many events fire rapidly

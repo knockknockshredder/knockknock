@@ -247,8 +247,8 @@ export function ShredSection() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="font-sans text-xl font-semibold">Shred Files</h1>
-      <div className="flex flex-col gap-4 w-full max-w-lg">
+      <h1 className="font-mono text-xl font-semibold tracking-tight">Someone's KnockKnock'ing...</h1>
+      <div className="flex flex-col gap-4 w-full max-w-lg mx-auto">
         <AlgorithmSelector />
         {currentAlgorithm && (
           <ShredOptions
