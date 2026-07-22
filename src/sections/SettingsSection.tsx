@@ -285,7 +285,7 @@ export function SettingsSection() {
         </div>
       </section>
 
-      <section className="mb-6">
+      <section className="mb-16">
         <h2 className="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
           About
         </h2>
