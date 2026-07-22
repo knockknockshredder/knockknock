@@ -25,9 +25,10 @@ use windows_sys::Win32::Storage::FileSystem::{
 // kept in a separate import block to distinguish them from the platform-API
 // calls above.
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 use windows::Win32::System::Ioctl::{
     PropertyStandardQuery, StorageDeviceSeekPenaltyProperty, DEVICE_SEEK_PENALTY_DESCRIPTOR,
@@ -52,7 +53,8 @@ const DRIVE_RAMDISK: u32 = 6;
 /// - `None`        → query failed          → caller should fall back
 fn query_seek_penalty(drive_letter: &str) -> Option<bool> {
     // Build \\.\X: device path (e.g. \\.\C:)
-    let device_path = format!("\\\\.\\{}:", drive_letter);
+    // drive_letter is already "C:" — don't add a second colon.
+    let device_path = format!("\\\\.\\{}", drive_letter);
     let device_wide: Vec<u16> = device_path
         .encode_utf16()
         .chain(std::iter::once(0))
@@ -61,7 +63,7 @@ fn query_seek_penalty(drive_letter: &str) -> Option<bool> {
     unsafe {
         let handle = match CreateFileW(
             PCWSTR(device_wide.as_ptr()),
-            GENERIC_READ.0,
+            FILE_READ_ATTRIBUTES.0,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             None,
             OPEN_EXISTING,
@@ -69,10 +71,20 @@ fn query_seek_penalty(drive_letter: &str) -> Option<bool> {
             None::<HANDLE>,
         ) {
             Ok(h) => h,
-            Err(_) => return None,
+            Err(_) => {
+                eprintln!(
+                    "[KnockKnock] Failed to open volume handle for {}: CreateFileW error",
+                    device_path
+                );
+                return None;
+            }
         };
 
         if handle == INVALID_HANDLE_VALUE {
+            eprintln!(
+                "[KnockKnock] Failed to open volume handle for {}: INVALID_HANDLE_VALUE",
+                device_path
+            );
             return None;
         }
 
@@ -104,6 +116,10 @@ fn query_seek_penalty(drive_letter: &str) -> Option<bool> {
             // IncursSeekPenalty == false ⟹ SSD (no seek penalty)
             Some(result.IncursSeekPenalty)
         } else {
+            eprintln!(
+                "[KnockKnock] IOCTL_STORAGE_QUERY_PROPERTY failed for {}: status={:?}, bytes_returned={}",
+                device_path, status, bytes_returned
+            );
             None
         }
     }
