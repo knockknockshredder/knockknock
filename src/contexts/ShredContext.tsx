@@ -110,12 +110,27 @@ export function ShredProvider({ children }: { children: ReactNode }) {
     try {
       const exists = await invoke<boolean>("vault_exists");
       pastExistsCheck = true;
-      if (!exists) return;
+      console.debug(
+        "[vault] loadVault: vault_exists=%s",
+        exists,
+      );
+      if (!exists) {
+        console.debug("[vault] no vault on disk — marking loaded");
+        return;
+      }
       const paths = await invoke<string[]>("load_vault", { pin });
+      console.debug(
+        "[vault] load_vault returned %d paths",
+        paths.length,
+      );
       if (paths.length === 0) return;
       const [validFiles] = await invoke<[FileMetadata[], string[]]>(
         "validate_paths",
         { paths }
+      );
+      console.debug(
+        "[vault] validated %d valid files",
+        validFiles.length,
       );
       // Stamps the completion time so the auto-save effect can suppress
       // its first run after a vault load — the files just came from disk
@@ -123,7 +138,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
       lastLoadCompletedAt.current = Date.now();
       addFiles(validFiles);
     } catch (err) {
-      console.error("Failed to load vault:", err);
+      console.error("[vault] load failed:", err);
       addLogEntry("error", `Failed to restore session: ${err}`);
     } finally {
       if (pastExistsCheck) {
@@ -142,10 +157,15 @@ export function ShredProvider({ children }: { children: ReactNode }) {
     async (pin: string) => {
       try {
         const paths = files.map((f) => f.path);
+        console.debug(
+          "[vault] saving %d paths to vault",
+          paths.length,
+        );
         await invoke("save_vault", { paths, pin });
+        console.debug("[vault] save succeeded");
         return true;
       } catch (err) {
-        console.error("Failed to save vault:", err);
+        console.error("[vault] save failed:", err);
         addLogEntry("error", `Failed to save session: ${err}`);
         return false;
       }
@@ -158,8 +178,23 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   // re-saving data that was just deserialized. Suppressed during an
   // active shred (status churn would otherwise trigger a save storm).
   useEffect(() => {
-    if (!vaultLoaded || !vaultPin || isShredding) return;
-    if (Date.now() - lastLoadCompletedAt.current < 500) return;
+    if (!vaultLoaded || !vaultPin || isShredding) {
+      console.debug(
+        "[vault] auto-save skipped: vaultLoaded=%s vaultPin=%s isShredding=%s",
+        vaultLoaded,
+        !!vaultPin,
+        isShredding,
+      );
+      return;
+    }
+    if (Date.now() - lastLoadCompletedAt.current < 500) {
+      console.debug("[vault] auto-save skipped: within load cooldown");
+      return;
+    }
+    console.debug(
+      "[vault] auto-save scheduled: %d files",
+      files.length,
+    );
     // Capture the PIN at effect entry. The setTimeout fires after a 1s
     // debounce; if the user changed PIN during that window the effect
     // was cancelled (cleanup below) AND the latest vaultPin will

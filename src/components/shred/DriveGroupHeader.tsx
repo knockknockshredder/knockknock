@@ -50,7 +50,7 @@ export function DriveGroupHeader({
 }: DriveGroupHeaderProps) {
   const capacityLabel =
     drive.total_bytes > 0
-      ? `${formatBytes(drive.free_bytes)} free of ${formatBytes(drive.total_bytes)}`
+      ? `${formatBytes(drive.free_bytes)} / ${formatBytes(drive.total_bytes)}`
       : null;
 
   return (

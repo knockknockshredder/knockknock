@@ -6,6 +6,16 @@ import { PinSetup } from "@/components/settings/PinSetup";
 import { PinVerify } from "@/components/settings/PinVerify";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useShred } from "@/contexts/ShredContext";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import type { LogObfuscation } from "@/types";
 
@@ -39,6 +49,7 @@ export function SettingsSection() {
   const [pinSetupOpen, setPinSetupOpen] = useState(false);
   const [pinSetupFromToggle, setPinSetupFromToggle] = useState(false);
   const [pinVerifyOpen, setPinVerifyOpen] = useState(false);
+  const [confirmDisableOpen, setConfirmDisableOpen] = useState(false);
   // Tracks which PIN-gated action follows a successful PinVerify, since
   // enabling and disabling both reuse the same dialog.
   const [pendingPinAction, setPendingPinAction] = useState<"enable" | "disable" | null>(null);
@@ -89,13 +100,12 @@ export function SettingsSection() {
                   setPinSetupOpen(true);
                 }
               } else {
-                // Toggling OFF requires PIN verification first
-                setPendingPinAction("disable");
-                setPinVerifyOpen(true);
+                // Toggling OFF — confirm vault deletion first
+                setConfirmDisableOpen(true);
               }
             }}
           />
-          {pinSet && (
+          {pinSet && pinEnabled && (
             <button
               type="button"
               onClick={() => {
@@ -164,6 +174,29 @@ export function SettingsSection() {
           }}
           purpose={pendingPinAction === "disable" ? "disable_pin" : "set_pin_enabled"}
         />
+        <AlertDialog open={confirmDisableOpen} onOpenChange={setConfirmDisableOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Disable PIN Protection?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Disabling PIN protection will permanently delete your saved file
+                list (vault) and PIN configuration. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  setConfirmDisableOpen(false);
+                  setPendingPinAction("disable");
+                  setPinVerifyOpen(true);
+                }}
+              >
+                Continue
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </section>
 
       <section>
@@ -258,7 +291,7 @@ export function SettingsSection() {
         </h2>
         <div className="border border-border bg-surface p-4">
           <p className="font-mono text-sm font-semibold text-foreground">
-            KnockKnock v0.3.0
+            KnockKnock v0.4.1
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Emergency file shredder for Windows, macOS, and Linux. Implements

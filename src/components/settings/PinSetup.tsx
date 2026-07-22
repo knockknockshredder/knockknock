@@ -131,7 +131,7 @@ export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }
           )}
           <label className="flex flex-col gap-1">
             <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-              PIN
+              {requireOldPin ? "NEW PIN" : "PIN"}
             </span>
             <input
               type="password"
@@ -149,7 +149,7 @@ export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }
 
           <label className="flex flex-col gap-1">
             <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-              Confirm PIN
+              {requireOldPin ? "CONFIRM NEW PIN" : "Confirm PIN"}
             </span>
             <input
               type="password"

@@ -1,7 +1,7 @@
 {
   "name": "knockknock",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.1",
   "packageManager": "pnpm@10.33.0",
   "type": "module",
   "scripts": {
@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "lint": "tsc --noEmit",
-    "test": "cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1"
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1",
+    "test:front": "vitest run",
+    "test": "pnpm test:rust; pnpm test:front"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -36,11 +38,16 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.1",
     "@tauri-apps/cli": "^2",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.3.1",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.10"
   }
 }

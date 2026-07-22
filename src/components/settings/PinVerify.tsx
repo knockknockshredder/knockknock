@@ -119,7 +119,7 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
 
     setSubmitting(true);
     try {
-      const ok = await invoke<boolean>("verify_pin", { pin_value: pin });
+      const ok = await invoke<boolean>("verify_pin", { pinValue: pin });
       if (ok) {
         // PIN verified — now give the caller time to do its work
         // (e.g. decrypting the vault) before resetting the UI.

@@ -16,7 +16,7 @@ export function ResizeHandle({ onResize, onReset, side }: ResizeHandleProps) {
       document.body.style.cursor = "col-resize";
 
       const handleMouseMove = (ev: MouseEvent) => {
-        const deltaX = (ev.clientX - startX) / 3;
+        const deltaX = (ev.clientX - startX) / 8;
         onResize(deltaX);
       };
 
