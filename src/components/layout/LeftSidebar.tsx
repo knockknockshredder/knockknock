@@ -1,5 +1,4 @@
 // src/components/layout/LeftSidebar.tsx
-import { useState } from "react";
 import { CheckSquare, Square, ArrowClockwise } from "@phosphor-icons/react";
 import { BrowserCard } from "@/components/browser/BrowserCard";
 import { BrowserWarning } from "@/components/browser/BrowserWarning";
@@ -8,12 +7,7 @@ import { useBrowser } from "@/contexts/BrowserContext";
 
 export function LeftSidebar() {
   const { browsers, isScanning, selectAllProfiles, deselectAllProfiles, rescanBrowsers } = useBrowser();
-  const [acknowledgedBrowsers, setAcknowledgedBrowsers] = useState<Set<string>>(new Set());
   const runningBrowsers = browsers.filter((b) => b.isRunning);
-
-  const handleAcknowledge = (browserId: string) => {
-    setAcknowledgedBrowsers((prev) => new Set(prev).add(browserId));
-  };
 
   const selectAllAll = () => browsers.forEach((b) => {
     selectAllProfiles(b.id);
@@ -62,7 +56,7 @@ export function LeftSidebar() {
               <BrowserWarning
                 key={b.id}
                 browserName={b.name}
-                onAcknowledge={() => handleAcknowledge(b.id)}
+                onAcknowledge={() => {}}
               />
             ))}
 

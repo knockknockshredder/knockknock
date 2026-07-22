@@ -57,7 +57,7 @@ export function ShredOptions({
           <HintTooltip text="Byte pattern used for each overwrite pass. Random is most secure. Zeros/Ones are deterministic patterns used by some standards." />
         </div>
         <div className="flex w-full">
-          {(["random", "zeros", "ones"] as const).map((p, i) => (
+          {(["random", "zeros", "ones"] as const).map((p) => (
             <button
               key={p}
               type="button"
@@ -95,7 +95,7 @@ export function ShredOptions({
           <HintTooltip text="How thoroughly to verify that data was actually overwritten. None skips verification. Sample checks random blocks. Full reads back every block." />
         </div>
         <div className="flex w-full">
-          {(["none", "sample", "full"] as const).map((v, i) => (
+          {(["none", "sample", "full"] as const).map((v) => (
             <button
               key={v}
               type="button"
