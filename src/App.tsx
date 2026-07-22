@@ -153,7 +153,7 @@ function AppGate() {
 
   if (hasPin === null) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background">
+      <div data-tauri-drag-region className="flex h-screen items-center justify-center bg-background">
         <div className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
           Loading…
         </div>
@@ -163,7 +163,7 @@ function AppGate() {
 
   if (configError) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background p-6">
+      <div data-tauri-drag-region className="flex h-screen items-center justify-center bg-background p-6">
         <div className="max-w-md text-center">
           <h2 className="font-sans text-xl font-semibold text-destructive">
             Configuration Error
@@ -180,24 +180,28 @@ function AppGate() {
   // Onboarding: no PIN exists — user must set one before using the app
   if (showOnboarding) {
     return (
-      <PinSetup
-        open
-        onOpenChange={() => {}}
-        requireOldPin={false}
-        onPinSet={handleOnboardingPinSet}
-      />
+      <div data-tauri-drag-region className="flex h-screen items-center justify-center bg-background">
+        <PinSetup
+          open
+          onOpenChange={() => {}}
+          requireOldPin={false}
+          onPinSet={handleOnboardingPinSet}
+        />
+      </div>
     );
   }
 
   // Gate: PIN exists and the gate is enabled
   if (hasPin && pinEnabled && !gatePassed) {
     return (
-      <PinVerify
-        open
-        onOpenChange={() => {}}
-        onVerified={handleGateVerified}
-        purpose="app_open"
-      />
+      <div data-tauri-drag-region className="flex h-screen items-center justify-center bg-background">
+        <PinVerify
+          open
+          onOpenChange={() => {}}
+          onVerified={handleGateVerified}
+          purpose="app_open"
+        />
+      </div>
     );
   }
 
@@ -206,7 +210,8 @@ function AppGate() {
   // recover their shred list; they may also skip and start fresh.
   if (showVaultRestore) {
     return (
-      <Dialog open onOpenChange={() => {}}>
+      <div data-tauri-drag-region className="flex h-screen items-center justify-center bg-background">
+        <Dialog open onOpenChange={() => {}}>
         <DialogContent showCloseButton={false}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -277,6 +282,7 @@ function AppGate() {
           </div>
         </DialogContent>
       </Dialog>
+      </div>
     );
   }
 
