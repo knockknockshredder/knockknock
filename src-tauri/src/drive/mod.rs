@@ -3,6 +3,12 @@
 #[cfg(windows)]
 pub mod windows;
 
+#[cfg(target_os = "linux")]
+pub mod linux;
+
+#[cfg(target_os = "macos")]
+pub mod macos;
+
 use serde::Serialize;
 use std::path::Path;
 
@@ -18,13 +24,10 @@ pub enum DriveType {
     /// Spinning hard disk
     Hdd,
     /// Network-attached share / UNC path / mapped drive
-    #[cfg(windows)]
     Network,
     /// USB-attached SSD
-    #[cfg(windows)]
     UsbSsd,
     /// USB-attached HDD
-    #[cfg(windows)]
     UsbHdd,
     /// Unknown / not detected
     Unknown,
@@ -48,15 +51,25 @@ pub struct DriveInfo {
 /// Platform-aware drive detection dispatcher.
 ///
 /// On Windows, delegates to `windows::detect_drive_info` (real OS query).
-/// On macOS/Linux, returns an Unknown placeholder derived from the path
-/// prefix — accurate detection on those platforms would require a
-/// dedicated implementation that the v0.3.0 plan does not require.
+/// On Linux, delegates to `linux::detect_drive_info` (sysfs + lsblk).
+/// On macOS, delegates to `macos::detect_drive_info` (diskutil plist).
+/// On other platforms, returns an Unknown placeholder.
 #[cfg(windows)]
 pub fn detect_drive_info(path: &Path) -> Result<DriveInfo, String> {
     windows::detect_drive_info(path)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub fn detect_drive_info(path: &Path) -> Result<DriveInfo, String> {
+    linux::detect_drive_info(path)
+}
+
+#[cfg(target_os = "macos")]
+pub fn detect_drive_info(path: &Path) -> Result<DriveInfo, String> {
+    macos::detect_drive_info(path)
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn detect_drive_info(path: &Path) -> Result<DriveInfo, String> {
     let path_str = path.to_string_lossy();
     let drive_letter = if path_str.starts_with('/') {
