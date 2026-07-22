@@ -32,7 +32,7 @@ jobs:
             target: ''
             build_cmd: pnpm tauri build --no-bundle
             artifact_name: KnockKnock-windows-x64.exe
-            artifact_path: src-tauri/target/release/knockknock.exe
+            artifact_path: src-tauri/target/release/KnockKnock_*.exe
             min_size: 5000000
 
     runs-on: ${{ matrix.platform }}
@@ -68,6 +68,14 @@ jobs:
 
       - name: Build
         run: ${{ matrix.build_cmd }}
+
+      - name: Rename artifact for versioned output (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          mv src-tauri/target/release/knockknock.exe \
+             "src-tauri/target/release/KnockKnock_${VERSION}_x64.exe"
 
       # Verify the artifact is non-empty and plausibly sized BEFORE upload.
       # Without this, a silent build failure could upload a stale or
