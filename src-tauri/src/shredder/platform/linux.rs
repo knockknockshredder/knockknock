@@ -82,28 +82,13 @@ impl PlatformIo for LinuxIo {
     }
 
     fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError> {
-        let output = std::process::Command::new("df")
-            .args(["--output=source", path.to_str().unwrap_or("")])
-            .output();
-
-        match output {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                let lines: Vec<&str> = stdout.trim().lines().collect();
-                if lines.len() >= 2 {
-                    let device = lines[1].trim();
-                    let dev_name = device.split('/').last().unwrap_or("");
-                    let base_dev = dev_name.trim_end_matches(|c: char| c.is_ascii_digit());
-                    let rotational_path = format!("/sys/block/{}/queue/rotational", base_dev);
-                    if let Ok(rot) = std::fs::read_to_string(&rotational_path) {
-                        let rot = rot.trim();
-                        if rot == "0" {
-                            return Ok(MediaType::Ssd);
-                        }
-                    }
-                }
-                Ok(MediaType::Unknown)
-            }
+        // Delegate to the drive module for centralized detection.
+        match crate::drive::detect_drive_info(path) {
+            Ok(info) => match info.drive_type {
+                crate::drive::DriveType::Ssd => Ok(MediaType::Ssd),
+                crate::drive::DriveType::Hdd => Ok(MediaType::Hdd),
+                _ => Ok(MediaType::Unknown),
+            },
             Err(_) => Ok(MediaType::Unknown),
         }
     }

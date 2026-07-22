@@ -13,9 +13,16 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DriveType {
+    /// NVMe or SATA SSD
+    Ssd,
+    /// Spinning hard disk
+    Hdd,
     /// Network-attached share / UNC path / mapped drive
     #[cfg(windows)]
     Network,
+    /// USB-attached SSD
+    #[cfg(windows)]
+    UsbSsd,
     /// USB-attached HDD
     #[cfg(windows)]
     UsbHdd,

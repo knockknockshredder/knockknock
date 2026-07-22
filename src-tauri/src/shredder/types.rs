@@ -20,6 +20,7 @@ impl PatternType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaType {
     Ssd,
+    Hdd,
     Unknown,
 }
 

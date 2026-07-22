@@ -96,32 +96,20 @@ impl PlatformIo for WindowsIo {
     }
 
     fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError> {
-        use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
-
-        let path_str = path.to_string_lossy();
-        // Extract drive root (e.g., "C:\")
-        let drive = if path_str.len() >= 2 && path_str.as_bytes()[1] == b':' {
-            format!("{}:\\", &path_str[..1])
-        } else if path_str.starts_with("\\\\") {
-            // UNC path — can't determine media type
-            return Ok(MediaType::Unknown);
-        } else {
-            return Ok(MediaType::Unknown);
-        };
-
-        let drive_wide: Vec<u16> = drive.encode_utf16().chain(std::iter::once(0)).collect();
-        let drive_type = unsafe { GetDriveTypeW(drive_wide.as_ptr()) };
-
-        // DRIVE_FIXED = 3. We can't distinguish SSD vs HDD without
-        // IOCTL_STORAGE_QUERY_PROPERTY (which needs the Win32_System_Ioctl
-        // feature), so for now we only flag network/removable/unknown and
-        // leave fixed drives as Unknown for the SSD warning path. Detecting
-        // network/remote drives here also lets the validation layer skip its
-        // own GetDriveTypeW call on this OS.
-        if drive_type == 3 {
-            Ok(MediaType::Unknown)
-        } else {
-            Ok(MediaType::Unknown)
+        // Delegate to the drive module which uses IOCTL_STORAGE_QUERY_PROPERTY
+        // (seek-penalty query) to distinguish SSD from HDD on fixed drives,
+        // and also handles USB SSD vs USB HDD on removable drives.
+        match crate::drive::detect_drive_info(path) {
+            Ok(info) => match info.drive_type {
+                crate::drive::DriveType::Ssd | crate::drive::DriveType::UsbSsd => {
+                    Ok(MediaType::Ssd)
+                }
+                crate::drive::DriveType::Hdd | crate::drive::DriveType::UsbHdd => {
+                    Ok(MediaType::Hdd)
+                }
+                _ => Ok(MediaType::Unknown),
+            },
+            Err(_) => Ok(MediaType::Unknown),
         }
     }
 

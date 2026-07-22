@@ -114,20 +114,13 @@ impl PlatformIo for MacOsIo {
     }
 
     fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError> {
-        let output = std::process::Command::new("diskutil")
-            .args(["info", "-plist"])
-            .arg(path)
-            .output();
-
-        match output {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                if stdout.contains("<key>Solid State</key>") && stdout.contains("<true/>") {
-                    Ok(MediaType::Ssd)
-                } else {
-                    Ok(MediaType::Unknown)
-                }
-            }
+        // Delegate to the drive module for centralized detection.
+        match crate::drive::detect_drive_info(path) {
+            Ok(info) => match info.drive_type {
+                crate::drive::DriveType::Ssd => Ok(MediaType::Ssd),
+                crate::drive::DriveType::Hdd => Ok(MediaType::Hdd),
+                _ => Ok(MediaType::Unknown),
+            },
             Err(_) => Ok(MediaType::Unknown),
         }
     }
