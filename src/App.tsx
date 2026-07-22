@@ -7,6 +7,7 @@ import { SettingsProvider } from "@/contexts/SettingsContext";
 import { BrowserProvider } from "@/contexts/BrowserContext";
 import { AppShell } from "@/components/layout/AppShell";
 import { OperationLog } from "@/components/layout/OperationLog";
+import { PinSetup } from "@/components/settings/PinSetup";
 import { PinVerify } from "@/components/settings/PinVerify";
 import { useNavigation } from "@/contexts/NavigationContext";
 import { ShredSection } from "@/sections/ShredSection";
@@ -14,37 +15,40 @@ import { SettingsSection } from "@/sections/SettingsSection";
 import { useBrowserDetection } from "@/hooks/useBrowserDetection";
 
 function AppGate() {
-  const [pinNeeded, setPinNeeded] = useState<boolean | null>(null);
+  const [hasPin, setHasPin] = useState<boolean | null>(null);
+  const [pinEnabled, setPinEnabled] = useState<boolean | null>(null);
   const [gatePassed, setGatePassed] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [configError, setConfigError] = useState(false);
   const { loadVault, addLogEntry } = useShred();
 
   useEffect(() => {
-    invoke<boolean>("is_pin_enabled")
-      .then((enabled) => {
-        setPinNeeded(enabled);
-        if (!enabled) setGatePassed(true);
+    // First: check whether a PIN hash exists at all
+    invoke<boolean>("has_pin")
+      .then((has) => {
+        setHasPin(has);
+        if (!has) {
+          // Fresh install — no PIN configured. Show onboarding.
+          setShowOnboarding(true);
+        } else {
+          // PIN exists — check if the gate is enabled
+          invoke<boolean>("is_pin_enabled")
+            .then((enabled) => {
+              setPinEnabled(enabled);
+              if (!enabled) {
+                // PIN was configured but user disabled it — skip gate
+                setGatePassed(true);
+              }
+            })
+            .catch(() => {
+              setConfigError(true);
+            });
+        }
       })
       .catch(() => {
-        setPinNeeded(true);  // assume PIN required on error
-        // DO NOT set gatePassed — keep showing gate
-      });
-
-    // Defensive: verify configuration consistency
-    if (pinNeeded) {
-      invoke<boolean>("has_pin").then((has) => {
-        if (!has) {
-          // Inconsistent state — enabled flag set but no hash. Show error.
-          setConfigError(true);
-          setPinNeeded(false);  // don't show normal gate — show error screen
-        }
-      }).catch(() => {
-        // If has_pin IPC fails, treat as config error too
         setConfigError(true);
-        setPinNeeded(false);
       });
-    }
-  }, [pinNeeded]);
+  }, []);
 
   const handleGateVerified = async (pin: string) => {
     try {
@@ -55,7 +59,17 @@ function AppGate() {
     }
   };
 
-  if (pinNeeded === null) {
+  const handleOnboardingPinSet = async (newPin: string) => {
+    try {
+      await loadVault(newPin);
+      setShowOnboarding(false);
+      setGatePassed(true);
+    } catch {
+      addLogEntry("error", "Failed to initialize vault");
+    }
+  };
+
+  if (hasPin === null) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
         <div className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
@@ -65,8 +79,6 @@ function AppGate() {
     );
   }
 
-  // Gate NOT passed: only show the PIN dialog, nothing else.
-  // The dialog cannot be dismissed — user MUST authenticate.
   if (configError) {
     return (
       <div className="flex h-screen items-center justify-center bg-background p-6">
@@ -83,7 +95,20 @@ function AppGate() {
     );
   }
 
-  if (!gatePassed) {
+  // Onboarding: no PIN exists — user must set one before using the app
+  if (showOnboarding) {
+    return (
+      <PinSetup
+        open
+        onOpenChange={() => {}}
+        requireOldPin={false}
+        onPinSet={handleOnboardingPinSet}
+      />
+    );
+  }
+
+  // Gate: PIN exists and the gate is enabled
+  if (hasPin && pinEnabled && !gatePassed) {
     return (
       <PinVerify
         open
