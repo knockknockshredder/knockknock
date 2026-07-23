@@ -114,7 +114,7 @@ jobs:
       - name: Generate SHA256SUMS.txt
         run: |
           cd artifacts
-          find . -type f -name 'KnockKnock-*' -exec sha256sum {} \; > ../SHA256SUMS.txt
+          find . -type f -name 'KnockKnock*' -exec sha256sum {} \; > ../SHA256SUMS.txt
           cat ../SHA256SUMS.txt
 
       - name: Upload checksums
