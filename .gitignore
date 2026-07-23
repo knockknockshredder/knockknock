@@ -64,6 +64,10 @@ coverage/
 test-results/
 playwright-report/
 
+# Release artifacts
+SHA256SUMS.txt
+artifacts/
+
 # Misc
 *.bak
 *.tmp
