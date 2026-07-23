@@ -39,6 +39,7 @@ lazy_static = "1.5"
 aes-gcm = "0.10"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
 sha2 = "0.10"
+zeroize = { version = "1", features = ["derive"] }
 # lnks is only used in #[cfg(windows)]-gated code — see shredder/validation.rs
 
 [target.'cfg(windows)'.dependencies]

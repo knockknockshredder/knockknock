@@ -10,6 +10,7 @@ use aes_gcm::{
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2::Sha256;
+use zeroize::Zeroize;
 
 /// OWASP 2023 recommendation: 600,000+ iterations for PBKDF2-SHA256.
 /// Using 1,000,000 for extra security on a file-shredder app where the
@@ -52,7 +53,7 @@ pub fn encrypt(plaintext: &[u8], pin: &str) -> Result<EncryptedData, String> {
     rand::thread_rng().fill_bytes(&mut salt);
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
-    let key = derive_key(pin, &salt);
+    let mut key = derive_key(pin, &salt);
 
     let cipher =
         Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to create cipher: {}", e))?;
@@ -61,6 +62,8 @@ pub fn encrypt(plaintext: &[u8], pin: &str) -> Result<EncryptedData, String> {
     let ciphertext = cipher
         .encrypt(nonce, plaintext)
         .map_err(|e| format!("Encryption failed: {}", e))?;
+
+    key.zeroize();
 
     Ok(EncryptedData {
         version: VAULT_VERSION,
@@ -82,15 +85,19 @@ pub fn decrypt(encrypted: &EncryptedData, pin: &str) -> Result<Vec<u8>, String> 
         ));
     }
 
-    let key = derive_key(pin, &encrypted.salt);
+    let mut key = derive_key(pin, &encrypted.salt);
 
     let cipher =
         Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to create cipher: {}", e))?;
     let nonce = Nonce::from_slice(&encrypted.nonce);
 
-    cipher
+    let result = cipher
         .decrypt(nonce, encrypted.ciphertext.as_ref())
-        .map_err(|e| format!("Decryption failed (wrong PIN or corrupted vault): {}", e))
+        .map_err(|e| format!("Decryption failed (wrong PIN or corrupted vault): {}", e));
+
+    key.zeroize();
+
+    result
 }
 
 #[cfg(test)]
