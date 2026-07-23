@@ -152,7 +152,7 @@ export function ShredSection() {
 
     try {
       const paths = pendingFiles.map((f) => f.path);
-      const report: ShredReport = await invoke("shred_files", {
+      const report: ShredReport = await invoke<ShredReport>("shred_files", {
         paths,
         algorithmIndex,
         passes,
@@ -196,7 +196,7 @@ export function ShredSection() {
               "info",
               `Shredding ${profile.browser_name} profile: ${profile.profile_path}`
             );
-            const browserReport: ShredReport = await invoke("shred_browser_data", {
+            const browserReport: ShredReport = await invoke<ShredReport>("shred_browser_data", {
               request: {
                 browser_name: profile.browser_name,
                 profile_path: profile.profile_path,

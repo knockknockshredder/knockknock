@@ -161,7 +161,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
           "[vault] saving %d paths to vault",
           paths.length,
         );
-        await invoke("save_vault", { paths, pin });
+        await invoke<void>("save_vault", { paths, pin });
         console.debug("[vault] save succeeded");
         return true;
       } catch (err) {

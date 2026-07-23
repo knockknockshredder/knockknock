@@ -131,7 +131,7 @@ export function SettingsSection() {
             // requires the freshly-set PIN to authorize enabling.
             if (pinSetupFromToggle) {
               setPinSetupFromToggle(false);
-              invoke("set_pin_enabled", { currentPin: newPin, enabled: true })
+              invoke<void>("set_pin_enabled", { currentPin: newPin, enabled: true })
                 .then(() => setPinEnabled(true))
                 .catch((err) => addLogEntry("error", `Failed to enable PIN: ${err}`));
             }
@@ -145,7 +145,7 @@ export function SettingsSection() {
           }}
           onVerified={(pin) => {
             if (pendingPinAction === "disable") {
-              invoke("disable_pin", { currentPin: pin })
+              invoke<void>("disable_pin", { currentPin: pin })
                 .then(() => {
                   setPinEnabled(false);
                   setPinSet(false);
@@ -157,7 +157,7 @@ export function SettingsSection() {
                 })
                 .catch((err) => addLogEntry("error", `Failed to disable PIN: ${err}`));
             } else if (pendingPinAction === "enable") {
-              invoke("set_pin_enabled", { currentPin: pin, enabled: true })
+              invoke<void>("set_pin_enabled", { currentPin: pin, enabled: true })
                 .then(() => setPinEnabled(true))
                 .catch((err) => addLogEntry("error", `Failed to enable PIN: ${err}`));
             }
