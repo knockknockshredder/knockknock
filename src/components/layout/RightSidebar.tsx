@@ -21,6 +21,7 @@ export function RightSidebar() {
               onClick={clearFiles}
               className="text-muted-foreground hover:text-destructive transition-colors"
               title="Remove all files"
+              aria-label="Remove all files"
             >
               <Trash size={14} />
             </button>
