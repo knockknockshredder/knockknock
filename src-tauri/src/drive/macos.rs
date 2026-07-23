@@ -126,8 +126,8 @@ fn get_capacity(path: &Path) -> (u64, u64) {
     }
 
     let frag_size = stat.f_frsize.max(1) as u64;
-    let total = frag_size.saturating_mul(stat.f_blocks);
-    let free = frag_size.saturating_mul(stat.f_bfree);
+    let total = frag_size.saturating_mul(u64::from(stat.f_blocks));
+    let free = frag_size.saturating_mul(u64::from(stat.f_bfree));
     (total, free)
 }
 
