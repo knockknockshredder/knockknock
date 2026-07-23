@@ -295,9 +295,10 @@ mod tests {
         let mut expected = vec![0u8; 8192];
         let mut cipher = seed.cipher();
         cipher.apply_keystream(&mut expected);
-        // Inject a corruption: flip one byte to 0x00. With 8192 bytes of
-        // PRNG output, this is virtually guaranteed not to be the natural value.
-        expected[4096] = 0x00;
+        // Inject a corruption: flip all bits of one byte. This guarantees
+        // the byte differs from the original (unlike setting to 0x00 which
+        // has a 1/256 chance of being the natural ChaCha20 output).
+        expected[4096] = !expected[4096];
         temp.write_all(&expected).unwrap();
         temp.flush().unwrap();
 
