@@ -51,45 +51,31 @@ Chrome (incl. Beta, Canary), Firefox, Edge (incl. Beta), Brave (incl. Beta), Ope
 
 ### Download Prebuilt Binaries
 
-Download the latest release for your platform from the [Releases page](https://github.com/knockknockshredder/knockknock/releases/latest):
+KnockKnock is a **portable app** — no installer required. Download the latest release for your platform from the [Releases page](https://github.com/knockknockshredder/knockknock/releases/latest):
 
-| Platform | File |
-|----------|------|
-| **Windows** | `KnockKnock_<version>_x64-setup.exe` or `.msi` |
-| **macOS (Apple Silicon)** | `KnockKnock_<version>_aarch64.dmg` |
-| **macOS (Intel)** | `KnockKnock_<version>_x64.dmg` |
-| **Linux (Debian/Ubuntu)** | `knockknock_<version>_amd64.deb` |
-| **Linux (AppImage)** | `knockknock_<version>_amd64.AppImage` |
+| Platform | File | Run |
+|----------|------|-----|
+| **Windows** | `KnockKnock-windows-x64.exe` | Place in any writable folder, double-click |
+| **macOS (Apple Silicon)** | `KnockKnock-macos-arm64.dmg` | Open `.dmg`, drag `KnockKnock.app` to any writable folder, right-click → Open |
+| **Linux (any distro)** | `KnockKnock-linux-x64.AppImage` | `chmod +x` and run |
+
+All app data is stored in a `KnockKnock-data/` folder next to the app. Delete the folder to remove all traces.
 
 ### Windows
 
-Run the `.exe` installer. Windows SmartScreen may show a warning — click "More info" → "Run anyway" (the app is unsigned for now).
-
-Alternatively, install via the `.msi` package for silent/unattended installation:
-
-```powershell
-msiexec /i KnockKnock_<version>_x64.msi /quiet
-```
+Run the `.exe` directly — no installation needed. Windows SmartScreen may show a warning; click **More info** → **Run anyway** (the app is unsigned for now).
 
 ### macOS
 
 1. Open the `.dmg` file
-2. Drag KnockKnock to Applications
+2. Drag `KnockKnock.app` to any writable folder (Desktop, Downloads, Applications — all work)
 3. On first launch, right-click → Open (macOS Gatekeeper warning for unsigned apps)
-
-For Apple Silicon (M chips), use the `aarch64.dmg`. For Intel Macs, use the `x64.dmg`.
 
 ### Linux
 
-**Debian/Ubuntu:**
 ```bash
-sudo dpkg -i knockknock_<version>_amd64.deb
-```
-
-**AppImage (any distro):**
-```bash
-chmod +x knockknock_<version>_amd64.AppImage
-./knockknock_<version>_amd64.AppImage
+chmod +x KnockKnock-linux-x64.AppImage
+./KnockKnock-linux-x64.AppImage
 ```
 
 ## Usage

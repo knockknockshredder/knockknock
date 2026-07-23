@@ -129,38 +129,34 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
           path: artifacts
 
+      - name: Generate changelog excerpt
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          awk -v ver="$VERSION" '
+            /^## \[/ { if (found) exit; if (index($0,"[" ver "]")) found=1; next }
+            found { print }
+          ' CHANGELOG.md > /tmp/release-body.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          draft: true
+          draft: false
           files: |
             artifacts/**/*.dmg
             artifacts/**/*.AppImage
             artifacts/**/*.exe
             artifacts/**/SHA256SUMS.txt
           name: 'KnockKnock ${{ github.ref_name }}'
-          body: |
-            ## KnockKnock ${{ github.ref_name }}
-
-            Emergency file shredder with browser profile cleanup.
-
-            ### Downloads (Portable)
-            - **Windows:** Download `KnockKnock-windows-x64.exe`, place in any writable folder, double-click
-            - **macOS:** Open `.dmg`, drag `KnockKnock.app` to any writable folder, right-click → Open
-            - **Linux:** Download `.AppImage`, `chmod +x`, run
-
-            ### Verification
-            Verify integrity with `SHA256SUMS.txt`:
-            ```sh
-            sha256sum -c SHA256SUMS.txt
-            ```
-
-            ### Data
-            All app data is stored in a `KnockKnock-data/` folder next to the app.
-            Delete the folder to remove all traces.
+          body_path: /tmp/release-body.md
+          generate_release_notes: true

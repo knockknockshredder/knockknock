@@ -5,6 +5,44 @@ All notable changes to KnockKnock will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-07-23
+
+### "Drive Detection & Window Polish"
+
+This release adds cross-platform drive type detection (SSD/HDD), removes the confusing default algorithm setting in favor of per-algorithm tooltips, improves window draggability throughout the app, and tightens PIN change UX.
+
+### Added
+
+#### Drive Type Detection
+- **Linux drive detection** — `/sys/block` rotational flag check, NVMe detection, fallback to `lsblk -d -o ROTA`.
+- **macOS drive detection** — `IOKit` property `Solid State` via `IORegistryEntryCreateCFProperty`.
+- **Windows NVMe fix** — Use `FILE_READ_ATTRIBUTES` instead of `GENERIC_READ` for NVMe SSD detection query, preventing access-denied on NVMe drives.
+- **Windows legacy HDD/SSD detection** — Drive module's `IOCTL_STORAGE_QUERY_PROPERTY` and rotational rate check, gated by admin elevation.
+
+#### Window Draggability
+- **Pre-gate screen drag regions** — Loading, config-error, onboarding, PIN gate, and vault-restore screens now draggable via `data-tauri-drag-region`. These render before `TitleBar`/`AppShell`, so the window was previously undraggable.
+- **Dialog backdrop drag passthrough** — Dialog backdrop (`fixed inset-0`) now passes clicks through to the gate screen's drag region, so dialog-closed users can move the window.
+
+#### Onboarding
+- **First-launch onboarding flow** — New first-run experience guides users through initial PIN setup before they can use the app.
+
+### Changed
+
+- **Per-algorithm tooltips** — Removed the global default algorithm setting. Each algorithm now has a (?) tooltip with detailed description, giving users context *when they choose* rather than hiding it in settings.
+- **Sidebar width to percentage-based** — Sidebar widths reworked from fixed pixel values to percentage-based with dampened resize, better adapting to window size.
+- **PIN disable confirmation** — Disabling PIN now shows a confirmation dialog. "Change PIN" button hidden when PIN is disabled. Labels clarified.
+
+### Fixed
+- **Dialog backdrop blocking drag** — `data-tauri-drag-region` on backdrop allows clicks through (dialog closes on outside click).
+- **Settings scrollbar visibility** — Added native scrollbar styling (`::-webkit-scrollbar`, `scrollbar-width`) to match the dark theme.
+
+### Refactored
+- **Dead code removal** — Unused `acknowledgedBrowsers` state, `useCallback` import, map index parameters, and vestigial React imports removed as exposed by `noUnusedLocals`.
+
+### CI/CD
+- **macOS x64 runner retired** — `macos-13` (Intel) build matrix entry removed; macOS ARM64 (`macos-14`) remains for `aarch64-apple-darwin`.
+- **Versioned Windows artifacts** — `.exe` output renamed to `KnockKnock_${VERSION}_x64.exe` for distinguishable release downloads.
+
 ## [0.4.0] — 2026-07-21
 
 ### "Portable App & Shortcut Awareness"
