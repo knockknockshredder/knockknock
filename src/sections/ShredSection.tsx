@@ -25,7 +25,6 @@ export function ShredSection() {
   const {
     files,
     algorithmIndex,
-    setAlgorithmIndex,
     isShredding,
     setIsShredding,
     addLogEntry,
@@ -40,7 +39,7 @@ export function ShredSection() {
   } = useShred();
 
   const { getSelectedCount, browsers } = useBrowser();
-  const { defaultAlgorithmIndex, logObfuscation } = useSettings();
+  const { logObfuscation } = useSettings();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [passes, setPasses] = useState(1);
@@ -76,13 +75,9 @@ export function ShredSection() {
     invoke<AlgorithmOption[]>("get_algorithms")
       .then((algorithms) => {
         setAlgorithms(algorithms);
-        // Apply default algorithm from settings
-        if (defaultAlgorithmIndex > 0 && defaultAlgorithmIndex < algorithms.length) {
-          setAlgorithmIndex(defaultAlgorithmIndex);
-        }
       })
       .catch((err) => addLogEntry("error", `Failed to load algorithms: ${err}`));
-  }, [setAlgorithms, addLogEntry, defaultAlgorithmIndex, setAlgorithmIndex]);
+  }, [setAlgorithms, addLogEntry]);
 
   // Cleanup progress listener on unmount
   useEffect(() => {

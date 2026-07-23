@@ -14,7 +14,6 @@ import type { LogObfuscation } from "@/types";
 // Must match the Rust AppSettings struct fields exactly.
 interface AppSettings {
   auto_clear_log: boolean;
-  default_algorithm_index: number;
   log_obfuscation: string;
   left_sidebar_width: number;
   right_sidebar_width: number;
@@ -23,8 +22,6 @@ interface AppSettings {
 interface SettingsState {
   autoClearLog: boolean;
   setAutoClearLog: (v: boolean) => void;
-  defaultAlgorithmIndex: number;
-  setDefaultAlgorithmIndex: (v: number) => void;
   logObfuscation: LogObfuscation;
   setLogObfuscation: (v: LogObfuscation) => void;
   leftSidebarWidth: number;
@@ -46,7 +43,6 @@ function isValidLogObfuscation(v: string): v is LogObfuscation {
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [loaded, setLoaded] = useState(false);
   const [autoClearLog, setAutoClearLogState] = useState(false);
-  const [defaultAlgorithmIndex, setDefaultAlgorithmIndexState] = useState(0);
   const [logObfuscation, setLogObfuscationState] =
     useState<LogObfuscation>("none");
   const [leftSidebarWidth, setLeftSidebarWidthState] = useState(33.33);
@@ -57,14 +53,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   // (e.g. sidebar drag at 60Hz).
   const stateRef = useRef({
     autoClearLog,
-    defaultAlgorithmIndex,
     logObfuscation,
     leftSidebarWidth,
     rightSidebarWidth,
   });
   stateRef.current = {
     autoClearLog,
-    defaultAlgorithmIndex,
     logObfuscation,
     leftSidebarWidth,
     rightSidebarWidth,
@@ -77,11 +71,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     if (saveTimerRef.current !== null) {
       clearTimeout(saveTimerRef.current);
     }
-    saveTimerRef.current = window.setTimeout(() => {
-      const settings: AppSettings = {
-        auto_clear_log: stateRef.current.autoClearLog,
-        default_algorithm_index: stateRef.current.defaultAlgorithmIndex,
-        log_obfuscation: stateRef.current.logObfuscation,
+      saveTimerRef.current = window.setTimeout(() => {
+        const settings: AppSettings = {
+          auto_clear_log: stateRef.current.autoClearLog,
+          log_obfuscation: stateRef.current.logObfuscation,
         left_sidebar_width: stateRef.current.leftSidebarWidth,
         right_sidebar_width: stateRef.current.rightSidebarWidth,
       };
@@ -96,7 +89,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     invoke<AppSettings>("get_settings")
       .then((s) => {
         setAutoClearLogState(s.auto_clear_log);
-        setDefaultAlgorithmIndexState(s.default_algorithm_index);
         setLogObfuscationState(
           isValidLogObfuscation(s.log_obfuscation)
             ? s.log_obfuscation
@@ -119,7 +111,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         clearTimeout(saveTimerRef.current);
         const settings: AppSettings = {
           auto_clear_log: stateRef.current.autoClearLog,
-          default_algorithm_index: stateRef.current.defaultAlgorithmIndex,
           log_obfuscation: stateRef.current.logObfuscation,
           left_sidebar_width: stateRef.current.leftSidebarWidth,
           right_sidebar_width: stateRef.current.rightSidebarWidth,
@@ -135,14 +126,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const setAutoClearLog = useCallback(
     (v: boolean) => {
       setAutoClearLogState(v);
-      scheduleSave();
-    },
-    [scheduleSave],
-  );
-
-  const setDefaultAlgorithmIndex = useCallback(
-    (v: number) => {
-      setDefaultAlgorithmIndexState(v);
       scheduleSave();
     },
     [scheduleSave],
@@ -183,8 +166,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       value={{
         autoClearLog,
         setAutoClearLog,
-        defaultAlgorithmIndex,
-        setDefaultAlgorithmIndex,
         logObfuscation,
         setLogObfuscation,
         leftSidebarWidth,

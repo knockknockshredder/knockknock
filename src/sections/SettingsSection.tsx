@@ -19,12 +19,6 @@ import {
 import { cn } from "@/lib/utils";
 import type { LogObfuscation } from "@/types";
 
-const ALGO_HINTS: Record<number, string> = {
-  0: "Best for SSDs, fast, single-pass",
-  1: "Military-grade, 3-pass fixed pattern",
-  2: "Simple random overwrite",
-};
-
 const LOG_OBFUSCATION_MODES: ReadonlyArray<{
   value: LogObfuscation;
   label: string;
@@ -38,12 +32,10 @@ export function SettingsSection() {
   const {
     autoClearLog,
     setAutoClearLog,
-    defaultAlgorithmIndex,
-    setDefaultAlgorithmIndex,
     logObfuscation,
     setLogObfuscation,
   } = useSettings();
-  const { algorithms, setVaultPin, addLogEntry } = useShred();
+  const { setVaultPin, addLogEntry } = useShred();
   const [pinEnabled, setPinEnabled] = useState(false);
   const [pinSet, setPinSet] = useState(false);
   const [pinSetupOpen, setPinSetupOpen] = useState(false);
@@ -224,64 +216,6 @@ export function SettingsSection() {
               </button>
             ))}
           </div>
-        </div>
-      </section>
-
-      <section>
-          <h2 className="mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground">
-          Select Default Algorithm
-        </h2>
-        <div className="flex flex-col gap-3">
-          {algorithms.map((algo) => (
-            <div
-              key={algo.index}
-              className={cn(
-                "border p-4 transition-colors cursor-pointer",
-                defaultAlgorithmIndex === algo.index
-                  ? "border-accent bg-accent/5"
-                  : "border-border bg-surface hover:border-muted-foreground"
-              )}
-              onClick={() => setDefaultAlgorithmIndex(algo.index)}
-            >
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setDefaultAlgorithmIndex(algo.index);
-                  }}
-                  className={cn(
-                    "h-4 w-4 rounded-full border-2 transition-colors flex-shrink-0",
-                    defaultAlgorithmIndex === algo.index
-                      ? "border-accent bg-accent"
-                      : "border-muted-foreground hover:border-foreground"
-                  )}
-                  aria-label={`Set ${algo.name} as default`}
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-mono text-sm font-semibold text-foreground">
-                      {algo.name}
-                    </h3>
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {algo.default_passes} pass{algo.default_passes !== 1 ? "es" : ""}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">{algo.description}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    <span className="text-foreground/70">Best for:</span>{" "}
-                    {ALGO_HINTS[algo.index] ?? "General use"}
-                  </p>
-                  <p className="mt-2 font-mono text-xs text-muted-foreground">
-                    Max passes: {algo.max_passes} · Patterns: {algo.accepted_patterns.join(", ")}
-                  </p>
-                </div>
-              </div>
-            </div>
-          ))}
-          {algorithms.length === 0 && (
-            <p className="text-xs text-muted-foreground">Loading algorithms...</p>
-          )}
         </div>
       </section>
 

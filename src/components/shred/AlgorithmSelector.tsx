@@ -52,7 +52,31 @@ export function AlgorithmSelector() {
                 : "bg-transparent text-muted-foreground border-border hover:bg-elevated hover:text-foreground"
             )}
           >
-            {algo.name}
+            <span className="inline-flex items-center gap-1">
+              {algo.name}
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={<span className="inline-flex cursor-help" />}
+                  >
+                    <Question size={12} className="text-muted-foreground" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <div className="max-w-xs space-y-1">
+                      <p className="text-xs">{algo.description}</p>
+                      <p className="text-xs opacity-80">
+                        Passes: {algo.default_passes} default / {algo.max_passes} max
+                      </p>
+                      {algo.accepted_patterns.length > 0 && (
+                        <p className="text-xs opacity-80">
+                          Patterns: {algo.accepted_patterns.join(", ")}
+                        </p>
+                      )}
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </span>
           </button>
         ))}
       </div>
