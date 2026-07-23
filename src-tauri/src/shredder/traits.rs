@@ -52,7 +52,7 @@ pub trait ProgressReporter: Send + Sync {
     fn on_pass_start(&self, pass: u32, total_passes: u32);
     fn on_progress(&self, bytes_written: u64, total: u64);
     fn on_pass_complete(&self, pass: u32, total_passes: u32);
-    fn on_file_complete(&self, path: &Path, result: &ShredResult);
+    fn on_file_complete(&self, path: &Path, result: &ShredResult, total_passes: u32);
     fn on_error(&self, path: &Path, error: &ShredError);
     fn on_warning(&self, path: &Path, message: &str);
 }

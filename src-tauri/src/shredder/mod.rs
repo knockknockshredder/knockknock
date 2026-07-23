@@ -62,6 +62,7 @@ pub fn shred_file(
                 bytes_written: 0,
                 errors: vec![],
             },
+            0,
         );
         return Ok(ShredResult {
             success: true,
@@ -228,7 +229,7 @@ fn shred_file_inner(
             bytes_written: 0,
             errors: vec![],
         };
-        progress.on_file_complete(path, &result);
+        progress.on_file_complete(path, &result, 0);
         return Ok(result);
     }
 
@@ -444,7 +445,7 @@ fn shred_file_inner(
         errors,
     };
 
-    progress.on_file_complete(path, &result);
+    progress.on_file_complete(path, &result, passes);
     Ok(result)
 }
 
