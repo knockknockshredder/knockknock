@@ -84,7 +84,6 @@ pub fn run() {
             commands::shred::request_elevation,
             commands::browser::detect_browsers,
             commands::browser::shred_browser_data,
-            commands::tray::quick_shred_from_clipboard,
             commands::tray::minimize_to_tray,
             commands::pin::setup_pin,
             commands::pin::verify_pin,
