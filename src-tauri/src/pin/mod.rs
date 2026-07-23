@@ -3,8 +3,7 @@
 pub mod config;
 
 use bcrypt::{hash, verify, DEFAULT_COST};
-use lazy_static::lazy_static;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Maximum failed PIN attempts before triggering a lockout.
@@ -41,9 +40,7 @@ impl PinState {
     }
 }
 
-lazy_static! {
-    static ref PIN_STATE: Mutex<PinState> = Mutex::new(PinState::new());
-}
+static PIN_STATE: LazyLock<Mutex<PinState>> = LazyLock::new(|| Mutex::new(PinState::new()));
 
 /// Load lockout state from disk into the in-memory mutex. Call once at
 /// app startup so a previously locked-out user cannot bypass the lockout
