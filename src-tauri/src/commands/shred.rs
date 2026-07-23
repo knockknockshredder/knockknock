@@ -172,10 +172,14 @@ fn collect_file_metadata(
     is_shortcut: bool,
     shortcut_target: Option<String>,
 ) -> Option<FileMetadata> {
-    let metadata = match std::fs::metadata(path) {
+    let metadata = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(_) => return None,
     };
+
+    if !metadata.file_type().is_file() {
+        return None;
+    }
 
     let name = path
         .file_name()
