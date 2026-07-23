@@ -246,7 +246,7 @@ export function ShredSection() {
       return; // Shredding continues if PIN not entered
     }
     try {
-      await invoke("cancel_shred");
+      await invoke<void>("cancel_shred");
       addLogEntry("warning", "Cancellation requested...");
     } catch (err) {
       addLogEntry("error", `Cancel failed: ${err}`);
@@ -313,7 +313,7 @@ export function ShredSection() {
         onVerified={(pin) => {
           setVaultPin(pin);
           setCancelPinOpen(false);
-          invoke("cancel_shred").catch((err) =>
+          invoke<void>("cancel_shred").catch((err) =>
             addLogEntry("error", `Failed to cancel shred: ${err}`)
           );
         }}

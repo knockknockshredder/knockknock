@@ -99,7 +99,7 @@ function AppGate() {
     // vault is still loaded for this session — the user is blocked
     // from entering the app only if loadVault itself failed.
     try {
-      await invoke("set_pin_enabled", { currentPin: newPin, enabled: true });
+      await invoke<void>("set_pin_enabled", { currentPin: newPin, enabled: true });
     } catch {
       addLogEntry("error", "Failed to enable PIN protection");
     }
