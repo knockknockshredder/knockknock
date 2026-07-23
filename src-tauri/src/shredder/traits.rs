@@ -32,6 +32,7 @@ pub trait ShredAlgorithm: Send + Sync {
         pattern: PatternType,
         progress: &dyn ProgressReporter,
         seed: Option<&PrngSeed>,
+        path: &Path,
     ) -> Result<ShredResult, ShredError>;
 }
 
@@ -43,6 +44,7 @@ pub trait VerificationStrategy: Send + Sync {
         expected_pattern: &PatternType,
         file_size: u64,
         seed: Option<&PrngSeed>,
+        path: &Path,
     ) -> Result<VerificationResult, ShredError>;
 }
 

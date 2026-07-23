@@ -273,6 +273,7 @@ fn shred_file_inner(
             pattern,
             progress,
             prng_seed.as_ref(),
+            path,
         );
         match shred_res {
             Ok(r) => {
@@ -284,8 +285,13 @@ fn shred_file_inner(
                     // Verify against the algorithm's final-pass pattern, not the user's
                     // selected pattern (fixed-sequence algorithms may differ).
                     let verify_pattern = algorithm.final_pattern(pattern);
-                    match verifier.verify(&mut file, &verify_pattern, file_size, prng_seed.as_ref())
-                    {
+                    match verifier.verify(
+                        &mut file,
+                        &verify_pattern,
+                        file_size,
+                        prng_seed.as_ref(),
+                        path,
+                    ) {
                         Ok(verification_result) => {
                             if !verification_result.passed {
                                 errors.push(ShredError::VerificationFailed {
@@ -356,6 +362,7 @@ fn shred_file_inner(
                 pattern,
                 progress,
                 prng_seed.as_ref(),
+                path,
             );
             match result {
                 Ok(r) => {
@@ -392,7 +399,7 @@ fn shred_file_inner(
             }
 
             // Verify after each pass
-            match verifier.verify(&mut file, &pattern, file_size, prng_seed.as_ref()) {
+            match verifier.verify(&mut file, &pattern, file_size, prng_seed.as_ref(), path) {
                 Ok(verification_result) => {
                     if !verification_result.passed {
                         errors.push(ShredError::VerificationFailed {

@@ -8,6 +8,7 @@ use chacha20::ChaCha20;
 use getrandom::getrandom;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 /// Deterministic seed for ChaCha20-based PRNG used to write and verify random data.
 ///
@@ -54,6 +55,7 @@ impl VerificationStrategy for NoVerification {
         _pattern: &PatternType,
         _size: u64,
         _seed: Option<&PrngSeed>,
+        _path: &Path,
     ) -> Result<VerificationResult, ShredError> {
         Ok(VerificationResult { passed: true })
     }
@@ -109,6 +111,7 @@ impl VerificationStrategy for SampleVerification {
         pattern: &PatternType,
         size: u64,
         seed: Option<&PrngSeed>,
+        path: &Path,
     ) -> Result<VerificationResult, ShredError> {
         if size == 0 {
             return Ok(VerificationResult { passed: true });
@@ -120,10 +123,10 @@ impl VerificationStrategy for SampleVerification {
 
         for pos in &positions {
             file.seek(SeekFrom::Start(*pos))
-                .map_err(|e| ShredError::from_io_error(std::path::PathBuf::from("<file>"), e))?;
+                .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
             let n = file
                 .read(&mut buffer)
-                .map_err(|e| ShredError::from_io_error(std::path::PathBuf::from("<file>"), e))?;
+                .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
             if n == 0 {
                 continue;
             }
@@ -186,13 +189,14 @@ impl VerificationStrategy for FullVerification {
         pattern: &PatternType,
         size: u64,
         seed: Option<&PrngSeed>,
+        path: &Path,
     ) -> Result<VerificationResult, ShredError> {
         if size == 0 {
             return Ok(VerificationResult { passed: true });
         }
 
         file.seek(SeekFrom::Start(0))
-            .map_err(|e| ShredError::from_io_error(std::path::PathBuf::from("<file>"), e))?;
+            .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
 
         let mut buffer = vec![0u8; 65536];
         let mut mismatches = 0;
@@ -203,7 +207,7 @@ impl VerificationStrategy for FullVerification {
             let to_read = std::cmp::min(remaining, buffer.len() as u64) as usize;
             let n = file
                 .read(&mut buffer[..to_read])
-                .map_err(|e| ShredError::from_io_error(std::path::PathBuf::from("<file>"), e))?;
+                .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
             if n == 0 {
                 break;
             }
