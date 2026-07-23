@@ -88,6 +88,7 @@ fn fill_pattern_buffer(
                     kind: "CipherSeek".to_string(),
                     message: e.to_string(),
                 })?;
+                buffer.fill(0u8); // Zero buffer before XOR-ing keystream
                 cipher_ref.apply_keystream(buffer);
             } else {
                 getrandom::getrandom(buffer).map_err(|e| ShredError::IoError {
