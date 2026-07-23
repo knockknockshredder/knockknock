@@ -6,10 +6,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 interface BrowserWarningProps {
   browserName: string;
   onAcknowledge: () => void;
+  acknowledged?: boolean;
 }
 
-export function BrowserWarning({ browserName, onAcknowledge }: BrowserWarningProps) {
-  const [acknowledged, setAcknowledged] = useState(false);
+export function BrowserWarning({ browserName, onAcknowledge, acknowledged = false }: BrowserWarningProps) {
+  const [locallyAcknowledged, setLocallyAcknowledged] = useState(false);
+
+  if (acknowledged) return null;
 
   return (
     <div className="flex items-start gap-3 border border-amber-500/30 bg-amber-500/10 px-4 py-3">
@@ -22,9 +25,9 @@ export function BrowserWarning({ browserName, onAcknowledge }: BrowserWarningPro
         </p>
         <label className="flex items-center gap-2">
           <Checkbox
-            checked={acknowledged}
+            checked={locallyAcknowledged}
             onCheckedChange={(checked) => {
-              setAcknowledged(!!checked);
+              setLocallyAcknowledged(!!checked);
               if (checked) onAcknowledge();
             }}
           />

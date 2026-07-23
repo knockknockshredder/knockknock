@@ -1,4 +1,5 @@
 // src/components/layout/LeftSidebar.tsx
+import { useState } from "react";
 import { CheckSquare, Square, ArrowClockwise } from "@phosphor-icons/react";
 import { BrowserCard } from "@/components/browser/BrowserCard";
 import { BrowserWarning } from "@/components/browser/BrowserWarning";
@@ -7,6 +8,7 @@ import { useBrowser } from "@/contexts/BrowserContext";
 
 export function LeftSidebar() {
   const { browsers, isScanning, selectAllProfiles, deselectAllProfiles, rescanBrowsers } = useBrowser();
+  const [acknowledgedBrowsers, setAcknowledgedBrowsers] = useState<Set<string>>(new Set());
   const runningBrowsers = browsers.filter((b) => b.isRunning);
 
   const selectAllAll = () => browsers.forEach((b) => {
@@ -28,6 +30,7 @@ export function LeftSidebar() {
             onClick={selectAllAll}
             className="text-muted-foreground hover:text-accent transition-colors"
             title="Select all"
+            aria-label="Select all browser profiles"
           >
             <CheckSquare size={14} />
           </button>
@@ -36,6 +39,7 @@ export function LeftSidebar() {
             onClick={deselectAllAll}
             className="text-muted-foreground hover:text-accent transition-colors"
             title="Deselect all"
+            aria-label="Deselect all browser profiles"
           >
             <Square size={14} />
           </button>
@@ -44,6 +48,7 @@ export function LeftSidebar() {
             onClick={rescanBrowsers}
             className="text-muted-foreground hover:text-accent transition-colors"
             title="Rescan browsers"
+            aria-label="Rescan browsers"
           >
             <ArrowClockwise size={14} />
           </button>
@@ -56,7 +61,8 @@ export function LeftSidebar() {
               <BrowserWarning
                 key={b.id}
                 browserName={b.name}
-                onAcknowledge={() => {}}
+                onAcknowledge={() => setAcknowledgedBrowsers(prev => new Set(prev).add(b.id))}
+                acknowledged={acknowledgedBrowsers.has(b.id)}
               />
             ))}
 
