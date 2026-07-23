@@ -44,9 +44,9 @@ impl PlatformIo for LinuxIo {
             })
     }
 
-    fn sync_to_disk(&self, file: &mut File) -> Result<(), ShredError> {
+    fn sync_to_disk(&self, file: &mut File, path: &Path) -> Result<(), ShredError> {
         file.sync_all()
-            .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
+            .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
     }
 
     fn rename_random(&self, path: &Path) -> Result<PathBuf, ShredError> {
@@ -72,9 +72,9 @@ impl PlatformIo for LinuxIo {
         Ok(new_path)
     }
 
-    fn truncate_to_zero(&self, file: &mut File) -> Result<(), ShredError> {
+    fn truncate_to_zero(&self, file: &mut File, path: &Path) -> Result<(), ShredError> {
         file.set_len(0)
-            .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
+            .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
     }
 
     fn delete(&self, path: &Path) -> Result<(), ShredError> {

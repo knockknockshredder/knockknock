@@ -62,9 +62,9 @@ pub trait ProgressReporter: Send + Sync {
 /// Trait for platform-specific I/O operations
 pub trait PlatformIo: Send + Sync {
     fn open_for_shred(&self, path: &Path) -> Result<File, ShredError>;
-    fn sync_to_disk(&self, file: &mut File) -> Result<(), ShredError>;
+    fn sync_to_disk(&self, file: &mut File, path: &Path) -> Result<(), ShredError>;
     fn rename_random(&self, path: &Path) -> Result<std::path::PathBuf, ShredError>;
-    fn truncate_to_zero(&self, file: &mut File) -> Result<(), ShredError>;
+    fn truncate_to_zero(&self, file: &mut File, path: &Path) -> Result<(), ShredError>;
     fn delete(&self, path: &Path) -> Result<(), ShredError>;
     fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError>;
 

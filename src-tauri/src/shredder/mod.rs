@@ -183,7 +183,7 @@ fn cleanup_after_shred(
     // Truncate to zero
     {
         let mut f = platform_io.open_for_shred(&renamed_path)?;
-        platform_io.truncate_to_zero(&mut f)?;
+        platform_io.truncate_to_zero(&mut f, &renamed_path)?;
     }
 
     // TRIM for SSDs
@@ -315,7 +315,7 @@ fn shred_file_inner(
         match shred_res {
             Ok(r) => {
                 bytes_written_total += r.bytes_written;
-                if let Err(e) = platform_io.sync_to_disk(&mut file) {
+                if let Err(e) = platform_io.sync_to_disk(&mut file, path) {
                     progress.on_error(path, &e);
                     errors.push(e);
                 } else {
@@ -429,7 +429,7 @@ fn shred_file_inner(
             }
 
             // Flush to disk
-            if let Err(e) = platform_io.sync_to_disk(&mut file) {
+            if let Err(e) = platform_io.sync_to_disk(&mut file, path) {
                 progress.on_error(path, &e);
                 errors.push(e);
                 break;
