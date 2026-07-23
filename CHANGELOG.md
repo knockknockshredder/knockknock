@@ -5,6 +5,43 @@ All notable changes to KnockKnock will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] — 2026-07-24
+
+### "Shredder Hardening & Bugfix Release"
+
+This release focuses on correctness fixes in the shredding pipeline, async safety in PIN/vault operations, and removal of unused UI components. The shredder now correctly zerofies cryptographic buffers after use, threads real file paths through all error messages, and runs the cleanup pipeline on *every* error path — not just successful shreds.
+
+### Fixed
+
+#### Shredder Correctness
+- **Buffer zeroing before keystream** — Shredder buffer now zeroed before applying ChaCha20 keystream, preventing stale data leakage between passes.
+- **All error paths run cleanup** — The cleanup pipeline (rename → truncate → delete) now runs on every error exit, not just successful shreds. Previously some early-exit paths left partially overwritten files.
+- **Real path in error messages** — `sync_to_disk` and `truncate_to_zero` errors now report the resolved real path instead of the original path, making diagnostics actionable.
+- **File path threaded through verification errors** — Verification and write errors now include the actual file path so users can identify which file failed in a batch.
+- **TOCTOU race prevention** — All metadata reads now use `symlink_metadata` instead of `metadata`, preventing a time-of-check/time-of-use race where a symlink could be swapped in between validation and shredding.
+- **Pattern validation** — Shredder now validates that the selected pattern is accepted by the chosen algorithm before starting, preventing silent fallback behavior.
+- **Total passes correction** — Progress tracking now correctly computes `total_passes` across multi-file batches, fixing a progress bar under-count.
+
+#### Frontend
+- **Missing `invoke()` type parameters** — All Tauri `invoke()` calls now include full type parameters (`invoke<Input, Result>`), fixing silent runtime errors on strict TypeScript builds.
+- **BrowserWarning checkbox binding** — Checkbox state now correctly wired to parent component via `checked`/`onCheckedChange` instead of a stale ref.
+- **ARIA labels on icon buttons** — All icon-only buttons now have descriptive `aria-label` attributes for accessibility.
+- **Auto-clear log setting** — New `autoClearLog` setting lets users automatically clear the operation log after each shred.
+- **`use client` removed** — Removed cargo-cult `'use client'` directives from non-client components.
+
+### Changed
+- **`lazy_static` → `std::sync::LazyLock`** — Replaced the `lazy_static` crate dependency with `std::sync::LazyLock` (stable in Rust 1.86), removing a dependency.
+- **Cleanup pipeline extracted** — Shredder cleanup (rename → truncate → delete) refactored into a single `run_cleanup_pipeline()` function, eliminating duplicate error-handling logic.
+
+### Security
+- **AES key zeroization** — Derived AES keys in the vault module are now explicitly zeroed (`zeroize`) after use, reducing key lifetime in memory.
+- **PIN/vault operations offloaded to `spawn_blocking`** — PIN verification and vault encrypt/decrypt now run on the blocking thread pool, preventing long-running crypto operations from blocking the async runtime.
+- **Remaining unused UI components deleted** — alert, badge, select, separator, tabs, and terminal UI primitives (79 + 52 + 201 + 25 + 80 + 298 = 735 lines) removed — none were used in production code.
+
+### Removed
+- **735 lines of unused UI code** — Deleted six unused shadcn/ui components: `alert.tsx`, `badge.tsx`, `select.tsx`, `separator.tsx`, `tabs.tsx`, `terminal.tsx`.
+- **Dead code eliminated** — Unused dependencies and vestigial Rust code removed (`noUnusedLocals` cleanup).
+
 ## [0.4.1] — 2026-07-23
 
 ### "Drive Detection & Window Polish"
