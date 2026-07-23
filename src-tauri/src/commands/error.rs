@@ -83,6 +83,13 @@ fn extract_path_and_action(err: &ShredError) -> (Option<String>, String) {
             None,
             "Provide a valid file or directory path.".to_string(),
         ),
+        ShredError::ValidationFailed(msg) => (
+            None,
+            format!(
+                "The selected shredding algorithm does not support the requested overwrite pattern. {}",
+                msg
+            ),
+        ),
     }
 }
 
@@ -99,6 +106,7 @@ fn error_type_name(err: &ShredError) -> String {
         ShredError::ShortcutDetected { .. } => "ShortcutDetected",
         ShredError::InvalidPathType(_) => "InvalidPathType",
         ShredError::EmptyPath => "EmptyPath",
+        ShredError::ValidationFailed(_) => "ValidationFailed",
     }
     .to_string()
 }
@@ -163,6 +171,9 @@ mod tests {
             },
             ShredError::InvalidPathType(PathBuf::from("a")),
             ShredError::EmptyPath,
+            ShredError::ValidationFailed(
+                "Algorithm 'RandomOnly' does not support pattern 'Zeros'".into(),
+            ),
         ];
         for err in cases {
             let dto: ShredErrorDto = (&err).into();

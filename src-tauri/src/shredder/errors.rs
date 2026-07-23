@@ -39,6 +39,9 @@ pub enum ShredError {
 
     #[error("Empty path")]
     EmptyPath,
+
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
 }
 
 impl ShredError {

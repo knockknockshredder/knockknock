@@ -219,7 +219,16 @@ fn shred_file_inner(
 
     progress.on_file_start(path, file_size);
 
-    // 6. Handle empty files — skip to rename/delete
+    // 6. Validate pattern is accepted by this algorithm
+    if !algorithm.accepted_patterns().contains(&pattern) {
+        return Err(ShredError::ValidationFailed(format!(
+            "Algorithm '{}' does not support pattern '{:?}'",
+            algorithm.name(),
+            pattern
+        )));
+    }
+
+    // 7. Handle empty files — skip to overwrite/rename/delete
     if file_size == 0 {
         let renamed = platform_io.rename_random(path)?;
         platform_io.delete(&renamed)?;
@@ -233,10 +242,10 @@ fn shred_file_inner(
         return Ok(result);
     }
 
-    // 7. Open file for shredding
+    // 8. Open file for shredding
     let mut file = platform_io.open_for_shred(path)?;
 
-    // 8. Generate PRNG seed for deterministic Random verification.
+    // 9. Generate PRNG seed for deterministic Random verification.
     //    Only Random pattern needs a seed; fixed patterns (Zeros, Ones) use
     //    direct byte comparison and don't benefit from seeding.
     let prng_seed = if pattern == PatternType::Random {
@@ -245,7 +254,7 @@ fn shred_file_inner(
         None
     };
 
-    // 9. Shred with per-pass verification
+    // 10. Shred with per-pass verification
     let verifier = verification::create_verifier(verification_level);
     let mut bytes_written_total = 0u64;
     let mut errors = Vec::new();
@@ -403,10 +412,10 @@ fn shred_file_inner(
         }
     }
 
-    // 9. Close file handle before rename/delete
+    // 11. Close file handle before rename/delete
     drop(file);
 
-    // 10. Rename to random name. Always run the cleanup pipeline even if the
+    // 12. Rename to random name. Always run the cleanup pipeline even if the
     //     shredding pass was cancelled — leaving the original-named partially-
     //     overwritten file on disk is the catastrophic failure mode this
     //     stage is here to prevent.
@@ -415,13 +424,13 @@ fn shred_file_inner(
     // Record orphan so a partial-failure recovery can clean it up later
     crate::shredder::journal::write_orphan(path, &renamed_path);
 
-    // 11. Truncate (re-open briefly)
+    // 13. Truncate (re-open briefly)
     {
         let mut f = platform_io.open_for_shred(&renamed_path)?;
         platform_io.truncate_to_zero(&mut f)?;
     }
 
-    // 12. Issue TRIM for SSDs BEFORE delete (file must still exist on the
+    // 14. Issue TRIM for SSDs BEFORE delete (file must still exist on the
     //     volume for TRIM to apply). This is the correct ordering for SSD
     //     wear-leveling: the FTL needs the LBA range before it's freed.
     if media_type == MediaType::Ssd {
@@ -430,7 +439,7 @@ fn shred_file_inner(
         }
     }
 
-    // 13. Delete
+    // 15. Delete
     platform_io.delete(&renamed_path)?;
     // Deletion succeeded — clear the orphan record
     crate::shredder::journal::clear_orphan(&renamed_path);
