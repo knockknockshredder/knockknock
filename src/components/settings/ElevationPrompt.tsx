@@ -35,7 +35,7 @@ export function ElevationPrompt({
     setError(null);
     setElevating(true);
     try {
-      await invoke("request_elevation");
+      await invoke<void>("request_elevation");
       // On a successful elevation request the backend calls
       // std::process::exit(0) and the elevated instance takes over. We
       // only reach this line if the command returned without exiting

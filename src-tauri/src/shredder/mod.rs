@@ -62,6 +62,7 @@ pub fn shred_file(
                 bytes_written: 0,
                 errors: vec![],
             },
+            0,
         );
         return Ok(ShredResult {
             success: true,
@@ -164,6 +165,43 @@ pub fn shred_file(
     }
 }
 
+/// Run the cleanup pipeline: rename → journal → truncate → TRIM → delete.
+/// Called after the file handle is dropped to prevent partially-overwritten
+/// data from surviving at the original filename.
+fn cleanup_after_shred(
+    path: &std::path::Path,
+    platform_io: &dyn PlatformIo,
+    progress: &dyn ProgressReporter,
+    media_type: MediaType,
+) -> Result<(), ShredError> {
+    // Rename to random name
+    let renamed_path = platform_io.rename_random(path)?;
+
+    // Record orphan for crash recovery
+    crate::shredder::journal::write_orphan(path, &renamed_path);
+
+    // Truncate to zero
+    {
+        let mut f = platform_io.open_for_shred(&renamed_path)?;
+        platform_io.truncate_to_zero(&mut f, &renamed_path)?;
+    }
+
+    // TRIM for SSDs
+    if media_type == MediaType::Ssd {
+        if let Err(e) = platform_io.issue_trim(&renamed_path) {
+            progress.on_warning(path, &format!("TRIM failed: {}", e));
+        }
+    }
+
+    // Delete
+    platform_io.delete(&renamed_path)?;
+
+    // Clear orphan entry
+    crate::shredder::journal::clear_orphan(&renamed_path);
+
+    Ok(())
+}
+
 /// Inner shred pipeline — the actual overwrite/rename/truncate/delete sequence
 /// for a single path. Assumes the caller has already validated and classified
 /// the path; this function never re-checks for shortcuts.
@@ -218,7 +256,16 @@ fn shred_file_inner(
 
     progress.on_file_start(path, file_size);
 
-    // 6. Handle empty files — skip to rename/delete
+    // 6. Validate pattern is accepted by this algorithm
+    if !algorithm.accepted_patterns().contains(&pattern) {
+        return Err(ShredError::ValidationFailed(format!(
+            "Algorithm '{}' does not support pattern '{:?}'",
+            algorithm.name(),
+            pattern
+        )));
+    }
+
+    // 7. Handle empty files — skip to overwrite/rename/delete
     if file_size == 0 {
         let renamed = platform_io.rename_random(path)?;
         platform_io.delete(&renamed)?;
@@ -228,14 +275,14 @@ fn shred_file_inner(
             bytes_written: 0,
             errors: vec![],
         };
-        progress.on_file_complete(path, &result);
+        progress.on_file_complete(path, &result, 0);
         return Ok(result);
     }
 
-    // 7. Open file for shredding
+    // 8. Open file for shredding
     let mut file = platform_io.open_for_shred(path)?;
 
-    // 8. Generate PRNG seed for deterministic Random verification.
+    // 9. Generate PRNG seed for deterministic Random verification.
     //    Only Random pattern needs a seed; fixed patterns (Zeros, Ones) use
     //    direct byte comparison and don't benefit from seeding.
     let prng_seed = if pattern == PatternType::Random {
@@ -244,7 +291,7 @@ fn shred_file_inner(
         None
     };
 
-    // 9. Shred with per-pass verification
+    // 10. Shred with per-pass verification
     let verifier = verification::create_verifier(verification_level);
     let mut bytes_written_total = 0u64;
     let mut errors = Vec::new();
@@ -263,21 +310,38 @@ fn shred_file_inner(
             pattern,
             progress,
             prng_seed.as_ref(),
+            path,
         );
         match shred_res {
             Ok(r) => {
                 bytes_written_total += r.bytes_written;
-                platform_io.sync_to_disk(&mut file)?;
-                // Verify against the algorithm's final-pass pattern, not the user's
-                // selected pattern (fixed-sequence algorithms may differ).
-                let verify_pattern = algorithm.final_pattern(pattern);
-                let verification_result =
-                    verifier.verify(&mut file, &verify_pattern, file_size, prng_seed.as_ref())?;
-                if !verification_result.passed {
-                    errors.push(ShredError::VerificationFailed {
-                        path: path.to_path_buf(),
-                        pass: passes,
-                    });
+                if let Err(e) = platform_io.sync_to_disk(&mut file, path) {
+                    progress.on_error(path, &e);
+                    errors.push(e);
+                } else {
+                    // Verify against the algorithm's final-pass pattern, not the user's
+                    // selected pattern (fixed-sequence algorithms may differ).
+                    let verify_pattern = algorithm.final_pattern(pattern);
+                    match verifier.verify(
+                        &mut file,
+                        &verify_pattern,
+                        file_size,
+                        prng_seed.as_ref(),
+                        path,
+                    ) {
+                        Ok(verification_result) => {
+                            if !verification_result.passed {
+                                errors.push(ShredError::VerificationFailed {
+                                    path: path.to_path_buf(),
+                                    pass: passes,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            progress.on_error(path, &e);
+                            errors.push(e);
+                        }
+                    }
                 }
             }
             Err(ShredError::IoError { kind, .. }) if kind == "Cancelled" => {
@@ -300,7 +364,10 @@ fn shred_file_inner(
                     },
                 );
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                progress.on_error(path, &e);
+                errors.push(e);
+            }
         }
         progress.on_pass_complete(passes, passes);
     } else {
@@ -332,57 +399,74 @@ fn shred_file_inner(
                 pattern,
                 progress,
                 prng_seed.as_ref(),
-            )?;
-            bytes_written_total += result.bytes_written;
+                path,
+            );
+            match result {
+                Ok(r) => {
+                    bytes_written_total += r.bytes_written;
+                }
+                Err(ShredError::IoError { kind, .. }) if kind == "Cancelled" => {
+                    errors.push(ShredError::IoError {
+                        path: path.to_path_buf(),
+                        kind: "Cancelled".to_string(),
+                        message: format!("Shredding cancelled during pass {}", pass + 1),
+                    });
+                    progress.on_error(
+                        path,
+                        &ShredError::IoError {
+                            path: path.to_path_buf(),
+                            kind: "Cancelled".to_string(),
+                            message: format!("Shredding cancelled during pass {}", pass + 1),
+                        },
+                    );
+                    break;
+                }
+                Err(e) => {
+                    progress.on_error(path, &e);
+                    errors.push(e);
+                    break;
+                }
+            }
 
             // Flush to disk
-            platform_io.sync_to_disk(&mut file)?;
+            if let Err(e) = platform_io.sync_to_disk(&mut file, path) {
+                progress.on_error(path, &e);
+                errors.push(e);
+                break;
+            }
 
             // Verify after each pass
-            let verification_result =
-                verifier.verify(&mut file, &pattern, file_size, prng_seed.as_ref())?;
-            if !verification_result.passed {
-                errors.push(ShredError::VerificationFailed {
-                    path: path.to_path_buf(),
-                    pass: pass + 1,
-                });
+            match verifier.verify(&mut file, &pattern, file_size, prng_seed.as_ref(), path) {
+                Ok(verification_result) => {
+                    if !verification_result.passed {
+                        errors.push(ShredError::VerificationFailed {
+                            path: path.to_path_buf(),
+                            pass: pass + 1,
+                        });
+                    }
+                }
+                Err(e) => {
+                    progress.on_error(path, &e);
+                    errors.push(e);
+                    break;
+                }
             }
 
             progress.on_pass_complete(pass + 1, passes);
         }
     }
 
-    // 9. Close file handle before rename/delete
+    // 11. Close file handle before rename/delete
     drop(file);
 
-    // 10. Rename to random name. Always run the cleanup pipeline even if the
-    //     shredding pass was cancelled — leaving the original-named partially-
-    //     overwritten file on disk is the catastrophic failure mode this
-    //     stage is here to prevent.
+    // 12. Run the cleanup pipeline (rename → truncate → TRIM → delete)
+    //     even if shredding was cancelled — leaving a partially-overwritten
+    //     file at its original name is the catastrophic failure mode we
+    //     prevent here.
     let was_cancelled = cancel.is_cancelled();
-    let renamed_path = platform_io.rename_random(path)?;
-    // Record orphan so a partial-failure recovery can clean it up later
-    crate::shredder::journal::write_orphan(path, &renamed_path);
-
-    // 11. Truncate (re-open briefly)
-    {
-        let mut f = platform_io.open_for_shred(&renamed_path)?;
-        platform_io.truncate_to_zero(&mut f)?;
+    if let Err(cleanup_err) = cleanup_after_shred(path, &*platform_io, progress, media_type) {
+        errors.push(cleanup_err);
     }
-
-    // 12. Issue TRIM for SSDs BEFORE delete (file must still exist on the
-    //     volume for TRIM to apply). This is the correct ordering for SSD
-    //     wear-leveling: the FTL needs the LBA range before it's freed.
-    if media_type == MediaType::Ssd {
-        if let Err(e) = platform_io.issue_trim(&renamed_path) {
-            progress.on_warning(path, &format!("TRIM failed: {}", e));
-        }
-    }
-
-    // 13. Delete
-    platform_io.delete(&renamed_path)?;
-    // Deletion succeeded — clear the orphan record
-    crate::shredder::journal::clear_orphan(&renamed_path);
 
     // Surface cancellation in the final result, alongside any errors that
     // were already collected. Cleanup ran, but the user must still see the
@@ -394,7 +478,7 @@ fn shred_file_inner(
         errors,
     };
 
-    progress.on_file_complete(path, &result);
+    progress.on_file_complete(path, &result, passes);
     Ok(result)
 }
 

@@ -26,7 +26,15 @@ mod tests {
         let mut file = temp.reopen().unwrap();
 
         let result = algo
-            .shred(&mut file, 1024, 1, PatternType::Zeros, &progress, None)
+            .shred(
+                &mut file,
+                1024,
+                1,
+                PatternType::Zeros,
+                &progress,
+                None,
+                temp.path(),
+            )
             .unwrap();
         assert!(result.success);
         assert_eq!(result.passes_completed, 1);
@@ -44,7 +52,15 @@ mod tests {
         let mut file = temp.reopen().unwrap();
 
         let result = algo
-            .shred(&mut file, 1024, 3, PatternType::Random, &progress, None)
+            .shred(
+                &mut file,
+                1024,
+                3,
+                PatternType::Random,
+                &progress,
+                None,
+                temp.path(),
+            )
             .unwrap();
         assert!(result.success);
         assert_eq!(result.passes_completed, 3);
@@ -61,7 +77,15 @@ mod tests {
         let mut file = temp.reopen().unwrap();
 
         let result = algo
-            .shred(&mut file, 4096, 1, PatternType::Random, &progress, None)
+            .shred(
+                &mut file,
+                4096,
+                1,
+                PatternType::Random,
+                &progress,
+                None,
+                temp.path(),
+            )
             .unwrap();
         assert!(result.success);
     }
@@ -75,7 +99,7 @@ mod tests {
         let verifier = SampleVerification::new();
         let mut file = temp.reopen().unwrap();
         let result = verifier
-            .verify(&mut file, &PatternType::Zeros, 4096, None)
+            .verify(&mut file, &PatternType::Zeros, 4096, None, temp.path())
             .unwrap();
         assert!(result.passed);
     }
@@ -89,7 +113,7 @@ mod tests {
         let verifier = SampleVerification::new();
         let mut file = temp.reopen().unwrap();
         let result = verifier
-            .verify(&mut file, &PatternType::Ones, 4096, None)
+            .verify(&mut file, &PatternType::Ones, 4096, None, temp.path())
             .unwrap();
         assert!(!result.passed);
     }
@@ -242,6 +266,7 @@ mod tests {
                 PatternType::Random,
                 &progress,
                 Some(&seed),
+                temp.path(),
             )
             .unwrap();
         assert!(result.success);
@@ -249,7 +274,13 @@ mod tests {
         // Verify the written bytes match ChaCha20(seed).
         let verifier = SampleVerification::new();
         let result = verifier
-            .verify(&mut file, &PatternType::Random, 8192, Some(&seed))
+            .verify(
+                &mut file,
+                &PatternType::Random,
+                8192,
+                Some(&seed),
+                temp.path(),
+            )
             .unwrap();
         assert!(result.passed, "expected seeded Random to verify");
     }
@@ -272,6 +303,7 @@ mod tests {
             PatternType::Random,
             &progress,
             Some(&seed),
+            temp.path(),
         )
         .unwrap();
 
@@ -305,7 +337,13 @@ mod tests {
         let verifier = FullVerification;
         let mut file = temp.reopen().unwrap();
         let result = verifier
-            .verify(&mut file, &PatternType::Random, 8192, Some(&seed))
+            .verify(
+                &mut file,
+                &PatternType::Random,
+                8192,
+                Some(&seed),
+                temp.path(),
+            )
             .unwrap();
         assert!(
             !result.passed,
@@ -324,7 +362,7 @@ mod tests {
         let verifier = SampleVerification::new();
         let mut file = temp.reopen().unwrap();
         let result = verifier
-            .verify(&mut file, &PatternType::Random, 4096, None)
+            .verify(&mut file, &PatternType::Random, 4096, None, temp.path())
             .unwrap();
         assert!(!result.passed);
     }

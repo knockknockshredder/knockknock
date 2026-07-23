@@ -78,7 +78,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         left_sidebar_width: stateRef.current.leftSidebarWidth,
         right_sidebar_width: stateRef.current.rightSidebarWidth,
       };
-      invoke("save_settings", { settings }).catch((e) => {
+      invoke<void>("save_settings", { settings }).catch((e) => {
         console.error("[KnockKnock] Failed to save settings:", e);
       });
     }, 250);
@@ -116,7 +116,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
           right_sidebar_width: stateRef.current.rightSidebarWidth,
         };
         // Synchronous-style IPC at unmount — async fire-and-forget.
-        invoke("save_settings", { settings }).catch((e) => {
+        invoke<void>("save_settings", { settings }).catch((e) => {
           console.error("[KnockKnock] Failed to flush settings on close:", e);
         });
       }

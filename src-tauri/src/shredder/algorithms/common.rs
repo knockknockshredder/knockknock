@@ -8,7 +8,6 @@ use chacha20::cipher::{StreamCipher, StreamCipherSeek};
 use chacha20::ChaCha20;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
-use std::path::PathBuf;
 
 const PROGRESS_INTERVAL: u64 = 1024 * 1024; // Report every 1 MB
 
@@ -27,9 +26,10 @@ pub fn write_pass(
     bytes_written_so_far: u64,
     total_bytes: u64,
     seed: Option<&PrngSeed>,
+    path: &std::path::Path,
 ) -> Result<u64, ShredError> {
     file.seek(SeekFrom::Start(0))
-        .map_err(|e| ShredError::from_io_error(PathBuf::from("<file>"), e))?;
+        .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
 
     let mut written = 0u64;
     let mut remaining = file_size;
@@ -40,7 +40,7 @@ pub fn write_pass(
         // Check cancellation between chunks (chunk size = buffer.len or remaining)
         if crate::shredder::cancel::is_cancelled_global() {
             return Err(ShredError::IoError {
-                path: PathBuf::from("<file>"),
+                path: path.to_path_buf(),
                 kind: "Cancelled".to_string(),
                 message: "Shredding cancelled during write".to_string(),
             });
@@ -51,10 +51,10 @@ pub fn write_pass(
         // Fill buffer based on pattern at absolute file position `written`.
         // For Random-with-seed this seeks the cipher to `written` (O(1)) and
         // runs the keystream into the buffer.
-        fill_pattern_buffer(buffer, pattern, &mut cipher, written)?;
+        fill_pattern_buffer(buffer, pattern, &mut cipher, written, path)?;
 
         file.write_all(&buffer[..to_write])
-            .map_err(|e| ShredError::from_io_error(PathBuf::from("<file>"), e))?;
+            .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
         written += to_write as u64;
         remaining -= to_write as u64;
 
@@ -77,6 +77,7 @@ fn fill_pattern_buffer(
     pattern: PatternType,
     cipher: &mut Option<ChaCha20>,
     pos: u64,
+    path: &std::path::Path,
 ) -> Result<(), ShredError> {
     match pattern {
         PatternType::Zeros => buffer.fill(0x00),
@@ -84,14 +85,15 @@ fn fill_pattern_buffer(
         PatternType::Random => {
             if let Some(cipher_ref) = cipher.as_mut() {
                 cipher_ref.try_seek(pos).map_err(|e| ShredError::IoError {
-                    path: PathBuf::from("<cipher>"),
+                    path: path.to_path_buf(),
                     kind: "CipherSeek".to_string(),
                     message: e.to_string(),
                 })?;
+                buffer.fill(0u8); // Zero buffer before XOR-ing keystream
                 cipher_ref.apply_keystream(buffer);
             } else {
                 getrandom::getrandom(buffer).map_err(|e| ShredError::IoError {
-                    path: PathBuf::from("<random>"),
+                    path: path.to_path_buf(),
                     kind: "RandomGeneration".to_string(),
                     message: e.to_string(),
                 })?;

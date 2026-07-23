@@ -6,6 +6,7 @@ use crate::shredder::traits::{ProgressReporter, ShredAlgorithm};
 use crate::shredder::types::*;
 use crate::shredder::verification::PrngSeed;
 use std::fs::File;
+use std::path::Path;
 
 pub struct NistClear;
 
@@ -36,6 +37,7 @@ impl ShredAlgorithm for NistClear {
         pattern: PatternType,
         progress: &dyn ProgressReporter,
         seed: Option<&PrngSeed>,
+        path: &Path,
     ) -> Result<ShredResult, ShredError> {
         let mut total_written = 0u64;
         let mut buffer = vec![0u8; BUFFER_SIZE];
@@ -50,6 +52,7 @@ impl ShredAlgorithm for NistClear {
                 total_written,
                 file_size * passes as u64,
                 seed,
+                path,
             )?;
         }
 

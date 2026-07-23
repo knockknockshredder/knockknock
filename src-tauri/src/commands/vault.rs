@@ -7,21 +7,29 @@
 use crate::{pin, vault};
 
 #[tauri::command]
-pub fn save_vault(paths: Vec<String>, pin: String) -> Result<(), String> {
-    vault::storage::save(&paths, &pin)
+pub async fn save_vault(paths: Vec<String>, pin: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || vault::storage::save(&paths, &pin))
+        .await
+        .map_err(|e| format!("Task panicked: {:?}", e))?
 }
 
 #[tauri::command]
-pub fn load_vault(pin: String) -> Result<Vec<String>, String> {
-    vault::storage::load(&pin)
+pub async fn load_vault(pin: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || vault::storage::load(&pin))
+        .await
+        .map_err(|e| format!("Task panicked: {:?}", e))?
 }
 
 #[tauri::command]
-pub fn clear_vault(current_pin: String) -> Result<(), String> {
-    if pin::has_pin() && !pin::verify_pin(&current_pin)? {
-        return Err("PIN is incorrect".to_string());
-    }
-    vault::storage::clear()
+pub async fn clear_vault(current_pin: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        if pin::has_pin() && !pin::verify_pin(&current_pin)? {
+            return Err("PIN is incorrect".to_string());
+        }
+        vault::storage::clear()
+    })
+    .await
+    .map_err(|e| format!("Task panicked: {:?}", e))?
 }
 
 #[tauri::command]

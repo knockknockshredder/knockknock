@@ -1,10 +1,9 @@
 // src-tauri/src/shredder/errors.rs
 
-use serde::Serialize;
 use std::path::PathBuf;
 use thiserror::Error;
 
-#[derive(Debug, Error, Serialize)]
+#[derive(Debug, Error)]
 pub enum ShredError {
     #[error("File not found: {0}")]
     FileNotFound(PathBuf),
@@ -39,6 +38,9 @@ pub enum ShredError {
 
     #[error("Empty path")]
     EmptyPath,
+
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
 }
 
 impl ShredError {

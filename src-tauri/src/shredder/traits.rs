@@ -32,6 +32,7 @@ pub trait ShredAlgorithm: Send + Sync {
         pattern: PatternType,
         progress: &dyn ProgressReporter,
         seed: Option<&PrngSeed>,
+        path: &Path,
     ) -> Result<ShredResult, ShredError>;
 }
 
@@ -43,6 +44,7 @@ pub trait VerificationStrategy: Send + Sync {
         expected_pattern: &PatternType,
         file_size: u64,
         seed: Option<&PrngSeed>,
+        path: &Path,
     ) -> Result<VerificationResult, ShredError>;
 }
 
@@ -52,7 +54,7 @@ pub trait ProgressReporter: Send + Sync {
     fn on_pass_start(&self, pass: u32, total_passes: u32);
     fn on_progress(&self, bytes_written: u64, total: u64);
     fn on_pass_complete(&self, pass: u32, total_passes: u32);
-    fn on_file_complete(&self, path: &Path, result: &ShredResult);
+    fn on_file_complete(&self, path: &Path, result: &ShredResult, total_passes: u32);
     fn on_error(&self, path: &Path, error: &ShredError);
     fn on_warning(&self, path: &Path, message: &str);
 }
@@ -60,9 +62,9 @@ pub trait ProgressReporter: Send + Sync {
 /// Trait for platform-specific I/O operations
 pub trait PlatformIo: Send + Sync {
     fn open_for_shred(&self, path: &Path) -> Result<File, ShredError>;
-    fn sync_to_disk(&self, file: &mut File) -> Result<(), ShredError>;
+    fn sync_to_disk(&self, file: &mut File, path: &Path) -> Result<(), ShredError>;
     fn rename_random(&self, path: &Path) -> Result<std::path::PathBuf, ShredError>;
-    fn truncate_to_zero(&self, file: &mut File) -> Result<(), ShredError>;
+    fn truncate_to_zero(&self, file: &mut File, path: &Path) -> Result<(), ShredError>;
     fn delete(&self, path: &Path) -> Result<(), ShredError>;
     fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError>;
 

@@ -3,13 +3,17 @@
 use crate::pin;
 
 #[tauri::command]
-pub fn setup_pin(old_pin: Option<String>, new_pin: String) -> Result<(), String> {
-    pin::setup_pin(old_pin.as_deref(), &new_pin)
+pub async fn setup_pin(old_pin: Option<String>, new_pin: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || pin::setup_pin(old_pin.as_deref(), &new_pin))
+        .await
+        .map_err(|e| format!("Task panicked: {:?}", e))?
 }
 
 #[tauri::command]
-pub fn verify_pin(pin_value: String) -> Result<bool, String> {
-    pin::verify_pin(&pin_value)
+pub async fn verify_pin(pin_value: String) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || pin::verify_pin(&pin_value))
+        .await
+        .map_err(|e| format!("Task panicked: {:?}", e))?
 }
 
 #[tauri::command]
@@ -18,8 +22,10 @@ pub fn is_pin_enabled() -> bool {
 }
 
 #[tauri::command]
-pub fn set_pin_enabled(current_pin: String, enabled: bool) -> Result<(), String> {
-    pin::set_pin_enabled(&current_pin, enabled)
+pub async fn set_pin_enabled(current_pin: String, enabled: bool) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || pin::set_pin_enabled(&current_pin, enabled))
+        .await
+        .map_err(|e| format!("Task panicked: {:?}", e))?
 }
 
 #[tauri::command]
@@ -40,18 +46,24 @@ pub fn get_lockout_remaining() -> Result<u64, String> {
 }
 
 #[tauri::command]
-pub fn change_pin(old_pin: String, new_pin: String) -> Result<(), String> {
-    pin::change_pin(old_pin, new_pin)
+pub async fn change_pin(old_pin: String, new_pin: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || pin::change_pin(old_pin, new_pin))
+        .await
+        .map_err(|e| format!("Task panicked: {:?}", e))?
 }
 
 /// Wipe the entire app state (PIN + lockout + vault callers). Requires
 /// the current PIN to be valid as a safety check.
 #[tauri::command]
-pub fn reset_app(current_pin: String) -> Result<(), String> {
-    pin::reset_app(&current_pin)
+pub async fn reset_app(current_pin: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || pin::reset_app(&current_pin))
+        .await
+        .map_err(|e| format!("Task panicked: {:?}", e))?
 }
 
 #[tauri::command]
-pub fn disable_pin(current_pin: String) -> Result<(), String> {
-    pin::disable_pin(&current_pin)
+pub async fn disable_pin(current_pin: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || pin::disable_pin(&current_pin))
+        .await
+        .map_err(|e| format!("Task panicked: {:?}", e))?
 }

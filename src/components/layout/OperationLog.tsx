@@ -73,6 +73,7 @@ export function OperationLog() {
             onClick={clearLog}
             className="p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
             title="Clear log"
+            aria-label="Clear log"
           >
             <Trash size={14} />
           </button>
@@ -81,6 +82,7 @@ export function OperationLog() {
             onClick={() => setCollapsed(!collapsed)}
             className="p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"
             title={collapsed ? "Expand log" : "Collapse log"}
+            aria-label={collapsed ? "Expand log" : "Collapse log"}
           >
             {collapsed ? <CaretUp size={14} /> : <CaretDown size={14} />}
           </button>

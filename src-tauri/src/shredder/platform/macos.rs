@@ -60,7 +60,7 @@ impl PlatformIo for MacOsIo {
         Ok(file)
     }
 
-    fn sync_to_disk(&self, file: &mut File) -> Result<(), ShredError> {
+    fn sync_to_disk(&self, file: &mut File, path: &Path) -> Result<(), ShredError> {
         #[cfg(target_os = "macos")]
         {
             use std::os::unix::io::AsRawFd;
@@ -68,7 +68,7 @@ impl PlatformIo for MacOsIo {
             let result = unsafe { libc::fcntl(fd, libc::F_FULLFSYNC) };
             if result != 0 {
                 return Err(ShredError::from_io_error(
-                    PathBuf::from("<open file>"),
+                    path.to_path_buf(),
                     std::io::Error::last_os_error(),
                 ));
             }
@@ -77,7 +77,7 @@ impl PlatformIo for MacOsIo {
         #[cfg(not(target_os = "macos"))]
         {
             file.sync_all()
-                .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
+                .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
         }
     }
 
@@ -104,9 +104,9 @@ impl PlatformIo for MacOsIo {
         Ok(new_path)
     }
 
-    fn truncate_to_zero(&self, file: &mut File) -> Result<(), ShredError> {
+    fn truncate_to_zero(&self, file: &mut File, path: &Path) -> Result<(), ShredError> {
         file.set_len(0)
-            .map_err(|e| ShredError::from_io_error(PathBuf::from("<open file>"), e))
+            .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
     }
 
     fn delete(&self, path: &Path) -> Result<(), ShredError> {

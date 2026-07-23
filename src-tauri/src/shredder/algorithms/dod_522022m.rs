@@ -6,6 +6,7 @@ use crate::shredder::traits::{ProgressReporter, ShredAlgorithm};
 use crate::shredder::types::*;
 use crate::shredder::verification::PrngSeed;
 use std::fs::File;
+use std::path::Path;
 
 pub struct Dod522022M;
 
@@ -53,6 +54,7 @@ impl ShredAlgorithm for Dod522022M {
         _pattern: PatternType,
         progress: &dyn ProgressReporter,
         seed: Option<&PrngSeed>,
+        path: &Path,
     ) -> Result<ShredResult, ShredError> {
         let mut total_written = 0u64;
         let mut buffer = vec![0u8; BUFFER_SIZE];
@@ -69,6 +71,7 @@ impl ShredAlgorithm for Dod522022M {
                 total_written,
                 file_size * passes as u64,
                 seed,
+                path,
             )?;
             // Note: do NOT emit on_pass_complete here. The pipeline in mod.rs
             // emits pass-complete after the algorithm returns to avoid double-emit.

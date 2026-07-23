@@ -28,6 +28,7 @@ export function ShredSection() {
     isShredding,
     setIsShredding,
     addLogEntry,
+    clearLog,
     updateFileStatus,
     setAlgorithms,
     algorithms,
@@ -39,7 +40,7 @@ export function ShredSection() {
   } = useShred();
 
   const { getSelectedCount, browsers } = useBrowser();
-  const { logObfuscation } = useSettings();
+  const { logObfuscation, autoClearLog } = useSettings();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [passes, setPasses] = useState(1);
@@ -48,6 +49,7 @@ export function ShredSection() {
   const [shredTargets, setShredTargets] = useState(false);
   const unlistenRef = useRef<(() => void) | null>(null);
   const isExecutingRef = useRef(false); // guards against StrictMode double-fire
+  const completedCountRef = useRef(0);
 
   // PIN verification gates
   const [pinNeeded, setPinNeeded] = useState(false);
@@ -122,6 +124,9 @@ export function ShredSection() {
       `shredding ${pendingFiles.length} file(s) and ${selectedProfileCount} browser profile(s)...`
     );
 
+    // Reset completed count before listening
+    completedCountRef.current = 0;
+
     // Listen for progress events
     const unlisten = await listen<ProgressEvent>("shred-progress", (event) => {
       const { file_path, status, current_pass, total_passes } = event.payload;
@@ -132,9 +137,13 @@ export function ShredSection() {
           : `[${file_path}] ${statusStr} (pass ${current_pass}/${total_passes})`;
       addLogEntry(status.type === "Error" ? "error" : "info", message);
 
+      if (status.type === "Complete") {
+        completedCountRef.current += 1;
+      }
+
       // Update progress state
       setProgress({
-        current: pendingFiles.filter((f) => f.status === "done").length,
+        current: completedCountRef.current,
         total: pendingFiles.length,
         percent: Math.round((current_pass / total_passes) * 100),
         currentFile: file_path,
@@ -144,7 +153,7 @@ export function ShredSection() {
 
     try {
       const paths = pendingFiles.map((f) => f.path);
-      const report: ShredReport = await invoke("shred_files", {
+      const report: ShredReport = await invoke<ShredReport>("shred_files", {
         paths,
         algorithmIndex,
         passes,
@@ -170,6 +179,10 @@ export function ShredSection() {
         `Complete: ${report.successful} destroyed, ${report.failed} failed, ${report.skipped} skipped (${report.duration_secs.toFixed(1)}s)`
       );
 
+      if (autoClearLog && report.failed === 0) {
+        clearLog();
+      }
+
       // Shred browser profiles if any
       if (selectedProfileCount > 0) {
         const selectedProfiles = browsers.flatMap((b) =>
@@ -188,7 +201,7 @@ export function ShredSection() {
               "info",
               `Shredding ${profile.browser_name} profile: ${profile.profile_path}`
             );
-            const browserReport: ShredReport = await invoke("shred_browser_data", {
+            const browserReport: ShredReport = await invoke<ShredReport>("shred_browser_data", {
               request: {
                 browser_name: profile.browser_name,
                 profile_path: profile.profile_path,
@@ -233,7 +246,7 @@ export function ShredSection() {
       return; // Shredding continues if PIN not entered
     }
     try {
-      await invoke("cancel_shred");
+      await invoke<void>("cancel_shred");
       addLogEntry("warning", "Cancellation requested...");
     } catch (err) {
       addLogEntry("error", `Cancel failed: ${err}`);
@@ -300,7 +313,7 @@ export function ShredSection() {
         onVerified={(pin) => {
           setVaultPin(pin);
           setCancelPinOpen(false);
-          invoke("cancel_shred").catch((err) =>
+          invoke<void>("cancel_shred").catch((err) =>
             addLogEntry("error", `Failed to cancel shred: ${err}`)
           );
         }}

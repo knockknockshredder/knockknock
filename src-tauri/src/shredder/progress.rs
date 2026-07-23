@@ -19,7 +19,7 @@ impl ProgressReporter for NoopProgressReporter {
     fn on_pass_start(&self, _pass: u32, _total_passes: u32) {}
     fn on_progress(&self, _bytes_written: u64, _total: u64) {}
     fn on_pass_complete(&self, _pass: u32, _total_passes: u32) {}
-    fn on_file_complete(&self, _path: &Path, _result: &ShredResult) {}
+    fn on_file_complete(&self, _path: &Path, _result: &ShredResult, _total_passes: u32) {}
     fn on_error(&self, _path: &Path, _error: &ShredError) {}
     fn on_warning(&self, _path: &Path, _message: &str) {}
 }
@@ -163,7 +163,7 @@ impl ProgressReporter for TauriProgressReporter {
         });
     }
 
-    fn on_file_complete(&self, path: &Path, result: &ShredResult) {
+    fn on_file_complete(&self, path: &Path, result: &ShredResult, total_passes: u32) {
         let obfuscation = self.obfuscation;
         let index = self
             .state
@@ -176,7 +176,7 @@ impl ProgressReporter for TauriProgressReporter {
             file_size: 0,
             bytes_written: result.bytes_written,
             current_pass: result.passes_completed,
-            total_passes: result.passes_completed,
+            total_passes,
             speed_bytes_per_sec: 0,
             estimated_time_remaining_secs: 0,
             status: ShredStatus::Complete,
