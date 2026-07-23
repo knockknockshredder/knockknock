@@ -28,6 +28,7 @@ export function ShredSection() {
     isShredding,
     setIsShredding,
     addLogEntry,
+    clearLog,
     updateFileStatus,
     setAlgorithms,
     algorithms,
@@ -39,7 +40,7 @@ export function ShredSection() {
   } = useShred();
 
   const { getSelectedCount, browsers } = useBrowser();
-  const { logObfuscation } = useSettings();
+  const { logObfuscation, autoClearLog } = useSettings();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [passes, setPasses] = useState(1);
@@ -177,6 +178,10 @@ export function ShredSection() {
         "success",
         `Complete: ${report.successful} destroyed, ${report.failed} failed, ${report.skipped} skipped (${report.duration_secs.toFixed(1)}s)`
       );
+
+      if (autoClearLog && report.failed === 0) {
+        clearLog();
+      }
 
       // Shred browser profiles if any
       if (selectedProfileCount > 0) {
