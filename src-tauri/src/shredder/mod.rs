@@ -165,6 +165,43 @@ pub fn shred_file(
     }
 }
 
+/// Run the cleanup pipeline: rename → journal → truncate → TRIM → delete.
+/// Called after the file handle is dropped to prevent partially-overwritten
+/// data from surviving at the original filename.
+fn cleanup_after_shred(
+    path: &std::path::Path,
+    platform_io: &dyn PlatformIo,
+    progress: &dyn ProgressReporter,
+    media_type: MediaType,
+) -> Result<(), ShredError> {
+    // Rename to random name
+    let renamed_path = platform_io.rename_random(path)?;
+
+    // Record orphan for crash recovery
+    crate::shredder::journal::write_orphan(path, &renamed_path);
+
+    // Truncate to zero
+    {
+        let mut f = platform_io.open_for_shred(&renamed_path)?;
+        platform_io.truncate_to_zero(&mut f)?;
+    }
+
+    // TRIM for SSDs
+    if media_type == MediaType::Ssd {
+        if let Err(e) = platform_io.issue_trim(&renamed_path) {
+            progress.on_warning(path, &format!("TRIM failed: {}", e));
+        }
+    }
+
+    // Delete
+    platform_io.delete(&renamed_path)?;
+
+    // Clear orphan entry
+    crate::shredder::journal::clear_orphan(&renamed_path);
+
+    Ok(())
+}
+
 /// Inner shred pipeline — the actual overwrite/rename/truncate/delete sequence
 /// for a single path. Assumes the caller has already validated and classified
 /// the path; this function never re-checks for shortcuts.
@@ -422,34 +459,14 @@ fn shred_file_inner(
     // 11. Close file handle before rename/delete
     drop(file);
 
-    // 12. Rename to random name. Always run the cleanup pipeline even if the
-    //     shredding pass was cancelled — leaving the original-named partially-
-    //     overwritten file on disk is the catastrophic failure mode this
-    //     stage is here to prevent.
+    // 12. Run the cleanup pipeline (rename → truncate → TRIM → delete)
+    //     even if shredding was cancelled — leaving a partially-overwritten
+    //     file at its original name is the catastrophic failure mode we
+    //     prevent here.
     let was_cancelled = cancel.is_cancelled();
-    let renamed_path = platform_io.rename_random(path)?;
-    // Record orphan so a partial-failure recovery can clean it up later
-    crate::shredder::journal::write_orphan(path, &renamed_path);
-
-    // 13. Truncate (re-open briefly)
-    {
-        let mut f = platform_io.open_for_shred(&renamed_path)?;
-        platform_io.truncate_to_zero(&mut f)?;
+    if let Err(cleanup_err) = cleanup_after_shred(path, &*platform_io, progress, media_type) {
+        errors.push(cleanup_err);
     }
-
-    // 14. Issue TRIM for SSDs BEFORE delete (file must still exist on the
-    //     volume for TRIM to apply). This is the correct ordering for SSD
-    //     wear-leveling: the FTL needs the LBA range before it's freed.
-    if media_type == MediaType::Ssd {
-        if let Err(e) = platform_io.issue_trim(&renamed_path) {
-            progress.on_warning(path, &format!("TRIM failed: {}", e));
-        }
-    }
-
-    // 15. Delete
-    platform_io.delete(&renamed_path)?;
-    // Deletion succeeded — clear the orphan record
-    crate::shredder::journal::clear_orphan(&renamed_path);
 
     // Surface cancellation in the final result, alongside any errors that
     // were already collected. Cleanup ran, but the user must still see the
