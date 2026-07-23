@@ -267,17 +267,28 @@ fn shred_file_inner(
         match shred_res {
             Ok(r) => {
                 bytes_written_total += r.bytes_written;
-                platform_io.sync_to_disk(&mut file)?;
-                // Verify against the algorithm's final-pass pattern, not the user's
-                // selected pattern (fixed-sequence algorithms may differ).
-                let verify_pattern = algorithm.final_pattern(pattern);
-                let verification_result =
-                    verifier.verify(&mut file, &verify_pattern, file_size, prng_seed.as_ref())?;
-                if !verification_result.passed {
-                    errors.push(ShredError::VerificationFailed {
-                        path: path.to_path_buf(),
-                        pass: passes,
-                    });
+                if let Err(e) = platform_io.sync_to_disk(&mut file) {
+                    progress.on_error(path, &e);
+                    errors.push(e);
+                } else {
+                    // Verify against the algorithm's final-pass pattern, not the user's
+                    // selected pattern (fixed-sequence algorithms may differ).
+                    let verify_pattern = algorithm.final_pattern(pattern);
+                    match verifier.verify(&mut file, &verify_pattern, file_size, prng_seed.as_ref())
+                    {
+                        Ok(verification_result) => {
+                            if !verification_result.passed {
+                                errors.push(ShredError::VerificationFailed {
+                                    path: path.to_path_buf(),
+                                    pass: passes,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            progress.on_error(path, &e);
+                            errors.push(e);
+                        }
+                    }
                 }
             }
             Err(ShredError::IoError { kind, .. }) if kind == "Cancelled" => {
@@ -300,7 +311,10 @@ fn shred_file_inner(
                     },
                 );
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                progress.on_error(path, &e);
+                errors.push(e);
+            }
         }
         progress.on_pass_complete(passes, passes);
     } else {
@@ -332,20 +346,56 @@ fn shred_file_inner(
                 pattern,
                 progress,
                 prng_seed.as_ref(),
-            )?;
-            bytes_written_total += result.bytes_written;
+            );
+            match result {
+                Ok(r) => {
+                    bytes_written_total += r.bytes_written;
+                }
+                Err(ShredError::IoError { kind, .. }) if kind == "Cancelled" => {
+                    errors.push(ShredError::IoError {
+                        path: path.to_path_buf(),
+                        kind: "Cancelled".to_string(),
+                        message: format!("Shredding cancelled during pass {}", pass + 1),
+                    });
+                    progress.on_error(
+                        path,
+                        &ShredError::IoError {
+                            path: path.to_path_buf(),
+                            kind: "Cancelled".to_string(),
+                            message: format!("Shredding cancelled during pass {}", pass + 1),
+                        },
+                    );
+                    break;
+                }
+                Err(e) => {
+                    progress.on_error(path, &e);
+                    errors.push(e);
+                    break;
+                }
+            }
 
             // Flush to disk
-            platform_io.sync_to_disk(&mut file)?;
+            if let Err(e) = platform_io.sync_to_disk(&mut file) {
+                progress.on_error(path, &e);
+                errors.push(e);
+                break;
+            }
 
             // Verify after each pass
-            let verification_result =
-                verifier.verify(&mut file, &pattern, file_size, prng_seed.as_ref())?;
-            if !verification_result.passed {
-                errors.push(ShredError::VerificationFailed {
-                    path: path.to_path_buf(),
-                    pass: pass + 1,
-                });
+            match verifier.verify(&mut file, &pattern, file_size, prng_seed.as_ref()) {
+                Ok(verification_result) => {
+                    if !verification_result.passed {
+                        errors.push(ShredError::VerificationFailed {
+                            path: path.to_path_buf(),
+                            pass: pass + 1,
+                        });
+                    }
+                }
+                Err(e) => {
+                    progress.on_error(path, &e);
+                    errors.push(e);
+                    break;
+                }
             }
 
             progress.on_pass_complete(pass + 1, passes);
