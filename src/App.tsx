@@ -1,6 +1,7 @@
 // src/App.tsx
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Lock, WarningCircle } from "@phosphor-icons/react";
 import { NavigationProvider } from "@/contexts/NavigationContext";
 import { ShredProvider, useShred } from "@/contexts/ShredContext";
@@ -290,8 +291,20 @@ function AppGate() {
 }
 
 function AppContent() {
-  const { activeSection } = useNavigation();
+  const { activeSection, setActiveSection } = useNavigation();
   useBrowserDetection();
+
+  // Listen for tray menu "Quick Shred" — shows window and navigates to
+  // home section. The actual shred flow is triggered by ShredSection's
+  // own listener on the same event.
+  useEffect(() => {
+    const unlistenPromise = listen("quick-shred-request", () => {
+      setActiveSection("home");
+    });
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
+  }, [setActiveSection]);
 
   return (
     <AppShell bottom={<OperationLog />}>
