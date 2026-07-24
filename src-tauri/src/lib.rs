@@ -53,6 +53,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             // Tray setup is non-essential — failure shouldn't crash startup.
             if let Err(e) = tray::setup_tray(app.handle()) {
