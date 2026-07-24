@@ -81,6 +81,23 @@ export function ShredSection() {
       .catch((err) => addLogEntry("error", `Failed to load algorithms: ${err}`));
   }, [setAlgorithms, addLogEntry]);
 
+  // Handle tray menu "Quick Shred" — triggers the same PIN→confirmation
+  // flow as clicking the Shred button, using the existing executeShred
+  // pipeline so there is no second code path for the destructive work.
+  useEffect(() => {
+    const unlistenPromise = listen("quick-shred-request", () => {
+      if (pinNeeded) {
+        setDeferredShred(() => () => setDialogOpen(true));
+        setShredPinOpen(true);
+      } else {
+        setDialogOpen(true);
+      }
+    });
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
+  }, [pinNeeded]);
+
   // Cleanup progress listener on unmount
   useEffect(() => {
     return () => {
