@@ -1,10 +1,11 @@
 // src-tauri/src/tray/mod.rs
 
+pub mod actions;
 pub mod menu;
 
 use tauri::{
-    AppHandle, Manager,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager,
 };
 
 /// Initialize the system tray icon with context menu.
