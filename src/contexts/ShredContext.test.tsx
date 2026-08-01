@@ -247,14 +247,14 @@ describe("authoritative vault writer", () => {
       await latest.loadVault("old-pin");
     });
     const firstOldSave = deferred<void>();
-    const secondOldSave = deferred<void>();
-    const rekey = deferred<void>();
+    const newestOldSave = deferred<void>();
+    const rekey = deferred<{ durability_warning: string | null }>();
     let saveAttempt = 0;
     invokeMock.mockImplementation((command: string) => {
       if (command === "save_vault") {
         saveAttempt += 1;
         if (saveAttempt === 1) return firstOldSave.promise;
-        if (saveAttempt === 2) return secondOldSave.promise;
+        if (saveAttempt === 2) return newestOldSave.promise;
         return Promise.resolve(undefined);
       }
       if (command === "change_pin") return rekey.promise;
@@ -266,45 +266,43 @@ describe("authoritative vault writer", () => {
     });
     await waitFor(() => expect(saveCalls()).toHaveLength(1));
 
-    let changePromise!: Promise<void>;
+    let changePromise!: ReturnType<typeof latest.changeVaultPin>;
     await act(async () => {
       changePromise = latest.changeVaultPin("old-pin", "new-pin");
       await Promise.resolve();
     });
-    await act(async () => {
-      latest.addFiles([readyFile("C:\\during-rekey.txt")]);
-    });
-
-    expect(invokeMock).not.toHaveBeenCalledWith("change_pin", {
-      oldPin: "old-pin",
-      newPin: "new-pin",
-    });
     firstOldSave.resolve();
     await waitFor(() => expect(saveCalls()).toHaveLength(2));
     expect(saveCalls()[1].pin).toBe("old-pin");
-    expect(saveCalls()[1].targets.map(({ path }) => path)).toEqual([
-      "C:\\before-rekey.txt",
-      "C:\\during-rekey.txt",
-    ]);
-
-    expect(invokeMock).not.toHaveBeenCalledWith("change_pin", {
-      oldPin: "old-pin",
-      newPin: "new-pin",
-    });
-    secondOldSave.resolve();
+    newestOldSave.resolve();
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("change_pin", {
         oldPin: "old-pin",
         newPin: "new-pin",
       })
     );
-    expect(saveCalls().slice(0, 2).every(({ pin }) => pin === "old-pin")).toBe(true);
-
-    rekey.resolve();
+    expect(saveCalls()).toHaveLength(2);
     await act(async () => {
-      await changePromise;
+      latest.addFiles([readyFile("C:\\during-rekey.txt")]);
     });
-    expect(saveCalls().slice(2).every(({ pin }) => pin === "new-pin")).toBe(true);
+    expect(saveCalls()).toHaveLength(2);
+
+    rekey.resolve({ durability_warning: "Vault committed; parent durability sync failed" });
+    let changeOutcome!: { durability_warning: string | null };
+    await act(async () => {
+      changeOutcome = await changePromise;
+    });
+    expect(changeOutcome.durability_warning).toBe(
+      "Vault committed; parent durability sync failed"
+    );
+    expect(saveCalls().length).toBeGreaterThanOrEqual(3);
+    expect(saveCalls()[0].pin).toBe("old-pin");
+    expect(saveCalls()[1].pin).toBe("old-pin");
+    expect(saveCalls()[2].pin).toBe("new-pin");
+    expect(saveCalls()[2].targets.map(({ path }) => path)).toEqual([
+      "C:\\before-rekey.txt",
+      "C:\\during-rekey.txt",
+    ]);
   });
 
   it("restores ready, missing, and blocked targets without filtering", async () => {

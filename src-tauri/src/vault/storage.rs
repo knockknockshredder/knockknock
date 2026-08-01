@@ -39,6 +39,11 @@ pub struct VaultLoadDto {
     pub targets: Vec<VaultTarget>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RekeyOutcome {
+    pub durability_warning: Option<String>,
+}
+
 pub struct VaultStore {
     vault_path: PathBuf,
 }
@@ -97,14 +102,30 @@ impl VaultStore {
         self.save_v2_with_io(targets, pin, &io)
     }
 
-    pub fn rekey(&self, old_pin: &str, new_pin: &str) -> Result<(), VaultError> {
+    pub fn rekey(&self, old_pin: &str, new_pin: &str) -> Result<RekeyOutcome, VaultError> {
+        let io = ProductionVaultIo;
+        self.rekey_with_io(old_pin, new_pin, &io)
+    }
+
+    pub(crate) fn rekey_with_io(
+        &self,
+        old_pin: &str,
+        new_pin: &str,
+        io: &dyn VaultIo,
+    ) -> Result<RekeyOutcome, VaultError> {
         if !self.vault_path.exists() {
-            return Ok(());
+            return Ok(RekeyOutcome::default());
         }
 
         let loaded = self.load(old_pin)?;
 
-        self.save_v2(&loaded.targets, new_pin)
+        match self.save_v2_with_io(&loaded.targets, new_pin, io) {
+            Ok(()) => Ok(RekeyOutcome::default()),
+            Err(error @ VaultError::Committed { .. }) => Ok(RekeyOutcome {
+                durability_warning: Some(error.to_string()),
+            }),
+            Err(error) => Err(error),
+        }
     }
 
     pub(crate) fn save_v2_with_io(
@@ -150,7 +171,10 @@ impl VaultStore {
         }
 
         if let Err(error) = io.sync_parent(&self.vault_path) {
-            return Err(error);
+            return Err(VaultError::Committed {
+                path: self.vault_path.clone(),
+                source: std::io::Error::other(error.to_string()),
+            });
         }
 
         Ok(())
@@ -536,10 +560,9 @@ pub fn exists() -> bool {
 
 /// Re-encrypt the on-disk vault from `old_pin` to `new_pin`.
 ///
-/// Best-effort: if no vault exists or decryption fails, the PIN change
-/// still succeeds (the user can start a fresh session). Only an I/O error
-/// during the re-save is surfaced as an `Err`.
-pub fn rekey(old_pin: &str, new_pin: &str) -> Result<(), String> {
-    let store = VaultStore::production().map_err(String::from)?;
-    store.rekey(old_pin, new_pin).map_err(String::from)
+/// Returns a durability warning when replacement succeeded but syncing the
+/// parent directory failed. That outcome must keep the new PIN active.
+pub fn rekey(old_pin: &str, new_pin: &str) -> Result<RekeyOutcome, VaultError> {
+    let store = VaultStore::production()?;
+    store.rekey(old_pin, new_pin)
 }

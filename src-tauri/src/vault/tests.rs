@@ -345,7 +345,11 @@ fn fault_injecting_vault_io_covers_atomic_write_operations() {
                 .cleanup_temp(&temporary_path)
                 .expect_err("cleanup fault should fail"),
         };
-        assert!(matches!(error, VaultError::Io { .. }));
+        if operation == VaultIoFailure::SyncParent {
+            assert!(matches!(error, VaultError::Committed { .. }));
+        } else {
+            assert!(matches!(error, VaultError::Io { .. }));
+        }
         let _ = fs::remove_file(&temporary_path);
     }
 }
@@ -406,6 +410,27 @@ fn rekey_propagates_load_failure() {
         .expect_err("rekey must propagate load failures");
 
     assert!(matches!(error, VaultError::Decode(_)));
+}
+
+#[test]
+fn rekey_sync_parent_failure_reports_commit_and_keeps_new_pin_accessible() {
+    let (_tempdir, store) = store();
+    let targets = all_target_kinds();
+    store
+        .save_v2(&targets, "old-pin")
+        .expect("publish V2 vault before rekey");
+    let adapter = FaultInjectingVaultIo::failing_at(VaultIoFailure::SyncParent);
+
+    let outcome = store
+        .rekey_with_io("old-pin", "new-pin", &adapter)
+        .expect("post-replacement sync failure is a committed outcome");
+
+    assert!(outcome
+        .durability_warning
+        .as_deref()
+        .is_some_and(|warning| warning.contains("durability sync failed")));
+    assert_eq!(store.load("new-pin").unwrap().targets, targets);
+    assert!(store.load("old-pin").is_err());
 }
 
 #[test]

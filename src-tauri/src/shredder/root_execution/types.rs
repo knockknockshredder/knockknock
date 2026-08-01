@@ -69,6 +69,11 @@ pub enum VaultError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("Vault committed but durability sync failed for {path}: {source}")]
+    Committed {
+        path: PathBuf,
+        source: std::io::Error,
+    },
 }
 
 impl From<VaultError> for String {
@@ -306,6 +311,10 @@ mod tests {
             VaultError::Sync {
                 path: PathBuf::from("C:\\vault.json"),
                 source: std::io::Error::new(std::io::ErrorKind::Other, "sync failed"),
+            },
+            VaultError::Committed {
+                path: PathBuf::from("C:\\vault.json"),
+                source: std::io::Error::new(std::io::ErrorKind::Other, "durability sync failed"),
             },
         ];
 

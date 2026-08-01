@@ -120,12 +120,15 @@ export function SettingsSection() {
           open={pinSetupOpen}
           onOpenChange={setPinSetupOpen}
           requireOldPin={pinSet}
-          onPinSet={(newPin) => {
+          onPinSet={(newPin, durabilityWarning) => {
             setPinSet(true);
             // Keep the cached vault PIN in sync with the new value so the
             // next auto-save re-encrypts under the new key. Without this
             // the auto-save would silently destroy the session.
             setVaultPin(newPin);
+            if (durabilityWarning) {
+              addLogEntry("warning", durabilityWarning);
+            }
             // Auto-enable ONLY when setup was triggered by toggling ON
             // with no PIN configured (first-time setup flow). The backend
             // requires the freshly-set PIN to authorize enabling.

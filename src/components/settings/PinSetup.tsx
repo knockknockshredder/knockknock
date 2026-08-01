@@ -27,7 +27,7 @@ interface PinSetupProps {
   /** Called after the backend confirms `setup_pin` / `change_pin`. The
    *  argument is the newly-active PIN so callers can update any cached
    *  copies (e.g. the vault auto-save key) without re-prompting. */
-  onPinSet: (newPin: string) => void;
+  onPinSet: (newPin: string, durabilityWarning?: string) => void;
   /** When true, an "Old PIN" field is shown and `change_pin` is called
    *  instead of `setup_pin` so the vault gets re-encrypted. */
   requireOldPin?: boolean;
@@ -74,12 +74,14 @@ export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }
 
     setSubmitting(true);
     try {
+      let durabilityWarning: string | undefined;
       if (requireOldPin) {
-        await changeVaultPin(oldPin, pin);
+        const outcome = await changeVaultPin(oldPin, pin);
+        durabilityWarning = outcome.durability_warning ?? undefined;
       } else {
         await invoke<void>("setup_pin", { newPin: pin });
       }
-      onPinSet(pin);
+      onPinSet(pin, durabilityWarning);
       onOpenChange(false);
     } catch (err) {
       setError(String(err));

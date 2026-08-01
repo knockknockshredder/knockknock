@@ -23,6 +23,10 @@ import type {
 
 export type VaultState = "locked" | "loading" | "clean" | "dirty" | "saving" | "error";
 
+export interface PinChangeOutcome {
+  durability_warning: string | null;
+}
+
 interface VaultLoadDto {
   source_schema: VaultSchemaSource;
   migration_required: boolean;
@@ -63,7 +67,7 @@ interface ShredState {
   setProgress: (progress: ProgressState | null) => void;
   updateFileStatus: (id: string, status: ShredFile["status"], error?: string) => void;
   setVaultPin: (pin: string | null) => void;
-  changeVaultPin: (oldPin: string, newPin: string) => Promise<void>;
+  changeVaultPin: (oldPin: string, newPin: string) => Promise<PinChangeOutcome>;
   loadVault: (pin: string) => Promise<void>;
   flushVault: () => Promise<void>;
   saveVault: (pin: string) => Promise<boolean>;
@@ -107,7 +111,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   const queuedSnapshotRef = useRef<VaultSnapshot | null>(null);
   const writerPromiseRef = useRef<Promise<void> | null>(null);
   const writerErrorRef = useRef<WriterError | null>(null);
-  const pinChangePromiseRef = useRef<Promise<void> | null>(null);
+  const pinChangePromiseRef = useRef<Promise<PinChangeOutcome> | null>(null);
 
   const addFiles = useCallback((newEntries: FileMetadata[]) => {
     setFiles((previous) => {
@@ -395,10 +399,10 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   );
 
   const changeVaultPin = useCallback(
-    (oldPin: string, newPin: string): Promise<void> => {
+    (oldPin: string, newPin: string): Promise<PinChangeOutcome> => {
       if (pinChangePromiseRef.current) return pinChangePromiseRef.current;
 
-      let tracked!: Promise<void>;
+      let tracked!: Promise<PinChangeOutcome>;
       tracked = (async () => {
         if (
           oldPin !== vaultPinRef.current ||
@@ -430,7 +434,10 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         setVaultState("saving");
 
         try {
-          await invoke<void>("change_pin", { oldPin, newPin });
+          const outcome = await invoke<PinChangeOutcome>("change_pin", {
+            oldPin,
+            newPin,
+          });
           if (
             barrierEpoch !== pinEpochRef.current ||
             vaultPinRef.current !== oldPin
@@ -449,6 +456,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
           );
           await flushRevision(barrierEpoch, postRevision);
           setVaultState("clean");
+          return outcome;
         } catch (reason) {
           if (
             barrierEpoch === pinEpochRef.current &&
