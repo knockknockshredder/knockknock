@@ -17,7 +17,9 @@ pub mod verification;
 mod tests;
 
 use std::collections::HashSet;
+use std::fs::File;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::shredder::validation::{classify_path, PathClassification};
 
@@ -567,5 +569,208 @@ pub fn shred_files(
         errors,
         total_bytes_shredded: total_bytes,
         duration_secs: start.elapsed().as_secs_f64(),
+    }
+}
+
+/// Adapter for the legacy overwrite/verification core.
+///
+/// Root execution owns all directory-relative cleanup. This adapter therefore
+/// accepts only an already-open regular file, performs overwrite and
+/// verification, truncates the same handle, and leaves rename/unlink to the
+/// secure tree adapter.
+pub(crate) struct LegacyOpenFileShredder {
+    algorithm: Arc<dyn ShredAlgorithm>,
+    passes: u32,
+    pattern: PatternType,
+    verification_level: VerificationLevel,
+    progress: Arc<dyn ProgressReporter>,
+}
+
+impl LegacyOpenFileShredder {
+    pub(crate) fn new(
+        algorithm: Arc<dyn ShredAlgorithm>,
+        passes: u32,
+        pattern: PatternType,
+        verification_level: VerificationLevel,
+        progress: Arc<dyn ProgressReporter>,
+    ) -> Self {
+        Self {
+            algorithm,
+            passes,
+            pattern,
+            verification_level,
+            progress,
+        }
+    }
+}
+
+impl crate::shredder::root_execution::OpenFileShredder for LegacyOpenFileShredder {
+    fn shred_open_file(
+        &self,
+        mut file: File,
+        identity: crate::shredder::root_execution::NodeIdentity,
+        request: &crate::shredder::root_execution::FileShredRequest,
+    ) -> Result<crate::shredder::root_execution::FileShredResult, ShredError> {
+        if identity.kind() != crate::shredder::root_execution::NodeKind::RegularFile {
+            return Err(ShredError::ValidationFailed(
+                "open-file shredder requires a regular-file identity".to_string(),
+            ));
+        }
+
+        let metadata = file.metadata().map_err(|error| {
+            ShredError::from_io_error(request.diagnostic_path().to_path_buf(), error)
+        })?;
+        if !metadata.file_type().is_file() {
+            return Err(ShredError::ValidationFailed(
+                "open-file shredder rejected a non-regular file handle".to_string(),
+            ));
+        }
+
+        let path = request.diagnostic_path();
+        let file_size = metadata.len();
+        self.progress.on_file_start(path, file_size);
+        if !self.algorithm.accepted_patterns().contains(&self.pattern) {
+            return Err(ShredError::ValidationFailed(format!(
+                "Algorithm '{}' does not support pattern '{:?}'",
+                self.algorithm.name(),
+                self.pattern
+            )));
+        }
+
+        if file_size == 0 {
+            file.set_len(0)
+                .map_err(|error| ShredError::from_io_error(path.to_path_buf(), error))?;
+            file.sync_all()
+                .map_err(|error| ShredError::from_io_error(path.to_path_buf(), error))?;
+            let result = crate::shredder::root_execution::FileShredResult::success(0);
+            self.progress.on_file_complete(
+                path,
+                &ShredResult {
+                    success: true,
+                    passes_completed: 0,
+                    bytes_written: 0,
+                    errors: Vec::new(),
+                },
+                0,
+            );
+            return Ok(result);
+        }
+
+        let seed = if self.pattern == PatternType::Random {
+            Some(verification::PrngSeed::generate()?)
+        } else {
+            None
+        };
+        let verifier = verification::create_verifier(self.verification_level);
+        let mut bytes_written = 0u64;
+        let mut errors = Vec::new();
+
+        if self.algorithm.has_fixed_pattern_sequence() {
+            self.progress.on_pass_start(1, self.passes);
+            match self.algorithm.shred(
+                &mut file,
+                file_size,
+                self.passes,
+                self.pattern,
+                self.progress.as_ref(),
+                seed.as_ref(),
+                path,
+            ) {
+                Ok(result) => bytes_written = result.bytes_written,
+                Err(error) => errors.push(error),
+            }
+            if errors.is_empty() {
+                if let Err(error) = file.sync_all() {
+                    errors.push(ShredError::from_io_error(path.to_path_buf(), error));
+                } else {
+                    match verifier.verify(
+                        &mut file,
+                        &self.algorithm.final_pattern(self.pattern),
+                        file_size,
+                        seed.as_ref(),
+                        path,
+                    ) {
+                        Ok(result) if !result.passed => {
+                            errors.push(ShredError::VerificationFailed {
+                                path: path.to_path_buf(),
+                                pass: self.passes,
+                            })
+                        }
+                        Err(error) => errors.push(error),
+                        Ok(_) => {}
+                    }
+                }
+            }
+            self.progress.on_pass_complete(self.passes, self.passes);
+        } else {
+            for pass in 0..self.passes {
+                if crate::shredder::cancel::is_cancelled_global() {
+                    errors.push(ShredError::IoError {
+                        path: path.to_path_buf(),
+                        kind: "Cancelled".to_string(),
+                        message: format!("Shredding cancelled before pass {}", pass + 1),
+                    });
+                    break;
+                }
+
+                self.progress.on_pass_start(pass + 1, self.passes);
+                match self.algorithm.shred(
+                    &mut file,
+                    file_size,
+                    1,
+                    self.pattern,
+                    self.progress.as_ref(),
+                    seed.as_ref(),
+                    path,
+                ) {
+                    Ok(result) => bytes_written += result.bytes_written,
+                    Err(error) => {
+                        errors.push(error);
+                        break;
+                    }
+                }
+                if let Err(error) = file.sync_all() {
+                    errors.push(ShredError::from_io_error(path.to_path_buf(), error));
+                    break;
+                }
+                match verifier.verify(&mut file, &self.pattern, file_size, seed.as_ref(), path) {
+                    Ok(result) if !result.passed => errors.push(ShredError::VerificationFailed {
+                        path: path.to_path_buf(),
+                        pass: pass + 1,
+                    }),
+                    Err(error) => errors.push(error),
+                    Ok(_) => {}
+                }
+                self.progress.on_pass_complete(pass + 1, self.passes);
+                if !errors.is_empty() {
+                    break;
+                }
+            }
+        }
+
+        let success = errors.is_empty();
+        if success {
+            file.set_len(0)
+                .map_err(|error| ShredError::from_io_error(path.to_path_buf(), error))?;
+            file.sync_all()
+                .map_err(|error| ShredError::from_io_error(path.to_path_buf(), error))?;
+        }
+
+        let result = crate::shredder::root_execution::FileShredResult {
+            success,
+            bytes_shredded: bytes_written,
+            errors,
+        };
+        self.progress.on_file_complete(
+            path,
+            &ShredResult {
+                success: result.success,
+                passes_completed: self.passes,
+                bytes_written: result.bytes_shredded,
+                errors: Vec::new(),
+            },
+            self.passes,
+        );
+        Ok(result)
     }
 }
