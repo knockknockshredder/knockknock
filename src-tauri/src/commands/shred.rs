@@ -322,6 +322,131 @@ pub fn validate_paths(
     Ok((valid, errors))
 }
 
+fn target_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn metadata_for_target(
+    target: &VaultTarget,
+    kind: TargetKind,
+    availability: TargetAvailability,
+    reason: Option<String>,
+    size: u64,
+) -> TargetMetadataDto {
+    let path = std::path::Path::new(&target.path);
+    TargetMetadataDto {
+        path: target.path.clone(),
+        kind,
+        availability,
+        reason,
+        name: target_name(path),
+        size,
+    }
+}
+
+fn actual_target_kind(metadata: &std::fs::Metadata) -> Option<TargetKind> {
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        Some(TargetKind::Link)
+    } else if file_type.is_file() {
+        Some(TargetKind::File)
+    } else if file_type.is_dir() {
+        Some(TargetKind::Directory)
+    } else {
+        None
+    }
+}
+
+fn validate_target(target: &VaultTarget) -> TargetMetadataDto {
+    let path = std::path::Path::new(&target.path);
+    if target.path.trim().is_empty() {
+        return metadata_for_target(
+            target,
+            target.kind,
+            TargetAvailability::Blocked,
+            Some("Target path is empty".to_string()),
+            0,
+        );
+    }
+
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return match target.kind {
+                TargetKind::UnknownLegacy => metadata_for_target(
+                    target,
+                    TargetKind::UnknownLegacy,
+                    TargetAvailability::Blocked,
+                    Some("Legacy target is missing".to_string()),
+                    0,
+                ),
+                known_kind => {
+                    metadata_for_target(target, known_kind, TargetAvailability::Missing, None, 0)
+                }
+            };
+        }
+        Err(error) => {
+            return metadata_for_target(
+                target,
+                target.kind,
+                TargetAvailability::Blocked,
+                Some(format!("Cannot inspect target: {error}")),
+                0,
+            );
+        }
+    };
+
+    let size = metadata.len();
+    let Some(actual_kind) = actual_target_kind(&metadata) else {
+        return metadata_for_target(
+            target,
+            target.kind,
+            TargetAvailability::Blocked,
+            Some("Target is not a regular file, directory, or link".to_string()),
+            size,
+        );
+    };
+
+    if actual_kind == TargetKind::Link {
+        return metadata_for_target(
+            target,
+            if target.kind == TargetKind::UnknownLegacy {
+                actual_kind
+            } else {
+                target.kind
+            },
+            TargetAvailability::Blocked,
+            Some("Symbolic links are not safe execution roots".to_string()),
+            size,
+        );
+    }
+
+    match target.kind {
+        TargetKind::UnknownLegacy => {
+            metadata_for_target(target, actual_kind, TargetAvailability::Ready, None, size)
+        }
+        expected_kind if expected_kind == actual_kind => {
+            metadata_for_target(target, expected_kind, TargetAvailability::Ready, None, size)
+        }
+        expected_kind => metadata_for_target(
+            target,
+            expected_kind,
+            TargetAvailability::Blocked,
+            Some(format!(
+                "Target kind mismatch: expected {:?}, found {:?}",
+                expected_kind, actual_kind
+            )),
+            size,
+        ),
+    }
+}
+
+pub fn validate_targets(targets: Vec<VaultTarget>) -> Result<Vec<TargetMetadataDto>, String> {
+    Ok(targets.iter().map(validate_target).collect())
+}
+
 /// Open a multi-select file dialog that returns raw `.lnk` paths without
 /// resolving shortcut targets.
 ///

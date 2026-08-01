@@ -4,6 +4,7 @@
 // the user's pending shred list (Vec<String> of paths). The PIN is passed
 // per-call and never persisted by the frontend.
 
+use crate::vault::storage::{VaultLoadDto, VaultStore};
 use crate::{pin, vault};
 
 #[tauri::command]
@@ -14,8 +15,11 @@ pub async fn save_vault(paths: Vec<String>, pin: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn load_vault(pin: String) -> Result<Vec<String>, String> {
-    tokio::task::spawn_blocking(move || vault::storage::load(&pin))
+pub async fn load_vault(pin: String) -> Result<VaultLoadDto, String> {
+    tokio::task::spawn_blocking(move || {
+        let store = VaultStore::production().map_err(String::from)?;
+        store.load(&pin).map_err(String::from)
+    })
         .await
         .map_err(|e| format!("Task panicked: {:?}", e))?
 }

@@ -7,7 +7,12 @@
 
 use super::crypto::{self, EncryptedData};
 use crate::pin::config::set_owner_only;
+use crate::shredder::root_execution::types::{
+    TargetKind, VaultError, VaultSchemaSource, VaultTarget,
+};
 use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize)]
@@ -18,6 +23,291 @@ struct VaultFile {
     salt: Vec<u8>,
     nonce: Vec<u8>,
     ciphertext: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultPayloadV2 {
+    pub schema_version: u32,
+    pub targets: Vec<VaultTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultLoadDto {
+    pub source_schema: VaultSchemaSource,
+    pub migration_required: bool,
+    pub targets: Vec<VaultTarget>,
+}
+
+pub struct VaultStore {
+    vault_path: PathBuf,
+}
+
+impl VaultStore {
+    pub fn production() -> Result<Self, VaultError> {
+        let data_dir = crate::paths::portable_data_dir().map_err(|message| VaultError::Io {
+            action: "resolve vault path",
+            source: std::io::Error::other(message),
+        })?;
+        Ok(Self {
+            vault_path: data_dir.join("vault.json"),
+        })
+    }
+
+    pub fn at(vault_path: PathBuf) -> Self {
+        Self { vault_path }
+    }
+
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.vault_path
+    }
+
+    pub fn load(&self, pin: &str) -> Result<VaultLoadDto, VaultError> {
+        if !self.vault_path.exists() {
+            return Ok(VaultLoadDto {
+                source_schema: VaultSchemaSource::V2,
+                migration_required: false,
+                targets: Vec::new(),
+            });
+        }
+
+        let json = std::fs::read(&self.vault_path).map_err(|source| VaultError::Io {
+            action: "read vault",
+            source,
+        })?;
+        let vault_file: VaultFile = serde_json::from_slice(&json)
+            .map_err(|source| VaultError::Decode(source.to_string()))?;
+
+        if vault_file.version != crypto::VAULT_VERSION {
+            return Err(VaultError::UnsupportedSchema(vault_file.version));
+        }
+
+        let encrypted = EncryptedData {
+            version: vault_file.version,
+            salt: vault_file.salt,
+            nonce: vault_file.nonce,
+            ciphertext: vault_file.ciphertext,
+        };
+        let plaintext = crypto::decrypt(&encrypted, pin).map_err(VaultError::Crypto)?;
+        decode_payload(&plaintext)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VaultIoFailure {
+    CreateTemp,
+    WriteTemp,
+    SyncTemp,
+    Replace,
+    SyncParent,
+    CleanupTemp,
+}
+
+pub(crate) trait VaultIo {
+    fn create_temp(&self, path: &std::path::Path) -> Result<File, VaultError>;
+    fn write_temp(
+        &self,
+        file: &mut File,
+        path: &std::path::Path,
+        bytes: &[u8],
+    ) -> Result<(), VaultError>;
+    fn sync_temp(&self, file: &File, path: &std::path::Path) -> Result<(), VaultError>;
+    fn replace(
+        &self,
+        temporary_path: &std::path::Path,
+        vault_path: &std::path::Path,
+    ) -> Result<(), VaultError>;
+    fn sync_parent(&self, vault_path: &std::path::Path) -> Result<(), VaultError>;
+    fn cleanup_temp(&self, temporary_path: &std::path::Path) -> Result<(), VaultError>;
+}
+
+pub(crate) struct ProductionVaultIo;
+
+impl VaultIo for ProductionVaultIo {
+    fn create_temp(&self, path: &std::path::Path) -> Result<File, VaultError> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .map_err(|source| VaultError::Io {
+                action: "create temporary vault",
+                source,
+            })
+    }
+
+    fn write_temp(
+        &self,
+        file: &mut File,
+        path: &std::path::Path,
+        bytes: &[u8],
+    ) -> Result<(), VaultError> {
+        file.write_all(bytes).map_err(|source| VaultError::Io {
+            action: "write temporary vault",
+            source,
+        })?;
+        set_owner_only(path).map_err(|message| VaultError::Io {
+            action: "protect temporary vault",
+            source: std::io::Error::other(message),
+        })
+    }
+
+    fn sync_temp(&self, file: &File, path: &std::path::Path) -> Result<(), VaultError> {
+        file.sync_all().map_err(|source| VaultError::Sync {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+
+    fn replace(
+        &self,
+        temporary_path: &std::path::Path,
+        vault_path: &std::path::Path,
+    ) -> Result<(), VaultError> {
+        std::fs::rename(temporary_path, vault_path).map_err(|source| VaultError::Replace { source })
+    }
+
+    fn sync_parent(&self, vault_path: &std::path::Path) -> Result<(), VaultError> {
+        let Some(parent) = vault_path.parent() else {
+            return Ok(());
+        };
+
+        #[cfg(unix)]
+        {
+            let parent_file = File::open(parent).map_err(|source| VaultError::Sync {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+            parent_file.sync_all().map_err(|source| VaultError::Sync {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+
+        #[cfg(not(unix))]
+        let _ = parent;
+
+        Ok(())
+    }
+
+    fn cleanup_temp(&self, temporary_path: &std::path::Path) -> Result<(), VaultError> {
+        match std::fs::remove_file(temporary_path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(VaultError::Io {
+                action: "cleanup temporary vault",
+                source,
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct FaultInjectingVaultIo {
+    failure: VaultIoFailure,
+}
+
+#[cfg(test)]
+impl FaultInjectingVaultIo {
+    pub(crate) fn failing_at(failure: VaultIoFailure) -> Self {
+        Self { failure }
+    }
+
+    fn fail_if(&self, operation: VaultIoFailure) -> Result<(), VaultError> {
+        if self.failure == operation {
+            return Err(VaultError::Io {
+                action: "fault-injected vault operation",
+                source: std::io::Error::other(format!("fault at {operation:?}")),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+impl VaultIo for FaultInjectingVaultIo {
+    fn create_temp(&self, path: &std::path::Path) -> Result<File, VaultError> {
+        self.fail_if(VaultIoFailure::CreateTemp)?;
+        ProductionVaultIo.create_temp(path)
+    }
+
+    fn write_temp(
+        &self,
+        file: &mut File,
+        path: &std::path::Path,
+        bytes: &[u8],
+    ) -> Result<(), VaultError> {
+        self.fail_if(VaultIoFailure::WriteTemp)?;
+        ProductionVaultIo.write_temp(file, path, bytes)
+    }
+
+    fn sync_temp(&self, file: &File, path: &std::path::Path) -> Result<(), VaultError> {
+        self.fail_if(VaultIoFailure::SyncTemp)?;
+        ProductionVaultIo.sync_temp(file, path)
+    }
+
+    fn replace(
+        &self,
+        temporary_path: &std::path::Path,
+        vault_path: &std::path::Path,
+    ) -> Result<(), VaultError> {
+        self.fail_if(VaultIoFailure::Replace)?;
+        ProductionVaultIo.replace(temporary_path, vault_path)
+    }
+
+    fn sync_parent(&self, vault_path: &std::path::Path) -> Result<(), VaultError> {
+        self.fail_if(VaultIoFailure::SyncParent)?;
+        ProductionVaultIo.sync_parent(vault_path)
+    }
+
+    fn cleanup_temp(&self, temporary_path: &std::path::Path) -> Result<(), VaultError> {
+        self.fail_if(VaultIoFailure::CleanupTemp)?;
+        ProductionVaultIo.cleanup_temp(temporary_path)
+    }
+}
+
+fn decode_payload(plaintext: &[u8]) -> Result<VaultLoadDto, VaultError> {
+    let value: serde_json::Value = serde_json::from_slice(plaintext)
+        .map_err(|source| VaultError::Decode(source.to_string()))?;
+
+    match value {
+        serde_json::Value::Array(_) => {
+            let paths: Vec<String> = serde_json::from_value(value)
+                .map_err(|source| VaultError::Decode(source.to_string()))?;
+            Ok(VaultLoadDto {
+                source_schema: VaultSchemaSource::V1,
+                migration_required: true,
+                targets: paths
+                    .into_iter()
+                    .map(|path| VaultTarget {
+                        path,
+                        kind: TargetKind::UnknownLegacy,
+                    })
+                    .collect(),
+            })
+        }
+        serde_json::Value::Object(ref object) => {
+            let schema_version = object
+                .get("schema_version")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| VaultError::Decode("Missing schema_version".to_string()))?;
+            let schema_version = u32::try_from(schema_version)
+                .map_err(|_| VaultError::UnsupportedSchema(u32::MAX))?;
+            if schema_version != 2 {
+                return Err(VaultError::UnsupportedSchema(schema_version));
+            }
+
+            let payload: VaultPayloadV2 = serde_json::from_value(value)
+                .map_err(|source| VaultError::Decode(source.to_string()))?;
+            Ok(VaultLoadDto {
+                source_schema: VaultSchemaSource::V2,
+                migration_required: false,
+                targets: payload.targets,
+            })
+        }
+        _ => Err(VaultError::Decode(
+            "Vault payload must be a V1 array or V2 object".to_string(),
+        )),
+    }
 }
 
 fn vault_path() -> Result<PathBuf, String> {
@@ -72,31 +362,17 @@ pub fn save(paths: &[String], pin: &str) -> Result<(), String> {
 /// Returns an `Err` if the file exists but cannot be parsed, decrypted,
 /// or has an unsupported version.
 pub fn load(pin: &str) -> Result<Vec<String>, String> {
-    let path = vault_path()?;
-
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let json =
-        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read vault: {}", e))?;
-
-    let vault_file: VaultFile =
-        serde_json::from_str(&json).map_err(|e| format!("Failed to parse vault: {}", e))?;
-
-    let encrypted = EncryptedData {
-        version: vault_file.version,
-        salt: vault_file.salt,
-        nonce: vault_file.nonce,
-        ciphertext: vault_file.ciphertext,
-    };
-
-    let plaintext = crypto::decrypt(&encrypted, pin)?;
-
-    let paths: Vec<String> = serde_json::from_slice(&plaintext)
-        .map_err(|e| format!("Failed to deserialize paths: {}", e))?;
-
-    Ok(paths)
+    let store = VaultStore::production().map_err(String::from)?;
+    store
+        .load(pin)
+        .map(|loaded| {
+            loaded
+                .targets
+                .into_iter()
+                .map(|target| target.path)
+                .collect()
+        })
+        .map_err(String::from)
 }
 
 /// Delete the on-disk vault if present. No-op if it doesn't exist.
@@ -137,20 +413,4 @@ pub fn rekey(old_pin: &str, new_pin: &str) -> Result<(), String> {
     // Re-save with new PIN. This is the critical step — if it fails
     // we surface the error so the caller knows the vault was lost.
     save(&paths, new_pin)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn save_then_clear_then_exists_is_false() {
-        // Just exercise clear() / exists() against the real path — these
-        // are the only operations that don't need a PIN. save() / load()
-        // are covered by the round-trip in crypto tests.
-        let _ = clear();
-        // exists() may be true if a previous test left state behind; we
-        // only assert clear() doesn't error.
-        assert!(clear().is_ok());
-    }
 }
