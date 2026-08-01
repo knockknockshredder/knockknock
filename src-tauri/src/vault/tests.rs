@@ -307,6 +307,7 @@ fn fault_injecting_vault_io_covers_atomic_write_operations() {
         VaultIoFailure::WriteTemp,
         VaultIoFailure::SyncTemp,
         VaultIoFailure::Replace,
+        VaultIoFailure::ReplaceExisting,
         VaultIoFailure::SyncParent,
         VaultIoFailure::CleanupTemp,
     ];
@@ -332,6 +333,9 @@ fn fault_injecting_vault_io_covers_atomic_write_operations() {
             VaultIoFailure::Replace => adapter
                 .replace(&temporary_path, store.path())
                 .expect_err("replace fault should fail"),
+            VaultIoFailure::ReplaceExisting => adapter
+                .replace_existing(&temporary_path, store.path())
+                .expect_err("existing replacement fault should fail"),
             VaultIoFailure::SyncParent => adapter
                 .sync_parent(store.path())
                 .expect_err("parent sync fault should fail"),
@@ -342,4 +346,104 @@ fn fault_injecting_vault_io_covers_atomic_write_operations() {
         assert!(matches!(error, VaultError::Io { .. }));
         let _ = fs::remove_file(&temporary_path);
     }
+}
+
+fn assert_no_temporary_files(tempdir: &TempDir) {
+    let entries = fs::read_dir(tempdir.path())
+        .expect("read temporary vault directory")
+        .map(|entry| entry.expect("read temporary vault entry").file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(entries, vec![std::ffi::OsString::from("vault.json")]);
+}
+
+fn all_target_kinds() -> Vec<VaultTarget> {
+    vec![
+        v2_target("C:\\vault\\file.txt", TargetKind::File),
+        v2_target("C:\\vault\\directory", TargetKind::Directory),
+        v2_target("C:\\vault\\link", TargetKind::Link),
+        v2_target("C:\\vault\\legacy", TargetKind::UnknownLegacy),
+    ]
+}
+
+#[test]
+fn save_v2_publishes_and_round_trips_all_target_kinds() {
+    let (tempdir, store) = store();
+    let targets = all_target_kinds();
+
+    store.save_v2(&targets, "123456").expect("publish V2 vault");
+
+    let loaded = store.load("123456").expect("load published V2 vault");
+    assert_eq!(loaded.source_schema, VaultSchemaSource::V2);
+    assert!(!loaded.migration_required);
+    assert_eq!(loaded.targets, targets);
+    assert_no_temporary_files(&tempdir);
+}
+
+#[test]
+fn save_v2_replaces_existing_ciphertext_atomically() {
+    let (tempdir, store) = store();
+    let first = vec![v2_target("first", TargetKind::File)];
+    let second = all_target_kinds();
+
+    store
+        .save_v2(&first, "123456")
+        .expect("publish first V2 vault");
+    let previous_ciphertext = fs::read(store.path()).expect("read first ciphertext");
+
+    store
+        .save_v2(&second, "123456")
+        .expect("replace existing V2 vault");
+
+    let current_ciphertext = fs::read(store.path()).expect("read replacement ciphertext");
+    let loaded = store.load("123456").expect("load replacement V2 vault");
+    assert_ne!(current_ciphertext, previous_ciphertext);
+    assert_eq!(loaded.targets, second);
+    assert_no_temporary_files(&tempdir);
+}
+
+#[test]
+fn save_v2_faults_preserve_previous_ciphertext_and_cleanup_temp() {
+    let (tempdir, store) = store();
+    let previous = vec![v2_target("previous", TargetKind::File)];
+    let replacement = all_target_kinds();
+    store
+        .save_v2(&previous, "123456")
+        .expect("publish previous V2 vault");
+
+    for failure in [
+        VaultIoFailure::WriteTemp,
+        VaultIoFailure::SyncTemp,
+        VaultIoFailure::ReplaceExisting,
+    ] {
+        let before = fs::read(store.path()).expect("read ciphertext before injected failure");
+        let adapter = FaultInjectingVaultIo::failing_at(failure);
+        let error = store
+            .save_v2_with_io(&replacement, "123456", &adapter)
+            .expect_err("fault-injected save must fail");
+        let after = fs::read(store.path()).expect("read ciphertext after injected failure");
+
+        assert!(matches!(
+            error,
+            VaultError::Io { .. } | VaultError::Sync { .. } | VaultError::Replace { .. }
+        ));
+        assert_eq!(before, after);
+        assert_no_temporary_files(&tempdir);
+    }
+}
+
+#[test]
+fn save_v2_first_publication_failure_leaves_no_vault_or_temp_file() {
+    let (tempdir, store) = store();
+    let adapter = FaultInjectingVaultIo::failing_at(VaultIoFailure::Replace);
+
+    let error = store
+        .save_v2_with_io(&all_target_kinds(), "123456", &adapter)
+        .expect_err("fault-injected first publication must fail");
+
+    assert!(matches!(error, VaultError::Io { .. }));
+    assert!(!store.path().exists());
+    assert!(fs::read_dir(tempdir.path())
+        .expect("read temporary vault directory")
+        .next()
+        .is_none());
 }

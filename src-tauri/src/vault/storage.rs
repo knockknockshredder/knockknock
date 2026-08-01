@@ -13,7 +13,8 @@ use crate::shredder::root_execution::types::{
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize, Deserialize)]
 struct VaultFile {
@@ -90,6 +91,104 @@ impl VaultStore {
         let plaintext = crypto::decrypt(&encrypted, pin).map_err(VaultError::Crypto)?;
         decode_payload(&plaintext)
     }
+
+    pub fn save_v2(&self, targets: &[VaultTarget], pin: &str) -> Result<(), VaultError> {
+        let io = ProductionVaultIo;
+        self.save_v2_with_io(targets, pin, &io)
+    }
+
+    pub(crate) fn save_v2_with_io(
+        &self,
+        targets: &[VaultTarget],
+        pin: &str,
+        io: &dyn VaultIo,
+    ) -> Result<(), VaultError> {
+        let payload = VaultPayloadV2 {
+            schema_version: 2,
+            targets: targets.to_vec(),
+        };
+        let plaintext = serde_json::to_vec(&payload)
+            .map_err(|source| VaultError::Decode(source.to_string()))?;
+        let encrypted = crypto::encrypt(&plaintext, pin).map_err(VaultError::Crypto)?;
+        let vault_file = VaultFile {
+            version: encrypted.version,
+            salt: encrypted.salt,
+            nonce: encrypted.nonce,
+            ciphertext: encrypted.ciphertext,
+        };
+        let bytes = serde_json::to_vec(&vault_file)
+            .map_err(|source| VaultError::Decode(source.to_string()))?;
+
+        let (temporary_path, mut temporary_file) = create_unique_temp(io, &self.vault_path)?;
+        if let Err(error) = io.write_temp(&mut temporary_file, &temporary_path, &bytes) {
+            drop(temporary_file);
+            let _ = io.cleanup_temp(&temporary_path);
+            return Err(error);
+        }
+        if let Err(error) = io.sync_temp(&temporary_file, &temporary_path) {
+            drop(temporary_file);
+            let _ = io.cleanup_temp(&temporary_path);
+            return Err(error);
+        }
+        drop(temporary_file);
+
+        let replacement = if self.vault_path.exists() {
+            io.replace_existing(&temporary_path, &self.vault_path)
+        } else {
+            io.replace(&temporary_path, &self.vault_path)
+        };
+        if let Err(error) = replacement {
+            let _ = io.cleanup_temp(&temporary_path);
+            return Err(error);
+        }
+
+        if let Err(error) = io.sync_parent(&self.vault_path) {
+            return Err(error);
+        }
+
+        Ok(())
+    }
+}
+
+fn create_unique_temp(io: &dyn VaultIo, vault_path: &Path) -> Result<(PathBuf, File), VaultError> {
+    let parent = vault_path.parent().unwrap_or_else(|| Path::new("."));
+    let name = vault_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("vault.json");
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let process_id = std::process::id();
+
+    for attempt in 0..128u32 {
+        let temporary_path = parent.join(format!(
+            ".{name}.{}.{}.tmp",
+            process_id,
+            timestamp + u128::from(attempt)
+        ));
+        match io.create_temp(&temporary_path) {
+            Ok(file) => return Ok((temporary_path, file)),
+            Err(error) if is_already_exists(&error) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(VaultError::Io {
+        action: "create unique temporary vault",
+        source: std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "temporary vault name collision limit reached",
+        ),
+    })
+}
+
+fn is_already_exists(error: &VaultError) -> bool {
+    matches!(
+        error,
+        VaultError::Io { source, .. } if source.kind() == std::io::ErrorKind::AlreadyExists
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +197,7 @@ pub(crate) enum VaultIoFailure {
     WriteTemp,
     SyncTemp,
     Replace,
+    ReplaceExisting,
     SyncParent,
     CleanupTemp,
 }
@@ -116,6 +216,11 @@ pub(crate) trait VaultIo {
         temporary_path: &std::path::Path,
         vault_path: &std::path::Path,
     ) -> Result<(), VaultError>;
+    fn replace_existing(
+        &self,
+        temporary_path: &std::path::Path,
+        vault_path: &std::path::Path,
+    ) -> Result<(), VaultError>;
     fn sync_parent(&self, vault_path: &std::path::Path) -> Result<(), VaultError>;
     fn cleanup_temp(&self, temporary_path: &std::path::Path) -> Result<(), VaultError>;
 }
@@ -126,8 +231,7 @@ impl VaultIo for ProductionVaultIo {
     fn create_temp(&self, path: &std::path::Path) -> Result<File, VaultError> {
         std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .open(path)
             .map_err(|source| VaultError::Io {
                 action: "create temporary vault",
@@ -164,6 +268,23 @@ impl VaultIo for ProductionVaultIo {
         vault_path: &std::path::Path,
     ) -> Result<(), VaultError> {
         std::fs::rename(temporary_path, vault_path).map_err(|source| VaultError::Replace { source })
+    }
+
+    fn replace_existing(
+        &self,
+        temporary_path: &std::path::Path,
+        vault_path: &std::path::Path,
+    ) -> Result<(), VaultError> {
+        #[cfg(unix)]
+        {
+            std::fs::rename(temporary_path, vault_path)
+                .map_err(|source| VaultError::Replace { source })
+        }
+
+        #[cfg(windows)]
+        {
+            replace_file_windows(temporary_path, vault_path)
+        }
     }
 
     fn sync_parent(&self, vault_path: &std::path::Path) -> Result<(), VaultError> {
@@ -254,6 +375,15 @@ impl VaultIo for FaultInjectingVaultIo {
         ProductionVaultIo.replace(temporary_path, vault_path)
     }
 
+    fn replace_existing(
+        &self,
+        temporary_path: &std::path::Path,
+        vault_path: &std::path::Path,
+    ) -> Result<(), VaultError> {
+        self.fail_if(VaultIoFailure::ReplaceExisting)?;
+        ProductionVaultIo.replace_existing(temporary_path, vault_path)
+    }
+
     fn sync_parent(&self, vault_path: &std::path::Path) -> Result<(), VaultError> {
         self.fail_if(VaultIoFailure::SyncParent)?;
         ProductionVaultIo.sync_parent(vault_path)
@@ -262,6 +392,44 @@ impl VaultIo for FaultInjectingVaultIo {
     fn cleanup_temp(&self, temporary_path: &std::path::Path) -> Result<(), VaultError> {
         self.fail_if(VaultIoFailure::CleanupTemp)?;
         ProductionVaultIo.cleanup_temp(temporary_path)
+    }
+}
+
+#[cfg(windows)]
+fn replace_file_windows(
+    temporary_path: &std::path::Path,
+    vault_path: &std::path::Path,
+) -> Result<(), VaultError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+    let vault_path_wide: Vec<u16> = vault_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let temporary_path_wide: Vec<u16> = temporary_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let result = unsafe {
+        ReplaceFileW(
+            vault_path_wide.as_ptr(),
+            temporary_path_wide.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if result == 0 {
+        Err(VaultError::Replace {
+            source: std::io::Error::last_os_error(),
+        })
+    } else {
+        Ok(())
     }
 }
 

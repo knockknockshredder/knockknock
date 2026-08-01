@@ -1,15 +1,19 @@
 // src-tauri/src/commands/vault.rs
 //
 // Tauri commands that expose the vault over IPC. All commands operate on
-// the user's pending shred list (Vec<String> of paths). The PIN is passed
+// the user's pending shred targets. The PIN is passed
 // per-call and never persisted by the frontend.
 
+use crate::shredder::root_execution::types::VaultTarget;
 use crate::vault::storage::{VaultLoadDto, VaultStore};
 use crate::{pin, vault};
 
 #[tauri::command]
-pub async fn save_vault(paths: Vec<String>, pin: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || vault::storage::save(&paths, &pin))
+pub async fn save_vault(targets: Vec<VaultTarget>, pin: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let store = VaultStore::production().map_err(String::from)?;
+        store.save_v2(&targets, &pin).map_err(String::from)
+    })
         .await
         .map_err(|e| format!("Task panicked: {:?}", e))?
 }
