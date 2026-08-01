@@ -17,6 +17,10 @@ fn store() -> (TempDir, VaultStore) {
 
 fn write_encrypted<T: Serialize>(store: &VaultStore, pin: &str, payload: &T) {
     let plaintext = serde_json::to_vec(payload).expect("serialize payload");
+    write_encrypted_bytes(store, pin, &plaintext);
+}
+
+fn write_encrypted_bytes(store: &VaultStore, pin: &str, plaintext: &[u8]) {
     let encrypted = crypto::encrypt(&plaintext, pin).expect("encrypt payload");
     let file = json!({
         "version": encrypted.version,
@@ -114,6 +118,36 @@ fn corrupt_ciphertext_returns_crypto_error_without_writing() {
 }
 
 #[test]
+fn malformed_outer_json_preserves_ciphertext_without_writing() {
+    let (_tempdir, store) = store();
+    fs::write(store.path(), b"{ malformed outer json").expect("write malformed vault");
+    let before = fs::read(store.path()).expect("read malformed vault before load");
+
+    let error = store
+        .load("123456")
+        .expect_err("malformed outer JSON must fail");
+    let after = fs::read(store.path()).expect("read malformed vault after load");
+
+    assert!(matches!(error, VaultError::Decode(_)));
+    assert_eq!(before, after);
+}
+
+#[test]
+fn authenticated_invalid_payload_preserves_ciphertext_without_writing() {
+    let (_tempdir, store) = store();
+    write_encrypted_bytes(&store, "123456", b"authenticated but not JSON");
+    let before = fs::read(store.path()).expect("read invalid payload before load");
+
+    let error = store
+        .load("123456")
+        .expect_err("authenticated invalid payload must fail");
+    let after = fs::read(store.path()).expect("read invalid payload after load");
+
+    assert!(matches!(error, VaultError::Decode(_)));
+    assert_eq!(before, after);
+}
+
+#[test]
 fn unknown_schema_returns_error_without_writing() {
     let (_tempdir, store) = store();
     let payload = json!({ "schema_version": 99, "targets": [] });
@@ -198,18 +232,14 @@ fn preserves_known_v2_kinds_for_missing_roots() {
     assert_eq!(metadata[2].availability, TargetAvailability::Missing);
 }
 
+#[cfg(windows)]
 #[test]
-fn blocks_known_kind_mismatches_and_unsafe_roots() {
+fn blocks_relative_protected_and_network_roots() {
     let (_tempdir, store) = store();
-    let file = store.path().with_file_name("file.txt");
-    let directory = store.path().with_file_name("directory");
-    fs::write(&file, b"data").expect("file root");
-    fs::create_dir(&directory).expect("directory root");
-
     let targets = vec![
-        v2_target(file.to_string_lossy(), TargetKind::Directory),
-        v2_target(directory.to_string_lossy(), TargetKind::File),
-        v2_target(file.to_string_lossy(), TargetKind::Link),
+        v2_target("relative-root", TargetKind::File),
+        v2_target(r"C:\Windows", TargetKind::Directory),
+        v2_target(r"\\server\share\root", TargetKind::File),
     ];
     let payload = VaultPayloadV2 {
         schema_version: 2,
@@ -222,13 +252,24 @@ fn blocks_known_kind_mismatches_and_unsafe_roots() {
     let after = fs::read(store.path()).expect("read V2 ciphertext after validation");
 
     assert_eq!(metadata.len(), 3);
-    assert!(metadata.iter().all(|entry| {
-        entry.availability == TargetAvailability::Blocked
-            && entry
-                .reason
-                .as_deref()
-                .is_some_and(|reason| !reason.is_empty())
-    }));
+    assert_eq!(metadata[0].availability, TargetAvailability::Blocked);
+    assert_eq!(metadata[0].kind, TargetKind::File);
+    assert_eq!(
+        metadata[0].reason.as_deref(),
+        Some("Relative paths are not safe execution roots")
+    );
+    assert_eq!(metadata[1].availability, TargetAvailability::Blocked);
+    assert_eq!(metadata[1].kind, TargetKind::Directory);
+    assert!(metadata[1]
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("System file protected")));
+    assert_eq!(metadata[2].availability, TargetAvailability::Blocked);
+    assert_eq!(metadata[2].kind, TargetKind::File);
+    assert_eq!(
+        metadata[2].reason.as_deref(),
+        Some("Network roots are not safe execution roots")
+    );
     assert_eq!(before, after);
 }
 

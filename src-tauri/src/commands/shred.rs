@@ -5,7 +5,9 @@ use crate::shredder::algorithms::all_algorithms;
 use crate::shredder::logging::LogObfuscation;
 use crate::shredder::progress::TauriProgressReporter;
 use crate::shredder::types::*;
-use crate::shredder::validation::{PathClassification, classify_path};
+use crate::shredder::validation::{
+    classify_path, is_network_drive, validate_path, PathClassification,
+};
 use crate::shredder::VerificationLevel;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -371,6 +373,26 @@ fn validate_target(target: &VaultTarget) -> TargetMetadataDto {
         );
     }
 
+    if !path.is_absolute() {
+        return metadata_for_target(
+            target,
+            target.kind,
+            TargetAvailability::Blocked,
+            Some("Relative paths are not safe execution roots".to_string()),
+            0,
+        );
+    }
+
+    if is_network_drive(path) {
+        return metadata_for_target(
+            target,
+            target.kind,
+            TargetAvailability::Blocked,
+            Some("Network roots are not safe execution roots".to_string()),
+            0,
+        );
+    }
+
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -408,6 +430,20 @@ fn validate_target(target: &VaultTarget) -> TargetMetadataDto {
             size,
         );
     };
+
+    if let Err(error) = validate_path(path, false) {
+        return metadata_for_target(
+            target,
+            if target.kind == TargetKind::UnknownLegacy {
+                actual_kind
+            } else {
+                target.kind
+            },
+            TargetAvailability::Blocked,
+            Some(error.to_string()),
+            size,
+        );
+    }
 
     if actual_kind == TargetKind::Link {
         return metadata_for_target(
