@@ -241,6 +241,72 @@ describe("authoritative vault writer", () => {
     });
   });
 
+  it("flushes before PIN rekey and blocks stale old-PIN writes", async () => {
+    renderContext();
+    await act(async () => {
+      await latest.loadVault("old-pin");
+    });
+    const firstOldSave = deferred<void>();
+    const secondOldSave = deferred<void>();
+    const rekey = deferred<void>();
+    let saveAttempt = 0;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "save_vault") {
+        saveAttempt += 1;
+        if (saveAttempt === 1) return firstOldSave.promise;
+        if (saveAttempt === 2) return secondOldSave.promise;
+        return Promise.resolve(undefined);
+      }
+      if (command === "change_pin") return rekey.promise;
+      return Promise.resolve(undefined);
+    });
+
+    await act(async () => {
+      latest.addFiles([readyFile("C:\\before-rekey.txt")]);
+    });
+    await waitFor(() => expect(saveCalls()).toHaveLength(1));
+
+    let changePromise!: Promise<void>;
+    await act(async () => {
+      changePromise = latest.changeVaultPin("old-pin", "new-pin");
+      await Promise.resolve();
+    });
+    await act(async () => {
+      latest.addFiles([readyFile("C:\\during-rekey.txt")]);
+    });
+
+    expect(invokeMock).not.toHaveBeenCalledWith("change_pin", {
+      oldPin: "old-pin",
+      newPin: "new-pin",
+    });
+    firstOldSave.resolve();
+    await waitFor(() => expect(saveCalls()).toHaveLength(2));
+    expect(saveCalls()[1].pin).toBe("old-pin");
+    expect(saveCalls()[1].targets.map(({ path }) => path)).toEqual([
+      "C:\\before-rekey.txt",
+      "C:\\during-rekey.txt",
+    ]);
+
+    expect(invokeMock).not.toHaveBeenCalledWith("change_pin", {
+      oldPin: "old-pin",
+      newPin: "new-pin",
+    });
+    secondOldSave.resolve();
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("change_pin", {
+        oldPin: "old-pin",
+        newPin: "new-pin",
+      })
+    );
+    expect(saveCalls().slice(0, 2).every(({ pin }) => pin === "old-pin")).toBe(true);
+
+    rekey.resolve();
+    await act(async () => {
+      await changePromise;
+    });
+    expect(saveCalls().slice(2).every(({ pin }) => pin === "new-pin")).toBe(true);
+  });
+
   it("restores ready, missing, and blocked targets without filtering", async () => {
     renderContext();
     const targets = [

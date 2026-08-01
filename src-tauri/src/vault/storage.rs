@@ -102,10 +102,7 @@ impl VaultStore {
             return Ok(());
         }
 
-        let loaded = match self.load(old_pin) {
-            Ok(payload) => payload,
-            Err(_) => return Ok(()),
-        };
+        let loaded = self.load(old_pin)?;
 
         self.save_v2(&loaded.targets, new_pin)
     }

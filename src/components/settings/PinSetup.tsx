@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Lock, WarningCircle } from "@phosphor-icons/react";
+import { useShred } from "@/contexts/ShredContext";
 import {
   Dialog,
   DialogContent,
@@ -33,6 +34,7 @@ interface PinSetupProps {
 }
 
 export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }: PinSetupProps) {
+  const { changeVaultPin } = useShred();
   const [oldPin, setOldPin] = useState("");
   const [pin, setPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
@@ -73,7 +75,7 @@ export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }
     setSubmitting(true);
     try {
       if (requireOldPin) {
-        await invoke<void>("change_pin", { oldPin, newPin: pin });
+        await changeVaultPin(oldPin, pin);
       } else {
         await invoke<void>("setup_pin", { newPin: pin });
       }

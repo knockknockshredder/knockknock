@@ -397,6 +397,18 @@ fn rekey_preserves_v2_target_kinds() {
 }
 
 #[test]
+fn rekey_propagates_load_failure() {
+    let (_tempdir, store) = store();
+    write_encrypted_bytes(&store, "old-pin", b"authenticated but invalid payload");
+
+    let error = store
+        .rekey("old-pin", "new-pin")
+        .expect_err("rekey must propagate load failures");
+
+    assert!(matches!(error, VaultError::Decode(_)));
+}
+
+#[test]
 fn save_v2_replaces_existing_ciphertext_atomically() {
     let (tempdir, store) = store();
     let first = vec![v2_target("first", TargetKind::File)];

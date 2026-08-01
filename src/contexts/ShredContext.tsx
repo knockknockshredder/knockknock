@@ -63,6 +63,7 @@ interface ShredState {
   setProgress: (progress: ProgressState | null) => void;
   updateFileStatus: (id: string, status: ShredFile["status"], error?: string) => void;
   setVaultPin: (pin: string | null) => void;
+  changeVaultPin: (oldPin: string, newPin: string) => Promise<void>;
   loadVault: (pin: string) => Promise<void>;
   flushVault: () => Promise<void>;
   saveVault: (pin: string) => Promise<boolean>;
@@ -106,6 +107,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
   const queuedSnapshotRef = useRef<VaultSnapshot | null>(null);
   const writerPromiseRef = useRef<Promise<void> | null>(null);
   const writerErrorRef = useRef<WriterError | null>(null);
+  const pinChangePromiseRef = useRef<Promise<void> | null>(null);
 
   const addFiles = useCallback((newEntries: FileMetadata[]) => {
     setFiles((previous) => {
@@ -362,6 +364,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
 
   const setVaultPin = useCallback(
     (pin: string | null) => {
+      if (pinChangePromiseRef.current) return;
       if (pin === vaultPinRef.current && !loadingRef.current) return;
 
       pinEpochRef.current += 1;
@@ -389,6 +392,87 @@ export function ShredProvider({ children }: { children: ReactNode }) {
       }
     },
     [createSnapshot, queueSnapshot]
+  );
+
+  const changeVaultPin = useCallback(
+    (oldPin: string, newPin: string): Promise<void> => {
+      if (pinChangePromiseRef.current) return pinChangePromiseRef.current;
+
+      let tracked!: Promise<void>;
+      tracked = (async () => {
+        if (
+          oldPin !== vaultPinRef.current ||
+          writerLockedRef.current ||
+          !vaultLoadedRef.current
+        ) {
+          throw new Error("Vault PIN change requires an unlocked vault");
+        }
+
+        const oldEpoch = pinEpochRef.current;
+        const observedRevision = ++revisionRef.current;
+        queueSnapshot(
+          createSnapshot(oldPin, oldEpoch, observedRevision),
+          true
+        );
+        await flushRevision(oldEpoch, observedRevision);
+        if (
+          oldEpoch !== pinEpochRef.current ||
+          oldPin !== vaultPinRef.current
+        ) {
+          throw new Error("Vault PIN changed before rekey could begin");
+        }
+
+        writerLockedRef.current = true;
+        pinEpochRef.current += 1;
+        const barrierEpoch = pinEpochRef.current;
+        queuedSnapshotRef.current = null;
+        writerErrorRef.current = null;
+        setVaultState("saving");
+
+        try {
+          await invoke<void>("change_pin", { oldPin, newPin });
+          if (
+            barrierEpoch !== pinEpochRef.current ||
+            vaultPinRef.current !== oldPin
+          ) {
+            throw new Error("Vault PIN changed during rekey");
+          }
+
+          vaultPinRef.current = newPin;
+          setVaultPinState(newPin);
+          writerLockedRef.current = false;
+          const postRevision = ++revisionRef.current;
+          setVaultState("dirty");
+          queueSnapshot(
+            createSnapshot(newPin, barrierEpoch, postRevision),
+            true
+          );
+          await flushRevision(barrierEpoch, postRevision);
+          setVaultState("clean");
+        } catch (reason) {
+          if (
+            barrierEpoch === pinEpochRef.current &&
+            vaultPinRef.current === oldPin
+          ) {
+            writerLockedRef.current = false;
+            const recoveryRevision = ++revisionRef.current;
+            setVaultState("dirty");
+            queueSnapshot(
+              createSnapshot(oldPin, barrierEpoch, recoveryRevision),
+              true
+            );
+          }
+          throw toError(reason);
+        }
+      })().finally(() => {
+        if (pinChangePromiseRef.current === tracked) {
+          pinChangePromiseRef.current = null;
+        }
+      });
+      pinChangePromiseRef.current = tracked;
+      return tracked;
+    },
+    [createSnapshot, flushRevision, queueSnapshot]
   );
 
   const replaceLoadedFiles = useCallback((metadata: TargetMetadataDto[]) => {
@@ -577,6 +661,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         setProgress,
         updateFileStatus,
         setVaultPin,
+        changeVaultPin,
         loadVault,
         flushVault,
         saveVault,
