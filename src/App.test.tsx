@@ -41,10 +41,6 @@ vi.mock("@/contexts/BrowserContext", () => ({
   BrowserProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-vi.mock("@/components/settings/PinSetup", () => ({
-  PinSetup: ({ open }: { open: boolean }) => (open ? <div>Set PIN</div> : null),
-}));
-
 vi.mock("@/components/layout/AppShell", () => ({
   AppShell: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
@@ -54,7 +50,7 @@ vi.mock("@/components/layout/OperationLog", () => ({
 }));
 
 vi.mock("@/sections/ShredSection", () => ({
-  ShredSection: () => null,
+  ShredSection: () => <div>Target UI</div>,
 }));
 
 vi.mock("@/sections/SettingsSection", () => ({
@@ -65,10 +61,11 @@ vi.mock("@/hooks/useBrowserDetection", () => ({
   useBrowserDetection: vi.fn(),
 }));
 
-describe("AppGate PIN recovery", () => {
+describe("AppGate vault unlock", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     listenMock.mockReset();
+    listenMock.mockResolvedValue(vi.fn());
     shredContext.loadVault.mockClear();
     shredContext.addLogEntry.mockClear();
     shredContext.clearFiles.mockReset();
@@ -79,6 +76,131 @@ describe("AppGate PIN recovery", () => {
       if (command === "get_lockout_remaining") return Promise.resolve(0);
       return Promise.resolve(undefined);
     });
+  });
+
+  const unlock = async (user: ReturnType<typeof userEvent.setup>, pin = "123456") => {
+    await user.type(screen.getByLabelText("PIN"), pin);
+    await user.click(screen.getByRole("button", { name: "Unlock" }));
+  };
+
+  it("requires unlock before showing targets when a PIN-enabled vault exists", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "has_pin") return Promise.resolve(true);
+      if (command === "is_pin_enabled") return Promise.resolve(true);
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "get_lockout_remaining") return Promise.resolve(0);
+      if (command === "verify_pin") return Promise.resolve(true);
+      return Promise.resolve(undefined);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Enter PIN" })).toBeInTheDocument();
+    expect(screen.queryByText("Target UI")).not.toBeInTheDocument();
+
+    await unlock(user);
+
+    await waitFor(() => expect(screen.getByText("Target UI")).toBeInTheDocument());
+    expect(shredContext.loadVault).toHaveBeenCalledWith("123456");
+  });
+
+  it("requires unlock when a PIN exists but PIN protection is disabled and the vault exists", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "has_pin") return Promise.resolve(true);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "get_lockout_remaining") return Promise.resolve(0);
+      if (command === "verify_pin") return Promise.resolve(true);
+      return Promise.resolve(undefined);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Enter PIN" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Skip" })).not.toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalledWith("is_pin_enabled");
+    expect(invokeMock).not.toHaveBeenCalledWith("vault_exists");
+
+    await unlock(user);
+
+    await waitFor(() => expect(screen.getByText("Target UI")).toBeInTheDocument());
+  });
+
+  it("requires unlock when a PIN exists but PIN protection is disabled and no vault exists", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "has_pin") return Promise.resolve(true);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "vault_exists") return Promise.resolve(false);
+      if (command === "get_lockout_remaining") return Promise.resolve(0);
+      if (command === "verify_pin") return Promise.resolve(true);
+      return Promise.resolve(undefined);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Enter PIN" })).toBeInTheDocument();
+    expect(screen.queryByText("Target UI")).not.toBeInTheDocument();
+
+    await unlock(user);
+
+    await waitFor(() => expect(screen.getByText("Target UI")).toBeInTheDocument());
+  });
+
+  it("keeps targets closed after an incorrect PIN or vault decryption failure", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "has_pin") return Promise.resolve(true);
+      if (command === "get_lockout_remaining") return Promise.resolve(0);
+      if (command === "verify_pin") return Promise.resolve(false);
+      return Promise.resolve(undefined);
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Enter PIN" });
+    await unlock(user, "000000");
+
+    expect(await screen.findByText("Incorrect PIN")).toBeInTheDocument();
+    expect(shredContext.loadVault).not.toHaveBeenCalled();
+    expect(screen.queryByText("Target UI")).not.toBeInTheDocument();
+
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "has_pin") return Promise.resolve(true);
+      if (command === "get_lockout_remaining") return Promise.resolve(0);
+      if (command === "verify_pin") return Promise.resolve(true);
+      return Promise.resolve(undefined);
+    });
+    shredContext.loadVault.mockRejectedValueOnce(new Error("vault decrypt failed"));
+
+    await unlock(user);
+
+    await waitFor(() =>
+      expect(shredContext.addLogEntry).toHaveBeenCalledWith("error", "Failed to unlock vault"),
+    );
+    expect(screen.getByRole("heading", { name: "Enter PIN" })).toBeInTheDocument();
+    expect(screen.queryByText("Target UI")).not.toBeInTheDocument();
+  });
+
+  it("initializes the writable vault session after onboarding sets a PIN", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "has_pin") return Promise.resolve(false);
+      return Promise.resolve(undefined);
+    });
+
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("PIN"), "123456");
+    await user.type(screen.getByLabelText("Confirm PIN"), "123456");
+    await user.click(screen.getByRole("button", { name: "Save PIN" }));
+
+    await waitFor(() => expect(screen.getByText("Target UI")).toBeInTheDocument());
+    expect(invokeMock).toHaveBeenCalledWith("setup_pin", { newPin: "123456" });
+    expect(shredContext.loadVault).toHaveBeenCalledWith("123456");
+    expect(invokeMock).not.toHaveBeenCalledWith("set_pin_enabled", expect.anything());
   });
 
   it("clears the shred state in order and transitions to Set PIN after reset", async () => {
