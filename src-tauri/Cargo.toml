@@ -62,3 +62,12 @@ lnks = "0.2"
 [dev-dependencies]
 tempfile = "3"
 
+# Keep target/ small. Full dev debuginfo makes PDBs and staticlib archives
+# huge (tens of GB after a few builds). line-tables-only preserves
+# breakpoints/backtraces in first-party code; dependencies need no symbols.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
