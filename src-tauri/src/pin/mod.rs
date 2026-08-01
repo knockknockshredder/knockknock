@@ -214,6 +214,44 @@ pub fn change_pin(old_pin: String, new_pin: String) -> Result<(), String> {
     Ok(())
 }
 
+fn clear_app_state() -> Result<(), String> {
+    crate::vault::storage::clear().map_err(|e| {
+        format!(
+            "Vault cleanup failed: reset failed before PIN metadata was cleared: {}",
+            e
+        )
+    })?;
+    config::remove_pin_hash().map_err(|e| {
+        format!(
+            "PIN hash cleanup failed: saved shred list was cleared but PIN reset is incomplete: {}",
+            e
+        )
+    })?;
+    config::save_pin_enabled(false).map_err(|e| {
+        format!(
+            "PIN enabled flag cleanup failed: saved shred list and PIN were cleared but the enabled state reset is incomplete: {}",
+            e
+        )
+    })?;
+    config::clear_lockout_state().map_err(|e| {
+        format!(
+            "Lockout cleanup failed: saved shred list and PIN were cleared but lockout reset is incomplete: {}",
+            e
+        )
+    })?;
+
+    let mut guard = PIN_STATE
+        .lock()
+        .map_err(|e| {
+            format!(
+                "Runtime lockout state cleanup failed: persisted app state was reset but runtime lockout state could not be cleared: {}",
+                e
+            )
+        })?;
+    *guard = PinState::new();
+    Ok(())
+}
+
 /// Wipe ALL app state (PIN, lockout counter, config, encrypted vault).
 /// Requires the current PIN to be valid as a safety check before destruction.
 /// The vault is also cleared so no encrypted blob keyed by the now-deleted
@@ -223,16 +261,14 @@ pub fn reset_app(current_pin: &str) -> Result<(), String> {
         return Err("Current PIN is incorrect".to_string());
     }
 
-    crate::vault::storage::clear()?;
-    config::remove_pin_hash()?;
-    config::clear_lockout_state()?;
+    clear_app_state()
+}
 
-    let mut guard = PIN_STATE
-        .lock()
-        .map_err(|e| format!("Lock poisoned: {}", e))?;
-    *guard = PinState::new();
-
-    Ok(())
+/// Reset protected app metadata for a user who cannot provide the PIN.
+/// This intentionally destroys the encrypted shred-list vault rather than
+/// unlocking it. User files are never touched.
+pub fn reset_app_without_pin() -> Result<(), String> {
+    clear_app_state()
 }
 
 /// Returns `true` only when BOTH a PIN hash exists AND the user has
@@ -450,6 +486,34 @@ mod tests {
         // Correct PIN -> succeeds, clears state
         assert!(reset_app("654321").is_ok());
         assert!(!is_pin_enabled());
+
+        reset_state();
+    }
+
+    #[test]
+    fn reset_app_without_pin_clears_pin_vault_and_lockout_state() {
+        reset_state();
+        setup_pin(None, "654321").unwrap();
+        set_pin_enabled("654321", true).unwrap();
+        crate::vault::storage::save(&["C:\\pending.txt".to_string()], "654321").unwrap();
+
+        {
+            let mut guard = PIN_STATE.lock().unwrap();
+            guard.failed_attempts = MAX_ATTEMPTS;
+            guard.lockout_until_unix = Some(now_unix() + 60);
+            persist_state(&guard).unwrap();
+        }
+
+        assert!(crate::vault::storage::exists());
+        assert!(reset_app_without_pin().is_ok());
+        assert!(!crate::vault::storage::exists());
+        assert!(!has_pin());
+        assert!(!is_pin_enabled());
+        assert!(!is_pin_locked().unwrap());
+        let persisted_lockout = config::load_lockout_state().unwrap();
+        assert_eq!(persisted_lockout.failed_attempts, 0);
+        assert!(persisted_lockout.lockout_until_unix.is_none());
+        assert!(!config::load_pin_enabled().unwrap());
 
         reset_state();
     }

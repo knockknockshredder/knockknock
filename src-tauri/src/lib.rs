@@ -99,6 +99,7 @@ pub fn run() {
             commands::pin::get_lockout_remaining,
             commands::pin::change_pin,
             commands::pin::reset_app,
+            commands::pin::reset_app_without_pin,
             commands::pin::disable_pin,
             commands::vault::save_vault,
             commands::vault::load_vault,

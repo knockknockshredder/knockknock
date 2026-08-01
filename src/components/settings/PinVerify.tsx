@@ -20,6 +20,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { MIN_PIN_LEN, MAX_PIN_LEN } from "@/lib/pin-constants";
 
 export type PinVerifyPurpose =
@@ -33,10 +43,12 @@ interface PinVerifyProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onVerified: (pin: string) => void | Promise<void>;
+  onReset?: () => void | Promise<void>;
   purpose: PinVerifyPurpose;
 }
 
 const LOCKOUT_ERROR_FALLBACK_SECONDS = 86_400;
+const RESET_CONFIRMATION = "RESET";
 
 const PURPOSE_COPY: Record<PinVerifyPurpose, { title: string; description: string }> = {
   app_open: {
@@ -61,12 +73,16 @@ const PURPOSE_COPY: Record<PinVerifyPurpose, { title: string; description: strin
   },
 };
 
-export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerifyProps) {
+export function PinVerify({ open, onOpenChange, onVerified, onReset, purpose }: PinVerifyProps) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [lockoutSeconds, setLockoutSeconds] = useState(0);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetPhrase, setResetPhrase] = useState("");
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetSubmitting, setResetSubmitting] = useState(false);
 
   // Reset on close.
   useEffect(() => {
@@ -76,6 +92,10 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
       setSubmitting(false);
       setUnlocking(false);
       setLockoutSeconds(0);
+      setResetDialogOpen(false);
+      setResetPhrase("");
+      setResetError(null);
+      setResetSubmitting(false);
     }
   }, [open]);
 
@@ -106,6 +126,30 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
   const digitsOnly = (value: string) => value.replace(/\D/g, "");
 
   const isLocked = lockoutSeconds > 0;
+
+  const handleResetDialogOpenChange = (nextOpen: boolean) => {
+    setResetDialogOpen(nextOpen);
+    if (!nextOpen) {
+      setResetPhrase("");
+      setResetError(null);
+      setResetSubmitting(false);
+    }
+  };
+
+  const handleReset = async () => {
+    if (!onReset || resetPhrase !== RESET_CONFIRMATION) return;
+
+    setResetError(null);
+    setResetSubmitting(true);
+    try {
+      await onReset();
+      handleResetDialogOpenChange(false);
+    } catch (err) {
+      setResetError(String(err));
+    } finally {
+      setResetSubmitting(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -219,14 +263,73 @@ export function PinVerify({ open, onOpenChange, onVerified, purpose }: PinVerify
           </DialogFooter>
         </form>
 
-        <div className="border-t border-border pt-3">
-          <p className="font-mono text-xs text-muted-foreground">
-            Forgot your PIN? KnockKnock cannot recover it. The app must be
-            reset, which clears all saved vaults and configurations. Use
-            the "Reset app" option in Settings to start over.
-          </p>
-        </div>
+        {isGate && onReset ? (
+          <div className="border-t border-border pt-3">
+            <button
+              type="button"
+              onClick={() => handleResetDialogOpenChange(true)}
+              disabled={submitting || unlocking}
+              className="font-mono text-xs text-muted-foreground underline underline-offset-3 transition-colors hover:text-foreground"
+            >
+              Forgot PIN?
+            </button>
+          </div>
+        ) : !isGate ? (
+          <div className="border-t border-border pt-3">
+            <p className="font-mono text-xs text-muted-foreground">
+              KnockKnock cannot recover a forgotten PIN.
+            </p>
+          </div>
+        ) : null}
       </DialogContent>
+
+      <AlertDialog
+        open={resetDialogOpen}
+        onOpenChange={handleResetDialogOpenChange}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reset app protection?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes your PIN and permanently deletes KnockKnock&apos;s saved shred
+              list. It will not delete files from your computer or reset other app settings.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <label className="flex flex-col gap-1">
+            <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+              Type RESET to confirm
+            </span>
+            <input
+              aria-label="Reset confirmation"
+              autoComplete="off"
+              value={resetPhrase}
+              onChange={(e) => setResetPhrase(e.target.value)}
+              disabled={resetSubmitting}
+              className="font-mono px-3 py-2 bg-surface border border-border focus:border-accent focus:outline-none disabled:opacity-50"
+            />
+          </label>
+
+          {resetError && (
+            <p className="font-mono text-xs text-red-500 flex items-start gap-1.5">
+              <WarningCircle size={14} className="flex-shrink-0 mt-0.5" />
+              <span>{resetError}</span>
+            </p>
+          )}
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resetSubmitting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              type="button"
+              onClick={() => void handleReset()}
+              disabled={resetSubmitting || resetPhrase !== RESET_CONFIRMATION}
+              className="bg-red-600 text-white hover:bg-red-700"
+            >
+              {resetSubmitting ? "Resetting..." : "Reset app protection"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

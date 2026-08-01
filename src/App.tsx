@@ -35,7 +35,7 @@ function AppGate() {
   const [restorePin, setRestorePin] = useState("");
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [restoreSubmitting, setRestoreSubmitting] = useState(false);
-  const { loadVault, addLogEntry } = useShred();
+  const { loadVault, addLogEntry, clearFiles, setVaultPin } = useShred();
 
   useEffect(() => {
     // First: check whether a PIN hash exists at all
@@ -85,6 +85,17 @@ function AppGate() {
     } catch {
       addLogEntry("error", "Failed to unlock vault");
     }
+  };
+
+  const handleGateReset = async () => {
+    await invoke<void>("reset_app_without_pin");
+    clearFiles();
+    setVaultPin(null);
+    setShowVaultRestore(false);
+    setGatePassed(false);
+    setPinEnabled(false);
+    setHasPin(false);
+    setShowOnboarding(true);
   };
 
   const handleOnboardingPinSet = async (newPin: string) => {
@@ -200,6 +211,7 @@ function AppGate() {
           open
           onOpenChange={() => {}}
           onVerified={handleGateVerified}
+          onReset={handleGateReset}
           purpose="app_open"
         />
       </div>
