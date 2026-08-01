@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   BatchRootResult,
   ChildErrorDto,
@@ -15,38 +15,26 @@ import type {
 } from "./index";
 
 describe("root execution contract", () => {
-  it("exposes every snake-case enum value", () => {
-    const targetKinds: TargetKind[] = ["file", "directory", "link", "unknown_legacy"];
-    const availability: TargetAvailability[] = ["ready", "missing", "blocked"];
-    const statuses: RootStatus[] = ["destroyed", "failed", "cancelled", "skipped"];
-    const stages: ExecutionStage[] = [
-      "preflight",
-      "overwrite",
-      "verify",
-      "rename",
-      "truncate",
-      "delete",
-      "directory_remove",
-      "journal",
-      "sync",
-    ];
-    const schemaSources: VaultSchemaSource[] = ["v1", "v2"];
-
-    expect(targetKinds).toEqual(["file", "directory", "link", "unknown_legacy"]);
-    expect(availability).toEqual(["ready", "missing", "blocked"]);
-    expect(statuses).toEqual(["destroyed", "failed", "cancelled", "skipped"]);
-    expect(stages).toEqual([
-      "preflight",
-      "overwrite",
-      "verify",
-      "rename",
-      "truncate",
-      "delete",
-      "directory_remove",
-      "journal",
-      "sync",
-    ]);
-    expect(schemaSources).toEqual(["v1", "v2"]);
+  it("defines exact snake-case enum unions", () => {
+    expectTypeOf<TargetKind>().toEqualTypeOf<
+      "file" | "directory" | "link" | "unknown_legacy"
+    >();
+    expectTypeOf<TargetAvailability>().toEqualTypeOf<"ready" | "missing" | "blocked">();
+    expectTypeOf<RootStatus>().toEqualTypeOf<
+      "destroyed" | "failed" | "cancelled" | "skipped"
+    >();
+    expectTypeOf<ExecutionStage>().toEqualTypeOf<
+      | "preflight"
+      | "overwrite"
+      | "verify"
+      | "rename"
+      | "truncate"
+      | "delete"
+      | "directory_remove"
+      | "journal"
+      | "sync"
+    >();
+    expectTypeOf<VaultSchemaSource>().toEqualTypeOf<"v1" | "v2">();
   });
 
   it("round-trips every DTO fixture without changing its shape", () => {
@@ -90,33 +78,11 @@ describe("root execution contract", () => {
     }
   });
 
-  it("keeps unknown enum values outside the typed fixtures", () => {
-    const unknownValues = ["unknown", "v3", "not_a_stage"];
-    const knownValues = new Set([
-      "file",
-      "directory",
-      "link",
-      "unknown_legacy",
-      "ready",
-      "missing",
-      "blocked",
-      "destroyed",
-      "failed",
-      "cancelled",
-      "skipped",
-      "preflight",
-      "overwrite",
-      "verify",
-      "rename",
-      "truncate",
-      "delete",
-      "directory_remove",
-      "journal",
-      "sync",
-      "v1",
-      "v2",
-    ]);
-
-    expect(unknownValues.every((value) => !knownValues.has(value))).toBe(true);
+  it("rejects invalid enum literals", () => {
+    expectTypeOf<"unknown">().not.toMatchTypeOf<TargetKind>();
+    expectTypeOf<"unavailable">().not.toMatchTypeOf<TargetAvailability>();
+    expectTypeOf<"pending">().not.toMatchTypeOf<RootStatus>();
+    expectTypeOf<"cleanup">().not.toMatchTypeOf<ExecutionStage>();
+    expectTypeOf<"v3">().not.toMatchTypeOf<VaultSchemaSource>();
   });
 });
