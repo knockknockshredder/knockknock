@@ -397,7 +397,11 @@ export function ShredProvider({ children }: { children: ReactNode }) {
       path: entry.path,
       name: entry.name,
       size: entry.size,
-      status: "pending" as const,
+      status: entry.availability === "ready" ? ("pending" as const) : ("error" as const),
+      error:
+        entry.availability === "ready"
+          ? undefined
+          : entry.reason ?? `Target is ${entry.availability}`,
       is_shortcut: entry.kind === "link",
       shortcut_target: null,
     }));

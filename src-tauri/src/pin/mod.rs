@@ -329,6 +329,7 @@ pub fn disable_pin(current_pin: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shredder::root_execution::types::{TargetKind, VaultTarget};
 
     // NOTE: tests touch the on-disk config dir. `bcrypt` hashing is
     // intentionally slow (~100ms with DEFAULT_COST) so these tests
@@ -495,7 +496,14 @@ mod tests {
         reset_state();
         setup_pin(None, "654321").unwrap();
         set_pin_enabled("654321", true).unwrap();
-        crate::vault::storage::save(&["C:\\pending.txt".to_string()], "654321").unwrap();
+        let targets = [VaultTarget {
+            path: "C:\\pending.txt".to_string(),
+            kind: TargetKind::File,
+        }];
+        crate::vault::storage::VaultStore::production()
+            .unwrap()
+            .save_v2(&targets, "654321")
+            .unwrap();
 
         {
             let mut guard = PIN_STATE.lock().unwrap();

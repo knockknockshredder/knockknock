@@ -258,10 +258,12 @@ describe("authoritative vault writer", () => {
       await latest.loadVault("pin");
     });
 
-    expect(latest.files.map((file) => file.path)).toEqual([
-      "C:\\ready.txt",
-      "C:\\missing.txt",
-      "C:\\blocked.txt",
+    expect(
+      latest.files.map(({ path, status, error }) => ({ path, status, error }))
+    ).toEqual([
+      { path: "C:\\ready.txt", status: "pending", error: undefined },
+      { path: "C:\\missing.txt", status: "error", error: "missing target" },
+      { path: "C:\\blocked.txt", status: "error", error: "blocked target" },
     ]);
   });
 

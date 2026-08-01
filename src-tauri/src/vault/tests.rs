@@ -382,6 +382,21 @@ fn save_v2_publishes_and_round_trips_all_target_kinds() {
 }
 
 #[test]
+fn rekey_preserves_v2_target_kinds() {
+    let (_tempdir, store) = store();
+    let targets = all_target_kinds();
+
+    store
+        .save_v2(&targets, "old-pin")
+        .expect("publish V2 vault before rekey");
+    store.rekey("old-pin", "new-pin").expect("rekey V2 vault");
+
+    let loaded = store.load("new-pin").expect("load rekeyed V2 vault");
+    assert_eq!(loaded.targets, targets);
+    assert!(store.load("old-pin").is_err());
+}
+
+#[test]
 fn save_v2_replaces_existing_ciphertext_atomically() {
     let (tempdir, store) = store();
     let first = vec![v2_target("first", TargetKind::File)];

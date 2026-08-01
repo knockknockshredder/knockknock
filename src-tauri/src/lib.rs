@@ -84,6 +84,7 @@ pub fn run() {
             commands::shred::open_files_windows,
             commands::shred::get_drive_info,
             commands::shred::get_all_drive_info,
+            commands::shred::validate_targets,
             commands::shred::request_elevation,
             commands::browser::detect_browsers,
             commands::browser::shred_browser_data,

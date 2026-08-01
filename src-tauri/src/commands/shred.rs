@@ -479,6 +479,7 @@ fn validate_target(target: &VaultTarget) -> TargetMetadataDto {
     }
 }
 
+#[tauri::command]
 pub fn validate_targets(targets: Vec<VaultTarget>) -> Result<Vec<TargetMetadataDto>, String> {
     Ok(targets.iter().map(validate_target).collect())
 }
@@ -590,4 +591,45 @@ pub fn get_all_drive_info(paths: Vec<String>) -> Result<Vec<DriveInfo>, String> 
     }
 
     Ok(drives)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_targets;
+    use crate::shredder::root_execution::types::{TargetAvailability, TargetKind, VaultTarget};
+
+    #[test]
+    fn validate_targets_command_returns_one_record_per_target() {
+        let targets = vec![
+            VaultTarget {
+                path: "relative-file".to_string(),
+                kind: TargetKind::File,
+            },
+            VaultTarget {
+                path: "relative-directory".to_string(),
+                kind: TargetKind::Directory,
+            },
+            VaultTarget {
+                path: "relative-link".to_string(),
+                kind: TargetKind::Link,
+            },
+        ];
+
+        let metadata = validate_targets(targets.clone()).expect("validate target command");
+
+        assert_eq!(metadata.len(), targets.len());
+        assert_eq!(
+            metadata
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            targets
+                .iter()
+                .map(|target| target.path.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert!(metadata
+            .iter()
+            .all(|entry| entry.availability == TargetAvailability::Blocked));
+    }
 }

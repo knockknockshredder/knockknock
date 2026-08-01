@@ -97,6 +97,19 @@ impl VaultStore {
         self.save_v2_with_io(targets, pin, &io)
     }
 
+    pub fn rekey(&self, old_pin: &str, new_pin: &str) -> Result<(), VaultError> {
+        if !self.vault_path.exists() {
+            return Ok(());
+        }
+
+        let loaded = match self.load(old_pin) {
+            Ok(payload) => payload,
+            Err(_) => return Ok(()),
+        };
+
+        self.save_v2(&loaded.targets, new_pin)
+    }
+
     pub(crate) fn save_v2_with_io(
         &self,
         targets: &[VaultTarget],
@@ -508,66 +521,6 @@ fn vault_path() -> Result<PathBuf, String> {
     Ok(app_dir.join("vault.json"))
 }
 
-/// Encrypt `paths` under `pin` and write to disk, replacing any existing vault.
-///
-/// Writes are atomic: serialize -> write to `<path>.tmp` -> `rename` onto the
-/// final path. A crash mid-write leaves the previous vault intact rather than
-/// a half-written file that cannot be decrypted.
-pub fn save(paths: &[String], pin: &str) -> Result<(), String> {
-    let plaintext =
-        serde_json::to_vec(paths).map_err(|e| format!("Failed to serialize paths: {}", e))?;
-
-    let encrypted = crypto::encrypt(&plaintext, pin)?;
-
-    let vault_file = VaultFile {
-        version: encrypted.version,
-        salt: encrypted.salt,
-        nonce: encrypted.nonce,
-        ciphertext: encrypted.ciphertext,
-    };
-
-    let json = serde_json::to_string_pretty(&vault_file)
-        .map_err(|e| format!("Failed to serialize vault: {}", e))?;
-
-    let path = vault_path()?;
-    let tmp_path = {
-        let mut p = path.clone();
-        let mut name = p
-            .file_name()
-            .map(|n| n.to_os_string())
-            .unwrap_or_else(|| std::ffi::OsString::from("vault.json"));
-        name.push(".tmp");
-        p.set_file_name(name);
-        p
-    };
-
-    std::fs::write(&tmp_path, json).map_err(|e| format!("Failed to write vault tmp: {}", e))?;
-    set_owner_only(&tmp_path)?;
-    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Failed to rename vault: {}", e))?;
-    set_owner_only(&path)?;
-
-    Ok(())
-}
-
-/// Decrypt the on-disk vault with `pin` and return the stored paths.
-///
-/// Returns an empty `Vec` if no vault file exists yet (fresh install).
-/// Returns an `Err` if the file exists but cannot be parsed, decrypted,
-/// or has an unsupported version.
-pub fn load(pin: &str) -> Result<Vec<String>, String> {
-    let store = VaultStore::production().map_err(String::from)?;
-    store
-        .load(pin)
-        .map(|loaded| {
-            loaded
-                .targets
-                .into_iter()
-                .map(|target| target.path)
-                .collect()
-        })
-        .map_err(String::from)
-}
-
 /// Delete the on-disk vault if present. No-op if it doesn't exist.
 pub fn clear() -> Result<(), String> {
     let path = vault_path()?;
@@ -590,20 +543,6 @@ pub fn exists() -> bool {
 /// still succeeds (the user can start a fresh session). Only an I/O error
 /// during the re-save is surfaced as an `Err`.
 pub fn rekey(old_pin: &str, new_pin: &str) -> Result<(), String> {
-    let path = vault_path()?;
-    if !path.exists() {
-        return Ok(());
-    }
-
-    // Load with old PIN — if this fails the vault was already
-    // corrupted or encrypted with yet another PIN; don't block the
-    // change, just leave the old vault orphaned.
-    let paths = match load(old_pin) {
-        Ok(p) => p,
-        Err(_) => return Ok(()),
-    };
-
-    // Re-save with new PIN. This is the critical step — if it fails
-    // we surface the error so the caller knows the vault was lost.
-    save(&paths, new_pin)
+    let store = VaultStore::production().map_err(String::from)?;
+    store.rekey(old_pin, new_pin).map_err(String::from)
 }
