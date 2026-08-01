@@ -1,6 +1,7 @@
 use super::{OpenFileShredder, SecureTreeIo};
 use crate::shredder::cancel::CancellationToken;
-use crate::shredder::errors::ShredError;
+use crate::shredder::errors::{JournalError, ShredError};
+use crate::shredder::journal::{JournalEntry, JournalStore};
 use crate::shredder::traits::ProgressReporter;
 use crate::shredder::types::{
     BatchRootResult, ChildErrorDto, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage,
@@ -201,6 +202,7 @@ pub(crate) fn execute_roots(
     request: ExecuteRootsRequest,
     io: &dyn SecureTreeIo,
     file_shredder: &dyn OpenFileShredder,
+    journal: &JournalStore,
     progress: &dyn ProgressReporter,
     cancel: &CancellationToken,
 ) -> BatchRootResult {
@@ -249,7 +251,7 @@ pub(crate) fn execute_roots(
 
         let request = plan.request.clone();
         let mut result = RootExecution::new(plan.request, plan.handle, plan.node);
-        if let Err(mut error) = result.execute(io, file_shredder, progress, cancel) {
+        if let Err(mut error) = result.execute(io, file_shredder, journal, progress, cancel) {
             if result.bytes_shredded > 0 {
                 error.message = format!(
                     "{}; previous overwrites are irreversible partial destruction",
@@ -547,6 +549,7 @@ impl RootExecution {
         &mut self,
         io: &dyn SecureTreeIo,
         file_shredder: &dyn OpenFileShredder,
+        journal: &JournalStore,
         progress: &dyn ProgressReporter,
         cancel: &CancellationToken,
     ) -> Result<(), ChildErrorDto> {
@@ -561,7 +564,7 @@ impl RootExecution {
                 children: Vec::new(),
             },
         );
-        self.execute_node(&root, io, file_shredder, progress, cancel)?;
+        self.execute_node(&root, io, file_shredder, journal, progress, cancel)?;
         self.root_removed = true;
         Ok(())
     }
@@ -571,6 +574,7 @@ impl RootExecution {
         node: &PlannedNode,
         io: &dyn SecureTreeIo,
         file_shredder: &dyn OpenFileShredder,
+        journal: &JournalStore,
         progress: &dyn ProgressReporter,
         cancel: &CancellationToken,
     ) -> Result<(), ChildErrorDto> {
@@ -583,12 +587,12 @@ impl RootExecution {
         }
 
         match node.kind {
-            NodeKind::RegularFile => self.execute_file(node, io, file_shredder, progress),
+            NodeKind::RegularFile => self.execute_file(node, io, file_shredder, journal, progress),
             NodeKind::Link => self.execute_link(node, io),
             NodeKind::Directory => {
                 for child in &node.children {
                     if let Err(error) =
-                        self.execute_node(child, io, file_shredder, progress, cancel)
+                        self.execute_node(child, io, file_shredder, journal, progress, cancel)
                     {
                         return Err(error);
                     }
@@ -622,6 +626,7 @@ impl RootExecution {
         node: &PlannedNode,
         io: &dyn SecureTreeIo,
         file_shredder: &dyn OpenFileShredder,
+        journal: &JournalStore,
         _progress: &dyn ProgressReporter,
     ) -> Result<(), ChildErrorDto> {
         let file = io.open_regular_for_shred(&node.handle).map_err(|error| {
@@ -646,17 +651,101 @@ impl RootExecution {
         }
 
         let new_name = OsString::from(format!(".knockknock-{:032x}", node.identity.id()));
-        io.rename_noreplace(&node.parent, &node.handle, &new_name)
+        let parent_path = node.diagnostic_path.parent().ok_or_else(|| {
+            child_error(
+                &node.diagnostic_path,
+                ExecutionStage::Journal,
+                ShredError::ValidationFailed(
+                    "execution target has no containing directory".to_string(),
+                ),
+            )
+        })?;
+        let parent = if node.parent.id() == node.handle.id() {
+            io.open_root_nofollow(parent_path).map_err(|error| {
+                child_error(&node.diagnostic_path, ExecutionStage::Journal, error)
+            })?
+        } else {
+            node.parent
+        };
+        let parent_identity = io
+            .identity(&parent.as_node())
+            .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Journal, error))?;
+        let entry = JournalEntry::for_root_rename(
+            parent_path,
+            parent_identity,
+            &new_name,
+            node.identity,
+            node.kind,
+        )
+        .map_err(|error| journal_child_error(&node.diagnostic_path, error))?;
+        journal
+            .append(entry.clone())
+            .map_err(|error| journal_child_error(&node.diagnostic_path, error))?;
+
+        io.rename_noreplace(&parent, &node.handle, &new_name)
             .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Rename, error))?;
-        io.sync_parent(&node.parent)
-            .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Sync, error))?;
-        io.unlink_leaf(&node.parent, &node.handle)
-            .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Delete, error))?;
-        io.sync_parent(&node.parent)
+
+        if let Err(error) = io.sync_parent(&parent) {
+            return Err(self.rollback_after_failure(
+                node,
+                &parent,
+                io,
+                error,
+                ExecutionStage::Sync,
+                "rename durability sync failed",
+            ));
+        }
+
+        if let Err(error) = io.unlink_leaf(&parent, &node.handle) {
+            return Err(self.rollback_after_failure(
+                node,
+                &parent,
+                io,
+                error,
+                ExecutionStage::Delete,
+                "deletion failed",
+            ));
+        }
+        self.files_destroyed += 1;
+
+        io.sync_parent(&parent)
             .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Sync, error))?;
 
-        self.files_destroyed += 1;
+        journal
+            .clear(&entry)
+            .map_err(|error| journal_child_error(&node.diagnostic_path, error))?;
         Ok(())
+    }
+
+    fn rollback_after_failure(
+        &self,
+        node: &PlannedNode,
+        parent: &DirHandle,
+        io: &dyn SecureTreeIo,
+        error: ShredError,
+        stage: ExecutionStage,
+        description: &str,
+    ) -> ChildErrorDto {
+        let original_name = node
+            .diagnostic_path
+            .file_name()
+            .map(OsStr::to_os_string)
+            .ok_or_else(|| {
+                ShredError::ValidationFailed(
+                    "execution target has no original basename".to_string(),
+                )
+            });
+        let rollback = original_name.and_then(|name| {
+            io.rename_noreplace(parent, &node.handle, &name)
+                .and_then(|_| io.sync_parent(parent))
+        });
+        let error = match rollback {
+            Ok(()) => error,
+            Err(rollback_error) => ShredError::ValidationFailed(format!(
+                "{description}: {error}; rollback to original name failed: {rollback_error}"
+            )),
+        };
+        child_error(&node.diagnostic_path, stage, error)
     }
 
     fn execute_link(
@@ -736,6 +825,16 @@ fn child_error(path: &Path, stage: ExecutionStage, error: ShredError) -> ChildEr
         error_type: error_type(&error).to_string(),
         message: error.to_string(),
         actionable: actionable(stage).to_string(),
+    }
+}
+
+fn journal_child_error(path: &Path, error: JournalError) -> ChildErrorDto {
+    ChildErrorDto {
+        path: path.to_string_lossy().into_owned(),
+        stage: ExecutionStage::Journal,
+        error_type: "journal_error".to_string(),
+        message: error.to_string(),
+        actionable: "Journal durability or recovery failed; preserve the containing directory and investigate before retrying".to_string(),
     }
 }
 

@@ -5,11 +5,15 @@ use super::plan::{
 use super::{execute_roots, OpenFileShredder, SecureTreeIo};
 use crate::shredder::algorithms::nist_clear::NistClear;
 use crate::shredder::cancel::CancellationToken;
+use crate::shredder::errors::JournalError;
 use crate::shredder::errors::ShredError;
+use crate::shredder::journal::{
+    JournalEntry, JournalIo, JournalNodeIdentity, JournalNodeKind, JournalStore,
+};
 use crate::shredder::progress::NoopProgressReporter;
 use crate::shredder::types::{
-    BatchRootResult, ExecuteRootRequest, ExecuteRootsRequest, RootStatus, TargetKind,
-    VerificationLevel,
+    BatchRootResult, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage, RootStatus,
+    TargetKind, VerificationLevel,
 };
 use crate::shredder::LegacyOpenFileShredder;
 use std::collections::{HashMap, HashSet};
@@ -29,12 +33,17 @@ struct FakeNode {
 struct FakeEvents {
     calls: Vec<String>,
     root_opens: usize,
+    rename_calls: usize,
 }
 
 struct FakeIo {
     roots: HashMap<PathBuf, u64>,
     nodes: HashMap<u64, FakeNode>,
     fail_enumerate: HashSet<u64>,
+    fail_rename: bool,
+    fail_rollback: bool,
+    fail_unlink: bool,
+    fail_sync: bool,
     events: Arc<Mutex<FakeEvents>>,
 }
 
@@ -44,6 +53,10 @@ impl FakeIo {
             roots: HashMap::new(),
             nodes: HashMap::new(),
             fail_enumerate: HashSet::new(),
+            fail_rename: false,
+            fail_rollback: false,
+            fail_unlink: false,
+            fail_sync: false,
             events: Arc::new(Mutex::new(FakeEvents::default())),
         }
     }
@@ -61,6 +74,26 @@ impl FakeIo {
 
     fn fail_directory(mut self, handle: u64) -> Self {
         self.fail_enumerate.insert(handle);
+        self
+    }
+
+    fn fail_rename(mut self) -> Self {
+        self.fail_rename = true;
+        self
+    }
+
+    fn fail_unlink(mut self) -> Self {
+        self.fail_unlink = true;
+        self
+    }
+
+    fn fail_rollback(mut self) -> Self {
+        self.fail_rollback = true;
+        self
+    }
+
+    fn fail_sync(mut self) -> Self {
+        self.fail_sync = true;
         self
     }
 
@@ -147,12 +180,24 @@ impl SecureTreeIo for FakeIo {
         _node: &NodeHandle,
         _new_name: &OsStr,
     ) -> Result<RenamedNode, ShredError> {
-        self.record("rename");
+        let mut events = self.events.lock().unwrap();
+        events.calls.push("rename".to_string());
+        events.rename_calls += 1;
+        if self.fail_rename || (self.fail_rollback && events.rename_calls > 1) {
+            return Err(ShredError::ValidationFailed(
+                "injected rename failure".to_string(),
+            ));
+        }
         Ok(RenamedNode::new())
     }
 
     fn unlink_leaf(&self, _parent: &DirHandle, _node: &NodeHandle) -> Result<(), ShredError> {
         self.record("unlink");
+        if self.fail_unlink {
+            return Err(ShredError::ValidationFailed(
+                "injected deletion failure".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -163,6 +208,11 @@ impl SecureTreeIo for FakeIo {
 
     fn sync_parent(&self, _parent: &DirHandle) -> Result<(), ShredError> {
         self.record("sync");
+        if self.fail_sync {
+            return Err(ShredError::ValidationFailed(
+                "injected parent sync failure".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -223,7 +273,437 @@ fn directory(identity: u128, children: Vec<(u64, &str)>) -> FakeNode {
 
 fn run(request: ExecuteRootsRequest, io: &FakeIo, shredder: &FakeShredder) -> BatchRootResult {
     let progress = NoopProgressReporter;
-    execute_roots(request, io, shredder, &progress, &CancellationToken::new())
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+    run_with_journal_inner(
+        request,
+        io,
+        shredder,
+        &journal,
+        &progress,
+        &CancellationToken::new(),
+    )
+}
+
+#[test]
+fn journal_write_failure_prevents_root_rename() {
+    let root = home_child("task8-journal-write-failure");
+    let io = FakeIo::new()
+        .root(root.clone(), 1, directory(1, vec![(2, "file")]))
+        .add_node(2, regular(2));
+    let shredder = FakeShredder {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        fail: false,
+    };
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::with_io(
+        directory.path().join("journal.json"),
+        Arc::new(FailingJournalIo::write()),
+    );
+
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request("write-failure", &root, TargetKind::Directory)],
+        },
+        &io,
+        &shredder,
+        &journal,
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Failed);
+    assert!(!io
+        .events()
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|call| call == "rename"));
+    assert!(result.roots[0]
+        .errors
+        .iter()
+        .any(|error| error.stage == ExecutionStage::Journal));
+}
+
+#[test]
+fn journal_sync_failure_prevents_root_rename() {
+    let root = home_child("task8-journal-sync-failure");
+    let io = FakeIo::new()
+        .root(root.clone(), 1, directory(1, vec![(2, "file")]))
+        .add_node(2, regular(2));
+    let shredder = FakeShredder {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        fail: false,
+    };
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::with_io(
+        directory.path().join("journal.json"),
+        Arc::new(FailingJournalIo::sync()),
+    );
+
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request("sync-failure", &root, TargetKind::Directory)],
+        },
+        &io,
+        &shredder,
+        &journal,
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Failed);
+    assert!(!io
+        .events()
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|call| call == "rename"));
+}
+
+#[test]
+fn executes_file_root_using_its_containing_directory() {
+    let parent = home_child("task8-file-root-parent");
+    let root = parent.join("file");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2));
+    let shredder = FakeShredder {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        fail: false,
+    };
+
+    let result = run(
+        ExecuteRootsRequest {
+            roots: vec![root_request("file-root", &root, TargetKind::File)],
+        },
+        &io,
+        &shredder,
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+    assert!(result.roots[0].root_removed);
+    assert_eq!(result.roots[0].files_destroyed, 1);
+}
+
+#[test]
+fn rename_failure_retains_identity_bound_journal_record() {
+    let root = home_child("task8-rename-failure");
+    let io = FakeIo::new()
+        .root(root.clone(), 1, directory(1, vec![(2, "file")]))
+        .add_node(2, regular(2))
+        .fail_rename();
+    let shredder = FakeShredder {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        fail: false,
+    };
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request("rename-failure", &root, TargetKind::Directory)],
+        },
+        &io,
+        &shredder,
+        &journal,
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Failed);
+    assert!(!journal.read().expect("journal read").is_empty());
+}
+
+#[test]
+fn parent_sync_failure_rolls_back_without_deleting() {
+    let root = home_child("task8-sync-failure");
+    let io = FakeIo::new()
+        .root(root.clone(), 1, directory(1, vec![(2, "file")]))
+        .add_node(2, regular(2))
+        .fail_sync();
+    let shredder = FakeShredder {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        fail: false,
+    };
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request("sync-failure", &root, TargetKind::Directory)],
+        },
+        &io,
+        &shredder,
+        &journal,
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Failed);
+    assert!(!io
+        .events()
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|call| call == "unlink"));
+    assert!(!journal.read().expect("journal read").is_empty());
+}
+
+#[test]
+fn deletion_failure_rolls_back_and_retains_journal_record() {
+    let root = home_child("task8-delete-failure");
+    let io = FakeIo::new()
+        .root(root.clone(), 1, directory(1, vec![(2, "file")]))
+        .add_node(2, regular(2))
+        .fail_unlink();
+    let shredder = FakeShredder {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        fail: false,
+    };
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request("delete-failure", &root, TargetKind::Directory)],
+        },
+        &io,
+        &shredder,
+        &journal,
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Failed);
+    assert!(!result.roots[0].root_removed);
+    assert_eq!(io.events().lock().unwrap().rename_calls, 2);
+    assert!(!journal.read().expect("journal read").is_empty());
+}
+
+#[test]
+fn rollback_failure_is_reported_and_never_widens_scope() {
+    let root = home_child("task8-rollback-failure");
+    let io = FakeIo::new()
+        .root(root.clone(), 1, directory(1, vec![(2, "file")]))
+        .add_node(2, regular(2))
+        .fail_unlink()
+        .fail_rollback();
+    let shredder = FakeShredder {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        fail: false,
+    };
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request(
+                "rollback-failure",
+                &root,
+                TargetKind::Directory,
+            )],
+        },
+        &io,
+        &shredder,
+        &journal,
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Failed);
+    assert!(result.roots[0]
+        .errors
+        .iter()
+        .any(|error| error.message.contains("rollback to original name failed")));
+    assert!(!result.roots[0].root_removed);
+    assert!(!journal.read().expect("journal read").is_empty());
+}
+
+#[test]
+fn recovery_identity_mismatch_retains_record_and_target() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let target = directory.path().join(".knockknock-generated");
+    std::fs::write(&target, b"preserve").expect("target write");
+    let store = JournalStore::at(directory.path().join("journal.json"));
+    let entry = JournalEntry::identity_bound(
+        directory.path().to_path_buf(),
+        JournalNodeIdentity::new(0, 0),
+        ".knockknock-generated",
+        JournalNodeIdentity::new(0, 0),
+        JournalNodeKind::RegularFile,
+    );
+    store.append(entry).expect("journal append");
+
+    let error = store.recover().expect_err("identity mismatch must fail");
+
+    assert!(matches!(error, JournalError::IdentityMismatch { .. }));
+    assert!(target.exists());
+    assert!(!store.read().expect("journal read").is_empty());
+}
+
+#[test]
+fn journal_clear_failure_after_delete_is_reported_and_retained() {
+    let root = home_child("task8-journal-clear-failure");
+    let io = FakeIo::new()
+        .root(root.clone(), 1, directory(1, vec![(2, "file")]))
+        .add_node(2, regular(2));
+    let shredder = FakeShredder {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        fail: false,
+    };
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let state = Arc::new(Mutex::new(ClearFailState {
+        fail_sync_at: Some(4),
+        ..ClearFailState::default()
+    }));
+    let journal = JournalStore::with_io(
+        directory.path().join("journal.json"),
+        Arc::new(ClearFailJournalIo {
+            state: Arc::clone(&state),
+        }),
+    );
+
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request(
+                "journal-clear-failure",
+                &root,
+                TargetKind::Directory,
+            )],
+        },
+        &io,
+        &shredder,
+        &journal,
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Failed);
+    assert_eq!(result.roots[0].files_destroyed, 1);
+    assert!(result.roots[0]
+        .errors
+        .iter()
+        .any(|error| error.stage == ExecutionStage::Journal));
+    assert!(!journal.read().expect("journal read").is_empty());
+}
+
+struct FailingJournalIo {
+    fail_write: bool,
+    fail_sync: bool,
+}
+
+impl FailingJournalIo {
+    fn write() -> Self {
+        Self {
+            fail_write: true,
+            fail_sync: false,
+        }
+    }
+
+    fn sync() -> Self {
+        Self {
+            fail_write: false,
+            fail_sync: true,
+        }
+    }
+}
+
+impl JournalIo for FailingJournalIo {
+    fn read(&self, _path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    fn write_temp(&self, _path: &Path, _contents: &[u8]) -> std::io::Result<PathBuf> {
+        if self.fail_write {
+            Err(std::io::Error::other("injected journal write failure"))
+        } else {
+            Ok(PathBuf::from("journal.tmp"))
+        }
+    }
+
+    fn sync(&self, _path: &Path) -> std::io::Result<()> {
+        if self.fail_sync {
+            return Err(std::io::Error::other("injected journal sync failure"));
+        }
+        Ok(())
+    }
+
+    fn sync_parent(&self, _path: &Path) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn atomic_replace(&self, _temporary: &Path, _destination: &Path) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn delete(&self, _path: &Path) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct ClearFailState {
+    current: Option<Vec<u8>>,
+    temporary: Option<Vec<u8>>,
+    syncs: usize,
+    fail_sync_at: Option<usize>,
+}
+
+struct ClearFailJournalIo {
+    state: Arc<Mutex<ClearFailState>>,
+}
+
+impl JournalIo for ClearFailJournalIo {
+    fn read(&self, _path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+        Ok(self.state.lock().unwrap().current.clone())
+    }
+
+    fn write_temp(&self, _path: &Path, contents: &[u8]) -> std::io::Result<PathBuf> {
+        self.state.lock().unwrap().temporary = Some(contents.to_vec());
+        Ok(PathBuf::from("journal.tmp"))
+    }
+
+    fn sync(&self, _path: &Path) -> std::io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.syncs += 1;
+        if state.fail_sync_at == Some(state.syncs) {
+            return Err(std::io::Error::other("injected journal clear sync failure"));
+        }
+        Ok(())
+    }
+
+    fn sync_parent(&self, _path: &Path) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn atomic_replace(&self, _temporary: &Path, _destination: &Path) -> std::io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.current = state.temporary.take();
+        Ok(())
+    }
+
+    fn delete(&self, _path: &Path) -> std::io::Result<()> {
+        self.state.lock().unwrap().temporary = None;
+        Ok(())
+    }
+}
+
+fn run_with_journal(
+    request: ExecuteRootsRequest,
+    io: &FakeIo,
+    shredder: &FakeShredder,
+    journal: &JournalStore,
+) -> BatchRootResult {
+    let progress = NoopProgressReporter;
+    run_with_journal_inner(
+        request,
+        io,
+        shredder,
+        journal,
+        &progress,
+        &CancellationToken::new(),
+    )
+}
+
+fn run_with_journal_inner(
+    request: ExecuteRootsRequest,
+    io: &FakeIo,
+    shredder: &FakeShredder,
+    journal: &JournalStore,
+    progress: &NoopProgressReporter,
+    cancel: &CancellationToken,
+) -> BatchRootResult {
+    execute_roots(request, io, shredder, journal, progress, cancel)
 }
 
 #[test]
