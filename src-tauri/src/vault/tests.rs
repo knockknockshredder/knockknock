@@ -345,11 +345,7 @@ fn fault_injecting_vault_io_covers_atomic_write_operations() {
                 .cleanup_temp(&temporary_path)
                 .expect_err("cleanup fault should fail"),
         };
-        if operation == VaultIoFailure::SyncParent {
-            assert!(matches!(error, VaultError::Committed { .. }));
-        } else {
-            assert!(matches!(error, VaultError::Io { .. }));
-        }
+        assert!(matches!(error, VaultError::Io { .. }));
         let _ = fs::remove_file(&temporary_path);
     }
 }
