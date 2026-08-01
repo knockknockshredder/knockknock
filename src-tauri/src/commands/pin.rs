@@ -62,6 +62,13 @@ pub async fn reset_app(current_pin: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn reset_app_without_pin() -> Result<(), String> {
+    tokio::task::spawn_blocking(pin::reset_app_without_pin)
+        .await
+        .map_err(|e| format!("Task panicked: {:?}", e))?
+}
+
+#[tauri::command]
 pub async fn disable_pin(current_pin: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || pin::disable_pin(&current_pin))
         .await

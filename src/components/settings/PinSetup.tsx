@@ -172,9 +172,9 @@ export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }
           )}
 
           <p className="font-mono text-xs text-muted-foreground">
-            Store your PIN safely. If you forget it, the app state must be
-            wiped, which destroys all saved vaults and configurations.
-            KnockKnock cannot recover a lost PIN.
+            Store your PIN safely. If you forget it, you can reset app protection
+            from the unlock screen. This permanently deletes the saved shred list,
+            but does not delete files from your computer or reset other app settings.
           </p>
 
           <DialogFooter>
