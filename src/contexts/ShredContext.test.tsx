@@ -52,7 +52,7 @@ function metadata(
     kind,
     availability,
     reason: availability === "ready" ? null : `${availability} target`,
-    name: path.split("\\").at(-1) ?? path,
+    name: path.split("\\")[path.split("\\").length - 1] ?? path,
     size: 1,
   };
 }
@@ -84,7 +84,7 @@ function renderContext() {
 function readyFile(path: string) {
   return {
     path,
-    name: path.split("\\").at(-1) ?? path,
+    name: path.split("\\")[path.split("\\").length - 1] ?? path,
     size: 1,
     is_shortcut: false,
     shortcut_target: null,
