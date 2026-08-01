@@ -203,19 +203,20 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         });
       } catch (reason) {
         const error = toError(reason);
-        if (snapshot.pinEpoch === pinEpochRef.current) {
-          const queued = readQueuedSnapshot(queuedSnapshotRef);
-          const queuedRevision = queued?.revision;
-          if (queuedRevision === undefined || queuedRevision < snapshot.revision) {
-            queuedSnapshotRef.current = snapshot;
-          }
-          writerErrorRef.current = {
-            revision: snapshot.revision,
-            pinEpoch: snapshot.pinEpoch,
-            error,
-          };
-          setVaultState("error");
+        if (snapshot.pinEpoch !== pinEpochRef.current) {
+          continue;
         }
+        const queued = readQueuedSnapshot(queuedSnapshotRef);
+        const queuedRevision = queued?.revision;
+        if (queuedRevision === undefined || queuedRevision < snapshot.revision) {
+          queuedSnapshotRef.current = snapshot;
+        }
+        writerErrorRef.current = {
+          revision: snapshot.revision,
+          pinEpoch: snapshot.pinEpoch,
+          error,
+        };
+        setVaultState("error");
         return;
       }
 
@@ -304,13 +305,15 @@ export function ShredProvider({ children }: { children: ReactNode }) {
 
   const flushRevision = useCallback(
     async (pinEpoch: number, observedRevision: number) => {
-      if (pinEpoch !== pinEpochRef.current) return;
+      if (pinEpoch !== pinEpochRef.current) {
+        throw new Error("Vault PIN epoch changed before flush completed");
+      }
       if (
         writerLockedRef.current ||
         !vaultLoadedRef.current ||
         !vaultPinRef.current
       ) {
-        return;
+        throw new Error("Vault writer is locked");
       }
       if (
         persistedRevisionRef.current >= observedRevision &&
@@ -337,7 +340,16 @@ export function ShredProvider({ children }: { children: ReactNode }) {
       }
 
       await startWriter(true);
-      if (pinEpoch !== pinEpochRef.current) return;
+      if (pinEpoch !== pinEpochRef.current) {
+        throw new Error("Vault PIN epoch changed during flush");
+      }
+      if (
+        writerLockedRef.current ||
+        !vaultLoadedRef.current ||
+        !vaultPinRef.current
+      ) {
+        throw new Error("Vault writer became locked during flush");
+      }
       if (persistedRevisionRef.current < observedRevision) {
         throw (
           writerErrorRef.current?.error ??
@@ -439,15 +451,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
           throw new Error("Vault validation returned an incomplete target set");
         }
 
-        const blocked = validated.some(
-          (entry) => entry.availability !== "ready"
-        );
-        if (loaded.source_schema === "v1" && blocked) {
-          throw new Error("Legacy vault validation did not complete safely");
-        }
-
-        const ready = validated.filter((entry) => entry.availability === "ready");
-        replaceLoadedFiles(ready);
+        replaceLoadedFiles(validated);
         const revision = ++revisionRef.current;
         vaultPinRef.current = pin;
         vaultLoadedRef.current = true;
@@ -470,6 +474,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         setVaultState("clean");
       } catch (reason) {
         if (pinEpoch !== pinEpochRef.current) return;
+        const error = toError(reason);
         writerLockedRef.current = true;
         loadingRef.current = false;
         vaultLoadedRef.current = false;
@@ -477,7 +482,8 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         setVaultLoaded(false);
         setVaultPinState(null);
         setVaultState("error");
-        addLogEntry("error", `Failed to restore session: ${toError(reason).message}`);
+        addLogEntry("error", `Failed to restore session: ${error.message}`);
+        throw error;
       }
     },
     [addLogEntry, createSnapshot, flushRevision, queueSnapshot, replaceLoadedFiles]

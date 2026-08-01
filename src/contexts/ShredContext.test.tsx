@@ -1,7 +1,12 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ShredProvider, useShred } from "./ShredContext";
-import type { TargetKind, VaultTarget } from "@/types";
+import type {
+  TargetAvailability,
+  TargetKind,
+  TargetMetadataDto,
+  VaultTarget,
+} from "@/types";
 
 const { invokeMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -37,12 +42,16 @@ function target(path: string, kind: TargetKind = "file"): VaultTarget {
   return { path, kind };
 }
 
-function metadata(path: string, kind: TargetKind = "file") {
+function metadata(
+  path: string,
+  kind: TargetKind = "file",
+  availability: TargetAvailability = "ready"
+): TargetMetadataDto {
   return {
     path,
     kind,
-    availability: "ready" as const,
-    reason: null,
+    availability,
+    reason: availability === "ready" ? null : `${availability} target`,
     name: path.split("\\").at(-1) ?? path,
     size: 1,
   };
@@ -85,7 +94,9 @@ function readyFile(path: string) {
 function configureLoadedVault(
   sourceSchema: "v1" | "v2",
   targets: VaultTarget[],
-  validationTargets = targets
+  validationTargets: TargetMetadataDto[] = targets.map(({ path, kind }) =>
+    metadata(path, kind)
+  )
 ) {
   invokeMock.mockImplementation((command: string) => {
     if (command === "vault_exists") return Promise.resolve(true);
@@ -97,7 +108,7 @@ function configureLoadedVault(
       });
     }
     if (command === "validate_targets") {
-      return Promise.resolve(validationTargets.map(({ path, kind }) => metadata(path, kind)));
+      return Promise.resolve(validationTargets);
     }
     return Promise.resolve(undefined);
   });
@@ -203,6 +214,57 @@ describe("authoritative vault writer", () => {
     expect(flushed).toBe(true);
   });
 
+  it("rejects a flush when the PIN epoch changes in flight", async () => {
+    renderContext();
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+    const save = deferred<void>();
+    invokeMock.mockImplementation((command: string) =>
+      command === "save_vault" ? save.promise : Promise.resolve(undefined)
+    );
+
+    await act(async () => {
+      latest.addFiles([readyFile("C:\\epoch.txt")]);
+    });
+    await waitFor(() => expect(saveCalls()).toHaveLength(1));
+
+    let flushPromise!: Promise<void>;
+    await act(async () => {
+      flushPromise = latest.flushVault();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      latest.setVaultPin(null);
+      save.resolve();
+      await expect(flushPromise).rejects.toThrow(/epoch/i);
+    });
+  });
+
+  it("restores ready, missing, and blocked targets without filtering", async () => {
+    renderContext();
+    const targets = [
+      target("C:\\ready.txt"),
+      target("C:\\missing.txt"),
+      target("C:\\blocked.txt"),
+    ];
+    configureLoadedVault("v2", targets, [
+      metadata("C:\\ready.txt", "file", "ready"),
+      metadata("C:\\missing.txt", "file", "missing"),
+      metadata("C:\\blocked.txt", "file", "blocked"),
+    ]);
+
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+
+    expect(latest.files.map((file) => file.path)).toEqual([
+      "C:\\ready.txt",
+      "C:\\missing.txt",
+      "C:\\blocked.txt",
+    ]);
+  });
+
   it("retains a failed snapshot and retries it", async () => {
     renderContext();
     await act(async () => {
@@ -240,7 +302,7 @@ describe("authoritative vault writer", () => {
     await waitFor(() => expect(latest.vaultState).toBe("clean"));
   });
 
-  it("does not start queued saves from a stale PIN epoch", async () => {
+  it("restarts the current-epoch queue when a stale save rejects", async () => {
     renderContext();
     await act(async () => {
       await latest.loadVault("old-pin");
@@ -263,7 +325,7 @@ describe("authoritative vault writer", () => {
       latest.setVaultPin("new-pin");
     });
     await act(async () => {
-      oldSave.resolve();
+      oldSave.reject(new Error("old PIN write failed"));
     });
     await waitFor(() => expect(saveCalls()).toHaveLength(2));
     expect(saveCalls()[1].pin).toBe("new-pin");
@@ -331,7 +393,8 @@ describe("authoritative vault writer", () => {
     });
 
     await act(async () => {
-      await latest.loadVault("bad-pin");
+      const loadPromise = latest.loadVault("bad-pin");
+      await expect(loadPromise).rejects.toThrow("bad PIN");
     });
     expect(latest.vaultState).toBe("error");
     await act(async () => {
