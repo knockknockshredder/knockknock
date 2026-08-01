@@ -209,6 +209,17 @@ export function ShredProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(timer);
   }, [files, vaultLoaded, vaultPin, isShredding, saveVault]);
 
+  // Sync shred state to the system tray. The Rust backend uses this to
+  // enable/disable tray menu items — "Quick Shred" is only available when
+  // files are present and no shred is running, while "Shred Clipboard"
+  // availability follows separate logic.
+  useEffect(() => {
+    const hasFiles = files.length > 0;
+    invoke("sync_tray_state", { hasFiles, isShredding }).catch((err) => {
+      console.debug("[tray] sync_tray_state failed:", err);
+    });
+  }, [files, isShredding]);
+
   return (
     <ShredContext.Provider
       value={{

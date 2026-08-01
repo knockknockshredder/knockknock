@@ -3,6 +3,7 @@
 mod browser;
 mod commands;
 mod drive;
+mod notifications;
 mod paths;
 mod pin;
 mod shredder;
@@ -53,6 +54,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .manage(tray::actions::TrayState::new())
         .setup(move |app| {
             // Tray setup is non-essential — failure shouldn't crash startup.
             if let Err(e) = tray::setup_tray(app.handle()) {
@@ -85,6 +88,8 @@ pub fn run() {
             commands::browser::detect_browsers,
             commands::browser::shred_browser_data,
             commands::tray::minimize_to_tray,
+            commands::tray::sync_tray_state,
+            commands::tray::send_notification,
             commands::pin::setup_pin,
             commands::pin::verify_pin,
             commands::pin::is_pin_enabled,

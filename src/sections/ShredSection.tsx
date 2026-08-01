@@ -81,6 +81,33 @@ export function ShredSection() {
       .catch((err) => addLogEntry("error", `Failed to load algorithms: ${err}`));
   }, [setAlgorithms, addLogEntry]);
 
+  // Handle tray menu "Quick Shred" — triggers the same PIN→confirmation
+  // flow as clicking the Shred button, using the existing executeShred
+  // pipeline so there is no second code path for the destructive work.
+  useEffect(() => {
+    const unlistenPromise = listen("quick-shred-request", () => {
+      // Nothing to shred — notify instead of opening an empty dialog.
+      // The window was already shown and focused by the tray action.
+      if (pendingFiles.length === 0 && selectedProfileCount === 0) {
+        invoke("send_notification", {
+          title: "KnockKnock",
+          body: "No files in list to shred",
+        }).catch(() => {});
+        return;
+      }
+
+      if (pinNeeded) {
+        setDeferredShred(() => () => setDialogOpen(true));
+        setShredPinOpen(true);
+      } else {
+        setDialogOpen(true);
+      }
+    });
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
+  }, [pinNeeded, pendingFiles.length, selectedProfileCount]);
+
   // Cleanup progress listener on unmount
   useEffect(() => {
     return () => {
@@ -183,6 +210,12 @@ export function ShredSection() {
         clearLog();
       }
 
+      // Send system notification for the main shred result.
+      invoke("send_notification", {
+        title: "Shred Complete",
+        body: `${report.successful} destroyed, ${report.failed} failed, ${report.skipped} skipped (${report.duration_secs.toFixed(1)}s)`,
+      }).catch(() => {});
+
       // Shred browser profiles if any
       if (selectedProfileCount > 0) {
         const selectedProfiles = browsers.flatMap((b) =>
@@ -222,6 +255,10 @@ export function ShredSection() {
               "error",
               `Failed to shred ${profile.browser_name} profile: ${err}`
             );
+            invoke("send_notification", {
+              title: "Browser Shred Failed",
+              body: `${profile.browser_name}: ${err}`,
+            }).catch(() => {});
           }
         }
       }
@@ -231,6 +268,10 @@ export function ShredSection() {
       for (const file of pendingFiles) {
         updateFileStatus(file.id, "error", String(err));
       }
+      invoke("send_notification", {
+        title: "Shred Failed",
+        body: `${String(err).slice(0, 200)}`,
+      }).catch(() => {});
     } finally {
       unlisten();
       unlistenRef.current = null;
