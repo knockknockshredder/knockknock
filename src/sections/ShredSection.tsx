@@ -86,6 +86,16 @@ export function ShredSection() {
   // pipeline so there is no second code path for the destructive work.
   useEffect(() => {
     const unlistenPromise = listen("quick-shred-request", () => {
+      // Nothing to shred — notify instead of opening an empty dialog.
+      // The window was already shown and focused by the tray action.
+      if (pendingFiles.length === 0 && selectedProfileCount === 0) {
+        invoke("send_notification", {
+          title: "KnockKnock",
+          body: "No files in list to shred",
+        }).catch(() => {});
+        return;
+      }
+
       if (pinNeeded) {
         setDeferredShred(() => () => setDialogOpen(true));
         setShredPinOpen(true);
@@ -96,7 +106,7 @@ export function ShredSection() {
     return () => {
       unlistenPromise.then((fn) => fn());
     };
-  }, [pinNeeded]);
+  }, [pinNeeded, pendingFiles.length, selectedProfileCount]);
 
   // Cleanup progress listener on unmount
   useEffect(() => {
