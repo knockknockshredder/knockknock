@@ -122,13 +122,11 @@ impl VaultStore {
         let (temporary_path, mut temporary_file) = create_unique_temp(io, &self.vault_path)?;
         if let Err(error) = io.write_temp(&mut temporary_file, &temporary_path, &bytes) {
             drop(temporary_file);
-            let _ = io.cleanup_temp(&temporary_path);
-            return Err(error);
+            return Err(save_failure_with_cleanup(io, &temporary_path, error));
         }
         if let Err(error) = io.sync_temp(&temporary_file, &temporary_path) {
             drop(temporary_file);
-            let _ = io.cleanup_temp(&temporary_path);
-            return Err(error);
+            return Err(save_failure_with_cleanup(io, &temporary_path, error));
         }
         drop(temporary_file);
 
@@ -138,8 +136,7 @@ impl VaultStore {
             io.replace(&temporary_path, &self.vault_path)
         };
         if let Err(error) = replacement {
-            let _ = io.cleanup_temp(&temporary_path);
-            return Err(error);
+            return Err(save_failure_with_cleanup(io, &temporary_path, error));
         }
 
         if let Err(error) = io.sync_parent(&self.vault_path) {
@@ -147,6 +144,22 @@ impl VaultStore {
         }
 
         Ok(())
+    }
+}
+
+fn save_failure_with_cleanup(
+    io: &dyn VaultIo,
+    temporary_path: &Path,
+    primary: VaultError,
+) -> VaultError {
+    match io.cleanup_temp(temporary_path) {
+        Ok(()) => primary,
+        Err(cleanup) => VaultError::Io {
+            action: "save V2 vault and clean up temporary file",
+            source: std::io::Error::other(format!(
+                "primary error: {primary}; cleanup error: {cleanup}"
+            )),
+        },
     }
 }
 
@@ -324,17 +337,25 @@ impl VaultIo for ProductionVaultIo {
 
 #[cfg(test)]
 pub(crate) struct FaultInjectingVaultIo {
-    failure: VaultIoFailure,
+    failures: Vec<VaultIoFailure>,
 }
 
 #[cfg(test)]
 impl FaultInjectingVaultIo {
     pub(crate) fn failing_at(failure: VaultIoFailure) -> Self {
-        Self { failure }
+        Self {
+            failures: vec![failure],
+        }
+    }
+
+    pub(crate) fn failing_at_operations(failures: &[VaultIoFailure]) -> Self {
+        Self {
+            failures: failures.to_vec(),
+        }
     }
 
     fn fail_if(&self, operation: VaultIoFailure) -> Result<(), VaultError> {
-        if self.failure == operation {
+        if self.failures.contains(&operation) {
             return Err(VaultError::Io {
                 action: "fault-injected vault operation",
                 source: std::io::Error::other(format!("fault at {operation:?}")),
@@ -414,6 +435,10 @@ fn replace_file_windows(
         .chain(std::iter::once(0))
         .collect();
 
+    // SAFETY: Both UTF-16 buffers are NUL-terminated, remain alive and
+    // immutable for the duration of the call, and the optional backup,
+    // exclude, and reserved pointers are explicitly null as permitted by
+    // ReplaceFileW.
     let result = unsafe {
         ReplaceFileW(
             vault_path_wide.as_ptr(),

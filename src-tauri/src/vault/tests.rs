@@ -1,5 +1,7 @@
 use super::crypto;
-use super::storage::{FaultInjectingVaultIo, VaultIo, VaultIoFailure, VaultPayloadV2, VaultStore};
+use super::storage::{
+    FaultInjectingVaultIo, ProductionVaultIo, VaultIo, VaultIoFailure, VaultPayloadV2, VaultStore,
+};
 use crate::commands::shred::validate_targets;
 use crate::shredder::root_execution::types::{
     TargetAvailability, TargetKind, VaultError, VaultSchemaSource, VaultTarget,
@@ -446,4 +448,54 @@ fn save_v2_first_publication_failure_leaves_no_vault_or_temp_file() {
         .expect("read temporary vault directory")
         .next()
         .is_none());
+}
+
+#[test]
+fn save_v2_surfaces_cleanup_failure_without_masking_primary_failure() {
+    let (tempdir, store) = store();
+    store
+        .save_v2(&[v2_target("previous", TargetKind::File)], "123456")
+        .expect("publish previous V2 vault");
+    let before = fs::read(store.path()).expect("read ciphertext before injected failures");
+    let adapter = FaultInjectingVaultIo::failing_at_operations(&[
+        VaultIoFailure::WriteTemp,
+        VaultIoFailure::CleanupTemp,
+    ]);
+
+    let error = store
+        .save_v2_with_io(&all_target_kinds(), "123456", &adapter)
+        .expect_err("primary and cleanup failures must fail");
+    let after = fs::read(store.path()).expect("read ciphertext after injected failures");
+    let message = error.to_string();
+
+    assert!(message.contains("fault at WriteTemp"));
+    assert!(message.contains("fault at CleanupTemp"));
+    assert_eq!(before, after);
+    assert_eq!(
+        fs::read_dir(tempdir.path())
+            .expect("read temporary vault directory")
+            .count(),
+        2
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn replace_file_windows_invalid_source_preserves_ciphertext() {
+    let (tempdir, store) = store();
+    store
+        .save_v2(&[v2_target("previous", TargetKind::File)], "123456")
+        .expect("publish previous V2 vault");
+    let before = fs::read(store.path()).expect("read ciphertext before invalid replacement");
+    let invalid_source = store.path().with_file_name("missing-replacement.tmp");
+    let adapter = ProductionVaultIo;
+
+    let error = adapter
+        .replace_existing(&invalid_source, store.path())
+        .expect_err("ReplaceFileW must reject missing replacement source");
+    let after = fs::read(store.path()).expect("read ciphertext after invalid replacement");
+
+    assert!(matches!(error, VaultError::Replace { .. }));
+    assert_eq!(before, after);
+    assert_no_temporary_files(&tempdir);
 }
