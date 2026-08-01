@@ -115,7 +115,7 @@ impl FakeIo {
 impl SecureTreeIo for FakeIo {
     fn open_root_nofollow(&self, path: &Path) -> Result<DirHandle, ShredError> {
         self.events.lock().unwrap().root_opens += 1;
-        self.record("open_root");
+        self.record(&format!("open_root:{}", path.display()));
         self.roots
             .get(path)
             .copied()
@@ -382,6 +382,27 @@ fn executes_file_root_using_its_containing_directory() {
     assert_eq!(result.roots[0].status, RootStatus::Destroyed);
     assert!(result.roots[0].root_removed);
     assert_eq!(result.roots[0].files_destroyed, 1);
+
+    let events = io.events();
+    let events = events.lock().unwrap();
+    let first_mutation = events
+        .calls
+        .iter()
+        .position(|call| call == "open_regular")
+        .expect("file mutation must open the regular file");
+    assert!(events.calls[..first_mutation]
+        .iter()
+        .any(|call| call == &format!("open_root:{}", parent.display())));
+    assert!(
+        events.calls[..first_mutation]
+            .iter()
+            .filter(|call| call.starts_with("open_root:"))
+            .count()
+            >= 2
+    );
+    assert!(events.calls[first_mutation..]
+        .iter()
+        .all(|call| !call.starts_with("open_root:")));
 }
 
 #[test]
@@ -862,6 +883,14 @@ fn child_failure_keeps_directories_and_stops_later_roots() {
     assert_eq!(result.roots[0].status, RootStatus::Failed);
     assert!(!result.roots[0].root_removed);
     assert_eq!(result.roots[1].status, RootStatus::Skipped);
+    assert!(result.roots[0]
+        .errors
+        .iter()
+        .any(|error| error.message.contains("irreversible partial destruction")));
+    assert!(result.roots[0]
+        .errors
+        .iter()
+        .all(|error| !error.message.contains("zero bytes")));
     let events = io.events();
     let events = events.lock().unwrap();
     assert!(!events.calls.iter().any(|call| call == "remove_dir"));

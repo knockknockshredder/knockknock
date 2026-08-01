@@ -177,11 +177,39 @@ fn cleanup_after_shred(
     progress: &dyn ProgressReporter,
     media_type: MediaType,
 ) -> Result<(), ShredError> {
+    let journal = crate::shredder::journal::JournalStore::portable()
+        .map_err(|error| journal_error(path, error))?;
+    cleanup_after_shred_with_journal(path, platform_io, progress, media_type, &journal)
+}
+
+fn cleanup_after_shred_with_journal(
+    path: &std::path::Path,
+    platform_io: &dyn PlatformIo,
+    progress: &dyn ProgressReporter,
+    media_type: MediaType,
+    journal: &crate::shredder::journal::JournalStore,
+) -> Result<(), ShredError> {
     // Rename to random name
     let renamed_path = platform_io.rename_random(path)?;
 
-    // Record orphan for crash recovery
-    crate::shredder::journal::write_orphan(path, &renamed_path);
+    // Record orphan for crash recovery. Restore the original name if the
+    // journal cannot be made durable, so no untracked renamed file remains.
+    let entry = match journal.append_orphan(path, &renamed_path) {
+        Ok(entry) => entry,
+        Err(error) => {
+            let journal_error = journal_error(&renamed_path, error);
+            return match platform_io.restore_renamed(&renamed_path, path) {
+                Ok(()) => Err(journal_error),
+                Err(restore_error) => Err(ShredError::IoError {
+                    path: path.to_path_buf(),
+                    kind: "JournalRecovery".to_string(),
+                    message: format!(
+                        "{journal_error}; restoring renamed file failed: {restore_error}"
+                    ),
+                }),
+            };
+        }
+    };
 
     // Truncate to zero
     {
@@ -200,9 +228,22 @@ fn cleanup_after_shred(
     platform_io.delete(&renamed_path)?;
 
     // Clear orphan entry
-    crate::shredder::journal::clear_orphan(&renamed_path);
+    journal
+        .clear(&entry)
+        .map_err(|error| journal_error(&renamed_path, error))?;
 
     Ok(())
+}
+
+fn journal_error(
+    path: &std::path::Path,
+    error: crate::shredder::errors::JournalError,
+) -> ShredError {
+    ShredError::IoError {
+        path: path.to_path_buf(),
+        kind: "Journal".to_string(),
+        message: error.to_string(),
+    }
 }
 
 /// Inner shred pipeline — the actual overwrite/rename/truncate/delete sequence

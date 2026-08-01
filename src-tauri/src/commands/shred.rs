@@ -128,12 +128,12 @@ pub fn request_elevation() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn cleanup_orphans() -> Vec<String> {
-    let remaining = crate::shredder::journal::cleanup_orphans();
-    remaining
+pub fn cleanup_orphans() -> Result<Vec<String>, String> {
+    let remaining = crate::shredder::journal::cleanup_orphans().map_err(|error| error.to_string())?;
+    Ok(remaining
         .iter()
         .map(|e| format!("Orphaned: {:?}", e.renamed_path))
-        .collect()
+        .collect())
 }
 
 #[derive(serde::Serialize)]

@@ -175,6 +175,8 @@ struct PlannedNode {
     handle: NodeHandle,
     identity: NodeIdentity,
     kind: NodeKind,
+    name: OsString,
+    trusted_parent_path: PathBuf,
     diagnostic_path: PathBuf,
     children: Vec<PlannedNode>,
 }
@@ -183,6 +185,7 @@ struct PlannedNode {
 struct RootPlan {
     request: ExecuteRootRequest,
     handle: DirHandle,
+    trusted_parent: Option<DirHandle>,
     node: PlannedNode,
 }
 
@@ -250,9 +253,10 @@ pub(crate) fn execute_roots(
         }
 
         let request = plan.request.clone();
-        let mut result = RootExecution::new(plan.request, plan.handle, plan.node);
+        let mut result =
+            RootExecution::new(plan.request, plan.handle, plan.trusted_parent, plan.node);
         if let Err(mut error) = result.execute(io, file_shredder, journal, progress, cancel) {
-            if result.bytes_shredded > 0 {
+            if result.partial_destruction || result.bytes_shredded > 0 {
                 error.message = format!(
                     "{}; previous overwrites are irreversible partial destruction",
                     error.message
@@ -335,6 +339,82 @@ fn preflight_root(
     }
 
     let kind = identity.kind();
+    let root_name = match path.file_name().map(OsStr::to_os_string) {
+        Some(name) => name,
+        None => {
+            return PreflightOutcome::Failed(RootFailure {
+                error: child_error(
+                    &path,
+                    ExecutionStage::Preflight,
+                    ShredError::ValidationFailed(
+                        "execution target has no original basename".to_string(),
+                    ),
+                ),
+                request,
+            })
+        }
+    };
+    let trusted_parent = if kind == NodeKind::RegularFile {
+        let parent_path = match path.parent() {
+            Some(parent) => parent,
+            None => {
+                return PreflightOutcome::Failed(RootFailure {
+                    error: child_error(
+                        &path,
+                        ExecutionStage::Preflight,
+                        ShredError::ValidationFailed(
+                            "file root has no containing directory".to_string(),
+                        ),
+                    ),
+                    request,
+                })
+            }
+        };
+        let parent = match io.open_root_nofollow(parent_path) {
+            Ok(parent) => parent,
+            Err(error) => {
+                return PreflightOutcome::Failed(RootFailure {
+                    error: child_error(&path, ExecutionStage::Preflight, error),
+                    request,
+                })
+            }
+        };
+        let parent_identity = match io.identity(&parent.as_node()) {
+            Ok(identity) => identity,
+            Err(error) => {
+                return PreflightOutcome::Failed(RootFailure {
+                    error: child_error(&path, ExecutionStage::Preflight, error),
+                    request,
+                })
+            }
+        };
+        if parent_identity.kind() != NodeKind::Directory {
+            return PreflightOutcome::Failed(RootFailure {
+                error: child_error(
+                    &path,
+                    ExecutionStage::Preflight,
+                    ShredError::ValidationFailed("file root parent is not a directory".to_string()),
+                ),
+                request,
+            });
+        }
+        if parent_identity.mount_id() != identity.mount_id() {
+            return PreflightOutcome::Failed(RootFailure {
+                error: child_error(
+                    &path,
+                    ExecutionStage::Preflight,
+                    ShredError::ValidationFailed(
+                        "file root parent mount does not match the root".to_string(),
+                    ),
+                ),
+                request,
+            });
+        }
+        Some(parent)
+    } else {
+        None
+    };
+
     let children = if kind == NodeKind::Directory {
         match inspect_directory(&handle, &path, identity.mount_id(), 0, io, identities) {
             Ok(children) => children,
@@ -352,11 +432,14 @@ fn preflight_root(
     PreflightOutcome::Ready(RootPlan {
         request,
         handle,
+        trusted_parent,
         node: PlannedNode {
-            parent: handle,
+            parent: trusted_parent.unwrap_or(handle),
             handle: node_handle,
             identity,
             kind,
+            name: root_name,
+            trusted_parent_path: path.parent().map(Path::to_path_buf).unwrap_or_default(),
             diagnostic_path: path,
             children,
         },
@@ -421,6 +504,8 @@ fn inspect_directory(
             handle: node,
             identity,
             kind,
+            name: child_name.0,
+            trusted_parent_path: diagnostic_path.to_path_buf(),
             diagnostic_path: child_path,
             children: nested,
         });
@@ -528,11 +613,20 @@ struct RootExecution {
     files_destroyed: u64,
     directories_removed: u64,
     bytes_shredded: u64,
+    partial_destruction: bool,
     errors: Vec<ChildErrorDto>,
 }
 
 impl RootExecution {
-    fn new(_request: ExecuteRootRequest, handle: DirHandle, node: PlannedNode) -> Self {
+    fn new(
+        _request: ExecuteRootRequest,
+        handle: DirHandle,
+        trusted_parent: Option<DirHandle>,
+        mut node: PlannedNode,
+    ) -> Self {
+        if let Some(parent) = trusted_parent {
+            node.parent = parent;
+        }
         Self {
             handle,
             node,
@@ -541,6 +635,7 @@ impl RootExecution {
             files_destroyed: 0,
             directories_removed: 0,
             bytes_shredded: 0,
+            partial_destruction: false,
             errors: Vec::new(),
         }
     }
@@ -560,6 +655,8 @@ impl RootExecution {
                 handle: self.handle.as_node(),
                 identity: NodeIdentity::new(0, 0, NodeKind::Special),
                 kind: NodeKind::Special,
+                name: OsString::new(),
+                trusted_parent_path: PathBuf::new(),
                 diagnostic_path: PathBuf::new(),
                 children: Vec::new(),
             },
@@ -633,11 +730,20 @@ impl RootExecution {
             child_error(&node.diagnostic_path, ExecutionStage::Overwrite, error)
         })?;
         let request = FileShredRequest::new(node.diagnostic_path.clone());
-        let shred_result = file_shredder
-            .shred_open_file(file, node.identity, &request)
-            .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Verify, error))?;
+        let shred_result = match file_shredder.shred_open_file(file, node.identity, &request) {
+            Ok(result) => result,
+            Err(error) => {
+                self.partial_destruction = true;
+                return Err(child_error(
+                    &node.diagnostic_path,
+                    ExecutionStage::Verify,
+                    error,
+                ));
+            }
+        };
         self.bytes_shredded += shred_result.bytes_shredded;
         if !shred_result.success {
+            self.partial_destruction = true;
             let error = shred_result.errors.into_iter().next().unwrap_or_else(|| {
                 ShredError::ValidationFailed(
                     "file shredder reported irreversible partial destruction".to_string(),
@@ -651,22 +757,8 @@ impl RootExecution {
         }
 
         let new_name = OsString::from(format!(".knockknock-{:032x}", node.identity.id()));
-        let parent_path = node.diagnostic_path.parent().ok_or_else(|| {
-            child_error(
-                &node.diagnostic_path,
-                ExecutionStage::Journal,
-                ShredError::ValidationFailed(
-                    "execution target has no containing directory".to_string(),
-                ),
-            )
-        })?;
-        let parent = if node.parent.id() == node.handle.id() {
-            io.open_root_nofollow(parent_path).map_err(|error| {
-                child_error(&node.diagnostic_path, ExecutionStage::Journal, error)
-            })?
-        } else {
-            node.parent
-        };
+        let parent_path = &node.trusted_parent_path;
+        let parent = node.parent;
         let parent_identity = io
             .identity(&parent.as_node())
             .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Journal, error))?;
@@ -726,19 +818,9 @@ impl RootExecution {
         stage: ExecutionStage,
         description: &str,
     ) -> ChildErrorDto {
-        let original_name = node
-            .diagnostic_path
-            .file_name()
-            .map(OsStr::to_os_string)
-            .ok_or_else(|| {
-                ShredError::ValidationFailed(
-                    "execution target has no original basename".to_string(),
-                )
-            });
-        let rollback = original_name.and_then(|name| {
-            io.rename_noreplace(parent, &node.handle, &name)
-                .and_then(|_| io.sync_parent(parent))
-        });
+        let rollback = io
+            .rename_noreplace(parent, &node.handle, &node.name)
+            .and_then(|_| io.sync_parent(parent));
         let error = match rollback {
             Ok(()) => error,
             Err(rollback_error) => ShredError::ValidationFailed(format!(

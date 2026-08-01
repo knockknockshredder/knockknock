@@ -187,7 +187,44 @@ impl JournalIo for FsJournalIo {
     }
 
     fn sync_parent(&self, path: &Path) -> io::Result<()> {
-        std::fs::File::open(path)?.sync_all()
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows::core::PCWSTR;
+            use windows::Win32::Foundation::CloseHandle;
+            use windows::Win32::Storage::FileSystem::{
+                CreateFileW, FlushFileBuffers, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ,
+                FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+            };
+
+            let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let handle = unsafe {
+                CreateFileW(
+                    PCWSTR(path.as_ptr()),
+                    FILE_GENERIC_READ.0,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    None,
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS,
+                    None,
+                )
+            }
+            .map_err(|error| io::Error::other(error.to_string()))?;
+            let flush_result = match unsafe { FlushFileBuffers(handle) } {
+                Ok(()) => Ok(()),
+                // Windows may reject FlushFileBuffers for a directory handle
+                // even when the directory was opened successfully.
+                Err(error) if (error.code().0 as u32 & 0xffff) == 5 => Ok(()),
+                Err(error) => Err(io::Error::other(error.to_string())),
+            };
+            let close_result =
+                unsafe { CloseHandle(handle) }.map_err(|error| io::Error::other(error.to_string()));
+            flush_result.and(close_result)
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::File::open(path)?.sync_all()
+        }
     }
 
     fn atomic_replace(&self, temporary: &Path, destination: &Path) -> io::Result<()> {
@@ -243,6 +280,16 @@ impl JournalStore {
         let previous = entries.clone();
         entries.push(entry);
         self.write_entries(&entries, &previous)
+    }
+
+    pub(crate) fn append_orphan(
+        &self,
+        original: &Path,
+        renamed: &Path,
+    ) -> Result<JournalEntry, JournalError> {
+        let entry = orphan_entry(original, renamed)?;
+        self.append(entry.clone())?;
+        Ok(entry)
     }
 
     pub fn read(&self) -> Result<Vec<JournalEntry>, JournalError> {
@@ -533,13 +580,13 @@ fn metadata_identity(path: &Path, metadata: &std::fs::Metadata) -> Option<Journa
     None
 }
 
-pub fn write_orphan(original: &Path, renamed: &Path) {
-    if let Err(error) = write_orphan_fallible(original, renamed) {
-        panic!("[KnockKnock] Journal write failed: {error}");
-    }
+pub fn write_orphan(original: &Path, renamed: &Path) -> Result<(), JournalError> {
+    JournalStore::portable()?
+        .append_orphan(original, renamed)
+        .map(|_| ())
 }
 
-fn write_orphan_fallible(original: &Path, renamed: &Path) -> Result<(), JournalError> {
+fn orphan_entry(original: &Path, renamed: &Path) -> Result<JournalEntry, JournalError> {
     let parent = renamed.parent().ok_or_else(|| JournalError::UnsafeParent {
         path: renamed.to_path_buf(),
         reason: "renamed path has no parent".to_string(),
@@ -576,13 +623,11 @@ fn write_orphan_fallible(original: &Path, renamed: &Path) -> Result<(), JournalE
     );
     entry.original_path_hash = Some(hash_path(original));
     entry.renamed_path = renamed.to_path_buf();
-    JournalStore::portable()?.append(entry)
+    Ok(entry)
 }
 
-pub fn clear_orphan(renamed: &Path) {
-    if let Err(error) = clear_orphan_fallible(renamed) {
-        panic!("[KnockKnock] Journal clear failed: {error}");
-    }
+pub fn clear_orphan(renamed: &Path) -> Result<(), JournalError> {
+    clear_orphan_fallible(renamed)
 }
 
 fn clear_orphan_fallible(renamed: &Path) -> Result<(), JournalError> {
@@ -603,18 +648,8 @@ fn clear_orphan_fallible(renamed: &Path) -> Result<(), JournalError> {
     })
 }
 
-pub fn read_orphans() -> Vec<JournalEntry> {
-    match JournalStore::portable().and_then(|store| store.read()) {
-        Ok(entries) => entries,
-        Err(error) => panic!("[KnockKnock] Journal read failed: {error}"),
-    }
-}
-
-pub fn cleanup_orphans() -> Vec<JournalEntry> {
-    match JournalStore::portable().and_then(|store| store.recover()) {
-        Ok(entries) => entries,
-        Err(error) => panic!("[KnockKnock] Journal recovery failed: {error}"),
-    }
+pub fn cleanup_orphans() -> Result<Vec<JournalEntry>, JournalError> {
+    JournalStore::portable()?.recover()
 }
 
 fn hash_path(path: &Path) -> String {
@@ -808,5 +843,83 @@ mod tests {
         let error = store.recover().expect_err("legacy records are untrusted");
         assert!(matches!(error, JournalError::LegacyRecord { .. }));
         assert!(!store.read().expect("legacy record remains").is_empty());
+    }
+
+    #[test]
+    fn matching_identity_recovery_deletes_target_and_clears_record() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join(".knockknock-generated");
+        std::fs::write(&target, b"destroy").expect("target write");
+        let parent_metadata = std::fs::symlink_metadata(directory.path()).expect("parent metadata");
+        let target_metadata = std::fs::symlink_metadata(&target).expect("target metadata");
+        let parent_identity =
+            super::metadata_identity(directory.path(), &parent_metadata).expect("parent identity");
+        let target_identity =
+            super::metadata_identity(&target, &target_metadata).expect("target identity");
+        let store = JournalStore::at(directory.path().join("journal.json"));
+        store
+            .append(JournalEntry::identity_bound(
+                directory.path().to_path_buf(),
+                parent_identity,
+                ".knockknock-generated",
+                target_identity,
+                JournalNodeKind::RegularFile,
+            ))
+            .expect("journal append");
+
+        assert!(store.recover().expect("matching recovery").is_empty());
+        assert!(!target.exists());
+        assert!(store.read().expect("journal read").is_empty());
+    }
+
+    #[test]
+    fn unsafe_recovery_parent_is_rejected_without_mutating_target() {
+        #[cfg(windows)]
+        let filesystem_root = PathBuf::from(r"C:\");
+        #[cfg(not(windows))]
+        let filesystem_root = PathBuf::from("/");
+
+        for (name, parent) in [
+            ("relative", PathBuf::from("relative-parent")),
+            ("filesystem-root", filesystem_root),
+        ] {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let target = directory.path().join(format!("{name}-target"));
+            std::fs::write(&target, b"preserve").expect("target write");
+            let store = JournalStore::at(directory.path().join("journal.json"));
+            store
+                .append(JournalEntry::identity_bound(
+                    parent,
+                    JournalNodeIdentity::new(1, 1),
+                    format!("{name}-target"),
+                    JournalNodeIdentity::new(2, 2),
+                    JournalNodeKind::RegularFile,
+                ))
+                .expect("journal append");
+
+            let error = store.recover().expect_err("unsafe parent must be rejected");
+            assert!(matches!(error, JournalError::UnsafeParent { .. }));
+            assert!(target.exists());
+            assert!(!store.read().expect("journal read").is_empty());
+        }
+    }
+
+    #[test]
+    fn journal_wrapper_failure_does_not_panic() {
+        let result = std::panic::catch_unwind(|| {
+            super::clear_orphan(Path::new("/definitely/missing/legacy-target"))
+        });
+
+        assert!(result.is_ok(), "legacy journal cleanup must not panic");
+        assert!(result.expect("journal wrapper did not panic").is_err());
+
+        let result = std::panic::catch_unwind(|| {
+            super::write_orphan(
+                Path::new("/definitely/missing/original"),
+                Path::new("/definitely/missing/renamed"),
+            )
+        });
+        assert!(result.is_ok(), "legacy journal write must not panic");
+        assert!(result.expect("journal wrapper did not panic").is_err());
     }
 }

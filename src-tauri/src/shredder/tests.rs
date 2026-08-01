@@ -5,6 +5,7 @@ mod tests {
     use crate::shredder::algorithms::dod_522022m::Dod522022M;
     use crate::shredder::algorithms::nist_clear::NistClear;
     use crate::shredder::algorithms::random_only::RandomOnly;
+    use crate::shredder::journal::{JournalIo, JournalStore};
     use crate::shredder::progress::NoopProgressReporter;
     use crate::shredder::traits::{ShredAlgorithm, VerificationStrategy};
     use crate::shredder::types::*;
@@ -13,6 +14,8 @@ mod tests {
     use crate::shredder::ShredError;
     use chacha20::cipher::{StreamCipher, StreamCipherSeek};
     use std::io::{Read, Seek, SeekFrom, Write};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -385,5 +388,71 @@ mod tests {
         assert!(crate::shredder::cancel::is_cancelled_global());
         crate::shredder::cancel::reset_global();
         assert!(!crate::shredder::cancel::is_cancelled_global());
+    }
+
+    struct FailingJournalIo;
+
+    impl JournalIo for FailingJournalIo {
+        fn read(&self, _path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+            Ok(None)
+        }
+
+        fn write_temp(&self, _path: &Path, _contents: &[u8]) -> std::io::Result<PathBuf> {
+            Err(std::io::Error::other("injected journal write failure"))
+        }
+
+        fn sync(&self, _path: &Path) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn sync_parent(&self, _path: &Path) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn atomic_replace(&self, _temporary: &Path, _destination: &Path) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn delete(&self, _path: &Path) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn legacy_cleanup_journal_failure_restores_original_without_truncating_or_deleting() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("legacy-cleanup-target");
+        std::fs::write(&path, b"preserve this partially shredded file").expect("target write");
+        let journal = JournalStore::with_io(
+            directory.path().join("journal.json"),
+            Arc::new(FailingJournalIo),
+        );
+        let platform_io = crate::shredder::platform::create_platform_io();
+        let progress = NoopProgressReporter;
+
+        let error = crate::shredder::cleanup_after_shred_with_journal(
+            &path,
+            platform_io.as_ref(),
+            &progress,
+            MediaType::Hdd,
+            &journal,
+        )
+        .expect_err("journal failure must fail the cleanup pipeline");
+
+        assert!(matches!(
+            error,
+            ShredError::IoError { ref kind, .. } if kind == "Journal"
+        ));
+        assert!(path.exists());
+        assert_eq!(
+            std::fs::read(&path).expect("restored target"),
+            b"preserve this partially shredded file"
+        );
+        let remaining = std::fs::read_dir(directory.path())
+            .expect("directory read")
+            .map(|entry| entry.expect("directory entry").file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining.iter().any(|name| name == "legacy-cleanup-target"));
     }
 }
