@@ -7,6 +7,7 @@ pub mod journal;
 pub mod logging;
 pub mod platform;
 pub mod progress;
+pub mod root_execution;
 pub mod traits;
 pub mod types;
 pub mod validation;

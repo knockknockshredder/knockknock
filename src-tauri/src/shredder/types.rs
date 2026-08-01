@@ -3,6 +3,12 @@
 use crate::shredder::errors::ShredError;
 use serde::{Deserialize, Serialize};
 
+pub use crate::shredder::root_execution::types::{
+    BatchRootResult, ChildErrorDto, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage,
+    RootResultDto, RootStatus, TargetAvailability, TargetKind, TargetMetadataDto, VaultError,
+    VaultSchemaSource, VaultTarget,
+};
+
 /// Byte patterns for overwriting
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
