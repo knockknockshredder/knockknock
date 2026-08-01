@@ -306,6 +306,17 @@ function AppContent() {
     };
   }, [setActiveSection]);
 
+  // Listen for tray menu "Settings" — shows window and navigates to
+  // the Settings section.
+  useEffect(() => {
+    const unlistenPromise = listen("open-settings", () => {
+      setActiveSection("settings");
+    });
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
+  }, [setActiveSection]);
+
   return (
     <AppShell bottom={<OperationLog />}>
       {activeSection === "home" && <ShredSection />}

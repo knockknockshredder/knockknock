@@ -5,14 +5,19 @@ use tauri::{
     AppHandle, Emitter, Manager, Wry,
 };
 
+use crate::tray::actions;
+
 /// Build the tray context menu with all items.
 ///
 /// Items:
-/// - Quick Shred: triggered from frontend (file picker flow)
-/// - Shred Clipboard: triggered from frontend
+/// - Quick Shred: handled directly via tray action (file picker + shred)
+/// - Shred Clipboard: handled directly via tray action (clipboard clear)
 /// - Open/Hide Window: toggled directly here
 /// - Settings: triggered from frontend
 /// - Quit: handled directly here
+///
+/// Menu item handles for Quick Shred and Shred Clipboard are stored in
+/// `TrayState` so their enabled state can be toggled during shredding.
 pub fn create_tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let quick_shred = MenuItemBuilder::with_id("quick_shred", "Quick Shred")
         .enabled(true)
@@ -31,6 +36,17 @@ pub fn create_tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let quit = MenuItemBuilder::with_id("quit", "Quit")
         .enabled(true)
         .build(app)?;
+
+    // Store menu item handles in TrayState for dynamic enable/disable.
+    let state = app.state::<crate::tray::actions::TrayState>();
+    *state
+        .quick_shred_item
+        .lock()
+        .expect("Failed to lock TrayState") = Some(quick_shred.clone());
+    *state
+        .shred_clipboard_item
+        .lock()
+        .expect("Failed to lock TrayState") = Some(shred_clipboard.clone());
 
     Menu::with_items(
         app,
@@ -57,12 +73,19 @@ pub fn show_context_menu(_app: &AppHandle) {
 
 /// Handle a tray menu item click.
 ///
-/// Items that affect window state or app lifecycle are handled here.
-/// Items needing user interaction (Quick Shred, Shred Clipboard,
-/// Settings) are forwarded to the frontend via the
-/// `tray-menu-action` event.
+/// - Quick Shred and Shred Clipboard are handled directly in Rust via
+///   tray actions (file shredding / clipboard clear).
+/// - Toggle Window and Quit affect window state / app lifecycle here.
+/// - Settings shows the window and emits `open-settings` for the
+///   frontend to navigate to the Settings section.
 pub fn handle_event(app: &AppHandle, event: &MenuEvent) {
     match event.id.as_ref() {
+        "quick_shred" => {
+            actions::quick_shred(app);
+        }
+        "shred_clipboard" => {
+            actions::shred_clipboard(app);
+        }
         "toggle_window" => {
             if let Some(window) = app.get_webview_window("main") {
                 if window.is_visible().unwrap_or(false) {
@@ -76,8 +99,11 @@ pub fn handle_event(app: &AppHandle, event: &MenuEvent) {
         "quit" => {
             app.exit(0);
         }
+        "settings" => {
+            actions::open_settings(app);
+        }
         _ => {
-            // Forward other actions to the frontend for UI handling.
+            // Forward unknown items to the frontend.
             let _ = app.emit_to("main", "tray-menu-action", event.id.as_ref());
         }
     }
