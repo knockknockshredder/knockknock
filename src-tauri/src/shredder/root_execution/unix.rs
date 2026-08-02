@@ -774,9 +774,22 @@ mod tests {
         );
     }
 
+    /// A temporary fixture under the real home directory. macOS system temp
+    /// dirs live under `/var/folders/...`, where `/var` is a symlink to
+    /// `/private/var`; the adapter's no-follow root walk refuses symlinked
+    /// path components by design, so fixtures must live on a symlink-free
+    /// prefix such as the home directory (mirrors `TempHome` in commands).
+    fn fixture_dir() -> tempfile::TempDir {
+        let home = std::env::home_dir().expect("home directory");
+        tempfile::Builder::new()
+            .prefix(".knockknock-unix-test-")
+            .tempdir_in(&home)
+            .expect("temporary fixture")
+    }
+
     #[test]
     fn rejects_symlink_roots_and_never_follows_symlink_children() {
-        let fixture = tempfile::tempdir().expect("temporary fixture");
+        let fixture = fixture_dir();
         let real_root = fixture.path().join("real-root");
         fs::create_dir(&real_root).expect("real root");
         fs::write(real_root.join("outside-data"), b"preserve").expect("outside data");
@@ -801,7 +814,7 @@ mod tests {
 
     #[test]
     fn link_replaced_after_enumeration_is_opened_as_link() {
-        let fixture = tempfile::tempdir().expect("temporary fixture");
+        let fixture = fixture_dir();
         let root_path = fixture.path().join("root");
         fs::create_dir(&root_path).expect("root");
         fs::write(root_path.join("entry"), b"preserve").expect("entry");
@@ -833,7 +846,7 @@ mod tests {
 
     #[test]
     fn no_replace_collision_preserves_both_entries_and_handle_state() {
-        let fixture = tempfile::tempdir().expect("temporary fixture");
+        let fixture = fixture_dir();
         let root_path = fixture.path().join("root");
         fs::create_dir(&root_path).expect("root");
         fs::write(root_path.join("source"), b"source").expect("source");
@@ -870,7 +883,7 @@ mod tests {
 
     #[test]
     fn identity_mismatch_blocks_unlink_of_replaced_name() {
-        let fixture = tempfile::tempdir().expect("temporary fixture");
+        let fixture = fixture_dir();
         let root_path = fixture.path().join("root");
         fs::create_dir(&root_path).expect("root");
         fs::write(root_path.join("entry"), b"original").expect("entry");
@@ -894,7 +907,7 @@ mod tests {
     fn identity_maps_inode_to_id_and_device_to_mount_id() {
         use std::os::unix::fs::MetadataExt;
 
-        let fixture = tempfile::tempdir().expect("temporary fixture");
+        let fixture = fixture_dir();
         let root_path = fixture.path().join("root");
         fs::create_dir(&root_path).expect("root");
         fs::write(root_path.join("entry"), b"entry").expect("entry");
@@ -913,7 +926,7 @@ mod tests {
 
     #[test]
     fn root_directory_retains_its_containing_handle_until_sync() {
-        let fixture = tempfile::tempdir().expect("temporary fixture");
+        let fixture = fixture_dir();
         let root_path = fixture.path().join("root");
         fs::create_dir(&root_path).expect("root");
 
