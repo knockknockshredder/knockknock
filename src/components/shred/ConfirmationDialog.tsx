@@ -15,6 +15,7 @@ interface ConfirmationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   fileCount: number;
+  folderCount: number;
   profileCount: number;
   runningBrowsers: string[];
   onConfirm: () => void;
@@ -24,17 +25,26 @@ export function ConfirmationDialog({
   open,
   onOpenChange,
   fileCount,
+  folderCount,
   profileCount,
   runningBrowsers,
   onConfirm,
 }: ConfirmationDialogProps) {
   const hasFiles = fileCount > 0;
+  const hasFolders = folderCount > 0;
   const hasProfiles = profileCount > 0;
 
   const filePart = hasFiles ? (
     <>
       <strong>
         {fileCount} file{fileCount !== 1 ? "s" : ""}
+      </strong>
+    </>
+  ) : null;
+  const folderPart = hasFolders ? (
+    <>
+      <strong>
+        {folderCount} folder{folderCount !== 1 ? "s" : ""}
       </strong>
     </>
   ) : null;
@@ -46,20 +56,28 @@ export function ConfirmationDialog({
     </>
   ) : null;
 
-  let description: ReactNode;
-  if (hasFiles && hasProfiles) {
-    description = (
+  const hasShredTargets = hasFiles || hasFolders;
+
+  let shredPhrase: ReactNode;
+  if (hasFiles && hasFolders) {
+    shredPhrase = (
       <>
-        This will permanently shred {filePart} and {profilePart}. This cannot
-        be undone. Data will be overwritten, verified, renamed, truncated, and
-        deleted.
+        {filePart} and {folderPart}
       </>
     );
   } else if (hasFiles) {
+    shredPhrase = filePart;
+  } else {
+    shredPhrase = folderPart;
+  }
+
+  let description: ReactNode;
+  if (hasShredTargets) {
     description = (
       <>
-        This will permanently shred {filePart}. This cannot be undone. Data
-        will be overwritten, verified, renamed, truncated, and deleted.
+        This will permanently shred {shredPhrase}
+        {hasProfiles ? <> and {profilePart}</> : null}. This cannot be undone.
+        Data will be overwritten, verified, renamed, truncated, and deleted.
       </>
     );
   } else if (hasProfiles) {

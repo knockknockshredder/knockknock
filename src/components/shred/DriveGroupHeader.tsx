@@ -12,7 +12,7 @@ import type { DriveInfo, DriveType } from "@/types";
 
 interface DriveGroupHeaderProps {
   drive: DriveInfo;
-  fileCount: number;
+  countLabel: string;
   isCollapsed: boolean;
   onToggle: () => void;
 }
@@ -44,7 +44,7 @@ const DRIVE_TYPE_ICON: Record<DriveType, ReactNode> = {
  */
 export function DriveGroupHeader({
   drive,
-  fileCount,
+  countLabel,
   isCollapsed,
   onToggle,
 }: DriveGroupHeaderProps) {
@@ -69,9 +69,7 @@ export function DriveGroupHeader({
       {drive.label && drive.label !== "Local Disk" && (
         <span className="truncate text-muted-foreground">— {drive.label}</span>
       )}
-      <span className="ml-auto text-muted-foreground">
-        {fileCount} file{fileCount === 1 ? "" : "s"}
-      </span>
+      <span className="ml-auto text-muted-foreground">{countLabel}</span>
       {capacityLabel && (
         <span className="hidden text-muted-foreground sm:inline">
           · {capacityLabel}

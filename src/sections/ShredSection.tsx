@@ -67,6 +67,12 @@ export function ShredSection() {
   }, []);
 
   const pendingFiles = files.filter((f) => f.status === "pending");
+  const pendingFileCount = pendingFiles.filter(
+    (f) => f.kind !== "directory"
+  ).length;
+  const pendingFolderCount = pendingFiles.filter(
+    (f) => f.kind === "directory"
+  ).length;
   const selectedProfileCount = getSelectedCount();
   const currentAlgorithm = algorithms[algorithmIndex];
   const runningBrowsers = browsers.filter((b) => b.isRunning).map((b) => b.name);
@@ -311,7 +317,8 @@ export function ShredSection() {
           />
         )}
         <ShredButton
-          fileCount={pendingFiles.length}
+          fileCount={pendingFileCount}
+          folderCount={pendingFolderCount}
           profileCount={selectedProfileCount}
           isShredding={isShredding}
           onClick={handleShredClick}
@@ -322,7 +329,8 @@ export function ShredSection() {
       <ConfirmationDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        fileCount={pendingFiles.length}
+        fileCount={pendingFileCount}
+        folderCount={pendingFolderCount}
         profileCount={selectedProfileCount}
         runningBrowsers={runningBrowsers}
         onConfirm={executeShred}

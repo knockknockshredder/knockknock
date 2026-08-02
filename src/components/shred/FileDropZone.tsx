@@ -1,12 +1,15 @@
 // src/components/shred/FileDropZone.tsx
-import { useEffect, useState } from "react";
-import { Plus, Upload } from "@phosphor-icons/react";
+import { useCallback, useEffect, useState } from "react";
+import { FilePlus, FolderPlus, Upload } from "@phosphor-icons/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useShred } from "@/contexts/ShredContext";
 import { cn, isWindows } from "@/lib/utils";
 import type { FileMetadata } from "@/types";
+
+const FILE_ACTION_LABEL = "Add files — opens the file picker";
+const FOLDER_ACTION_LABEL = "Add folders — opens the folder picker";
 
 interface FileDropZoneProps {
   compact?: boolean;
@@ -15,6 +18,33 @@ interface FileDropZoneProps {
 export function FileDropZone({ compact = false }: FileDropZoneProps) {
   const { addFiles, addLogEntry } = useShred();
   const [isDragOver, setIsDragOver] = useState(false);
+
+  const validateAndAdd = useCallback(
+    async (paths: string[]) => {
+      try {
+        const [validFiles, validationErrors]: [FileMetadata[], string[]] = await invoke(
+          "validate_paths",
+          { paths }
+        );
+        if (validFiles.length > 0) {
+          addFiles(validFiles);
+          addLogEntry("info", `Added ${validFiles.length} file(s)`);
+        }
+        for (const err of validationErrors) {
+          addLogEntry("warning", err);
+        }
+        if (validFiles.length < paths.length) {
+          addLogEntry(
+            "warning",
+            `${paths.length - validFiles.length} file(s) rejected (system file, network drive, or invalid path)`
+          );
+        }
+      } catch (err) {
+        addLogEntry("error", `Validation failed: ${err}`);
+      }
+    },
+    [addFiles, addLogEntry]
+  );
 
   // Tauri native drag-drop
   useEffect(() => {
@@ -36,28 +66,7 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, []);
-
-  const validateAndAdd = async (paths: string[]) => {
-    try {
-      const [validFiles, validationErrors]: [FileMetadata[], string[]] = await invoke("validate_paths", { paths });
-      if (validFiles.length > 0) {
-        addFiles(validFiles);
-        addLogEntry("info", `Added ${validFiles.length} file(s)`);
-      }
-      for (const err of validationErrors) {
-        addLogEntry("warning", err);
-      }
-      if (validFiles.length < paths.length) {
-        addLogEntry(
-          "warning",
-          `${paths.length - validFiles.length} file(s) rejected (system file, network drive, or invalid path)`
-        );
-      }
-    } catch (err) {
-      addLogEntry("error", `Validation failed: ${err}`);
-    }
-  };
+  }, [validateAndAdd]);
 
   const handleFileClick = async () => {
     try {
@@ -90,30 +99,54 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
 
   const handleFolderClick = async () => {
     try {
-      const selected = await open({
-        multiple: true,
-        directory: true,
-        title: "Select folders to shred",
-      });
-      if (selected) {
-        const paths = Array.isArray(selected) ? selected : [selected];
+      let paths: string[];
+      if (isWindows()) {
+        // Same IFileOpenDialog path as files, with FOS_PICKFOLDERS so the
+        // user selects folder roots that are preserved as directories.
+        paths = await invoke<string[]>("open_folders_windows");
+      } else {
+        const selected = await open({
+          multiple: true,
+          directory: true,
+          title: "Select folders to shred",
+        });
+        if (!selected) return;
+        paths = Array.isArray(selected) ? selected : [selected];
+      }
+      if (paths.length > 0) {
         await validateAndAdd(paths);
       }
     } catch (err) {
-      addLogEntry("error", `Folder dialog failed: ${err}`);
+      const msg = String(err);
+      // Dismissing the dialog surfaces as ERROR_CANCELLED on Windows; treat
+      // it as a silent no-op, matching the file picker behavior.
+      if (/cancel/i.test(msg) || /0x800704C7/i.test(msg)) return;
+      addLogEntry("error", `Folder dialog failed: ${msg}`);
     }
   };
 
   if (compact) {
     return (
-      <button
-        type="button"
-        onClick={handleFileClick}
-        className="text-muted-foreground hover:text-foreground transition-colors"
-        title="Add files"
-      >
-        <Plus size={14} />
-      </button>
+      <div className="flex flex-col items-stretch gap-1 sm:flex-row sm:items-center sm:gap-1.5">
+        <button
+          type="button"
+          onClick={handleFileClick}
+          aria-label={FILE_ACTION_LABEL}
+          title={FILE_ACTION_LABEL}
+          className="flex items-center justify-center rounded-md border border-border p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <FilePlus size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={handleFolderClick}
+          aria-label={FOLDER_ACTION_LABEL}
+          title={FOLDER_ACTION_LABEL}
+          className="flex items-center justify-center rounded-md border border-border p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <FolderPlus size={14} />
+        </button>
+      </div>
     );
   }
 
@@ -136,15 +169,18 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
       <p className="text-sm text-muted-foreground">
         Drop files or folders here
       </p>
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:gap-2">
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
             handleFileClick();
           }}
-          className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+          aria-label={FILE_ACTION_LABEL}
+          title={FILE_ACTION_LABEL}
+          className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
+          <FilePlus size={14} />
           Add Files
         </button>
         <button
@@ -153,11 +189,17 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
             e.stopPropagation();
             handleFolderClick();
           }}
-          className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+          aria-label={FOLDER_ACTION_LABEL}
+          title={FOLDER_ACTION_LABEL}
+          className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
+          <FolderPlus size={14} />
           Add Folder
         </button>
       </div>
+      <p className="text-sm text-muted-foreground">
+        Items are added to the review list. Nothing is shredded until you confirm.
+      </p>
     </div>
   );
 }
