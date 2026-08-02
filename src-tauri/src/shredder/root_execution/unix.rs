@@ -619,6 +619,9 @@ fn fallback_open_component<Fd: AsFd>(
     name: &OsStr,
     allow_link: bool,
 ) -> Result<OpenedComponent, Errno> {
+    // Linux bind mounts can share a device ID, so the st_dev fallback cannot
+    // distinguish them. This fallback remains no-follow and fails closed; it
+    // does not relax no-replace or link protections.
     let flags = OFlags::RDWR | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     match rustix::fs::openat(&parent, name, flags, Mode::empty()) {
         Ok(fd) => Ok(OpenedComponent::Handle(fd)),
