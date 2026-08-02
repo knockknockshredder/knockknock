@@ -5,6 +5,54 @@ All notable changes to KnockKnock will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-08-02
+
+### "Secure Folder Shredding & Persistent Vault Targets"
+
+This release delivers two headline capabilities: folders are now first-class shred targets executed through a new handle-relative secure engine, and vault targets persist across restarts as typed, encrypted entries that auto-restore after PIN unlock. The tray gains quick-shred, notifications, and clipboard wipe, and the startup gate now offers forgot-PIN recovery.
+
+### Added
+
+#### Secure folder shredding
+- **Folder shredding** — Folders are now first-class shred targets. The shred list can contain files and folders together, and each folder is recursively shredded through a single secure root execution engine.
+- **Handle-relative execution engine** — Every component in a folder tree is opened relative to an open directory handle with no-follow semantics, eliminating the time-of-check/time-of-use race window between validation and deletion.
+- **Native platform adapters** — Windows uses `NtOpenFile` with `OBJ_DONT_REPARSE` and enumerated child handles; Unix uses `openat2`/rustix with no-symlink resolution, so links and reparse points can never redirect a shred.
+- **Durable cleanup journal** — A journal binds the post-overwrite cleanup (rename → truncate → delete) to node identity, so an interrupted operation is either recovered exactly or reported loudly — never cleaned up by pathname alone.
+- **Folder pickers** — Native folder selection dialogs with `FOS_NODEREFERENCELINKS` and multi-select, replacing the previous file-only picker.
+- **Target-state review UI** — The shred list now shows per-target state (added / restored / removed) so users can review exactly what will be shredded before confirming.
+
+#### Persistent vault
+- **Typed encrypted V2 vault** — Targets persist as typed entries (file / folder) encrypted at rest, written atomically with versioned decode and automatic V1 migration.
+- **Auto-restore after unlock** — On startup, persisted targets are restored into the shred list once the PIN unlock gate is passed.
+- **Mandatory PIN unlock** — When a PIN is configured, vault operations require the PIN; the unlock gate is no longer skippable.
+- **Authoritative frontend writer** — A single serialized writer coordinates all vault mutations, preventing interleaved concurrent saves from corrupting the vault.
+
+#### Tray, notifications & PIN recovery
+- **Quick shred from tray** — Shred the current list from the tray with the PIN gate applied; the window focuses when the action completes.
+- **Completion notifications** — System notifications on shred completion and failure.
+- **Clipboard wipe from tray** — Tray action to wipe the clipboard; tray state syncs with the shred list and active operations.
+- **Forgot-PIN recovery** — The startup gate offers a recovery path when the PIN is forgotten.
+
+### Changed
+- **Linked-target execution removed** — The legacy option to shred a linked target was removed; link resolution is now always rejected at validation.
+- **Known network filesystems denied on Linux** — Linux execution refuses known network filesystem magics (NFS, SMB, …) at the adapter level, matching Windows/macOS behavior.
+- **Directory roots preserved** — Folder roots stay intact through the add path and execute in place; only contents are shredded.
+- **Dev builds slimmed** — Line-tables-only debug info keeps `target/` growth in check.
+
+### Fixed
+- **PIN survives rekey** — Rekey is coordinated with the writer barrier and the PIN is preserved after a committed rekey, with injected-failure tests asserting the vault stays consistent.
+- **Atomic save cleanup surfaced** — Errors while cleaning up atomic-save temp files are now reported instead of swallowed.
+- **Windows opens hardened** — Non-destructive component opens no longer request DELETE; `GET_DELETE` is only requested at the destructive step.
+- **macOS build annotations** — `MNT_LOCAL` cast annotated for the current SDK; Unix adapter tests use home-dir fixtures to avoid `/private/var` symlink surprises.
+- **ES2020 compatibility** — Frontend array indexing replaced `.at()` calls that broke builds on older WebKit targets.
+- **Empty-list quick shred guarded** — Quick shred with an empty list no longer no-ops silently.
+- **Sequential wrappers on Windows** — Windows test wrappers run sequentially to avoid cross-test file locking.
+
+### Security
+- **Never shred the wrong file** — Execution is handle-relative and identity-verified: paths are validated before opening, and each open is re-checked for identity before deletion.
+- **Links can't redirect a shred** — Symlinks, junctions, and reparse points are resolved only to be rejected; `FOS_NODEREFERENCELINKS` on every picker.
+- **Encrypted at rest** — Vault targets are encrypted (AES-GCM/ChaCha20 derived keys), with keys zeroized after use.
+
 ## [0.4.2] — 2026-07-24
 
 ### "Shredder Hardening & Bugfix Release"
