@@ -40,6 +40,8 @@ const FILE_SHARE_WRITE_VALUE: u32 = 0x0002;
 const FILE_SHARE_DELETE_VALUE: u32 = 0x0004;
 const FILE_READ_ATTRIBUTES: u32 = 0x0080;
 const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+const FILE_ADD_FILE: u32 = 0x0002; // == FILE_WRITE_DATA: create entries in a directory
+const FILE_DELETE_CHILD: u32 = 0x0040;
 const DELETE: u32 = 0x0001_0000;
 const SYNCHRONIZE: u32 = 0x0010_0000;
 const FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
@@ -119,8 +121,14 @@ impl WindowsSecureTreeIo {
                 retained_parent_identity = Some(query_identity(current.as_raw_handle())?);
             }
 
-            let needs_mutation_access = final_component || index + 2 == components.len();
-            let opened = open_relative(current.as_raw_handle(), component, needs_mutation_access)?;
+            let role = if final_component {
+                OpenRole::Destructive
+            } else if index + 2 == components.len() {
+                OpenRole::RenameParent
+            } else {
+                OpenRole::Traverse
+            };
+            let opened = open_relative(current.as_raw_handle(), component, role)?;
             if opened.identity.kind() == NodeKind::Link {
                 return Err(ShredError::ValidationFailed(
                     "reparse point in execution root is not safe".to_string(),
@@ -192,7 +200,7 @@ impl WindowsSecureTreeIo {
             ));
         }
         verify_entry_identity(parent_entry, parent_handle.as_raw_handle())?;
-        let opened = open_relative(parent_handle.as_raw_handle(), name, true)?;
+        let opened = open_relative(parent_handle.as_raw_handle(), name, OpenRole::Destructive)?;
         if opened.identity.mount_id() != parent_entry.identity.mount_id() {
             return Err(ShredError::ValidationFailed(
                 "volume crossing detected while opening child".to_string(),
@@ -257,7 +265,7 @@ impl WindowsSecureTreeIo {
         let current_name = open_relative(
             parent_handle.as_raw_handle(),
             node_entry.name.as_os_str(),
-            false,
+            OpenRole::Traverse,
         )?;
         if current_name.identity != node_entry.identity {
             return Err(ShredError::ValidationFailed(
@@ -275,6 +283,21 @@ impl WindowsSecureTreeIo {
 struct OpenedComponent {
     handle: OwnedHandle,
     identity: NodeIdentity,
+}
+
+/// Access-rights role of a single relative component open.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpenRole {
+    /// Intermediate path component: traversal/read only, never DELETE.
+    Traverse,
+    /// Directory that hosts the no-replace rename of the root (its containing
+    /// directory): traversal plus rename-destination rights. Deliberately
+    /// omits DELETE so a directory pinned by the shell without
+    /// FILE_SHARE_DELETE can still be opened.
+    RenameParent,
+    /// The destructive root itself: full mutation access including DELETE,
+    /// which is inherent to destroying the selected root.
+    Destructive,
 }
 
 struct MutationTarget<'a> {
@@ -542,7 +565,7 @@ fn open_fixed_volume_root(root: &str) -> Result<OwnedHandle, ShredError> {
 fn open_relative(
     parent: RawHandle,
     component: &OsStr,
-    mutating: bool,
+    role: OpenRole,
 ) -> Result<OpenedComponent, ShredError> {
     let name = encode_component(component)?;
     let mut unicode = windows_sys::Win32::Foundation::UNICODE_STRING {
@@ -563,14 +586,31 @@ fn open_relative(
         Anonymous: IO_STATUS_BLOCK_0 { Status: 0 },
         Information: 0,
     };
-    let desired_access = FILE_READ_DATA
-        | FILE_READ_ATTRIBUTES
-        | SYNCHRONIZE
-        | if mutating {
-            FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES | DELETE
-        } else {
-            0
-        };
+    // Only the destructive root requests DELETE. Intermediates stay
+    // traversal/read-only and the root's containing directory adds exactly
+    // the rename-destination rights (FILE_ADD_FILE | FILE_DELETE_CHILD) the
+    // no-replace rename requires on its root_directory handle. Requesting
+    // DELETE on a directory held by the shell without FILE_SHARE_DELETE
+    // fails with STATUS_SHARING_VIOLATION, which is why the reduced
+    // containing-directory mask must never include DELETE. The base mask
+    // (FILE_READ_DATA == FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
+    // SYNCHRONIZE) covers enumeration, identity checks, and relative
+    // traversal; FILE_ADD_FILE (== FILE_WRITE_DATA) also satisfies
+    // FlushFileBuffers on the retained parent handle.
+    let desired_access = match role {
+        OpenRole::Traverse => FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        OpenRole::RenameParent => {
+            FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE | FILE_ADD_FILE | FILE_DELETE_CHILD
+        }
+        OpenRole::Destructive => {
+            FILE_READ_DATA
+                | FILE_READ_ATTRIBUTES
+                | SYNCHRONIZE
+                | FILE_WRITE_DATA
+                | FILE_WRITE_ATTRIBUTES
+                | DELETE
+        }
+    };
     let share_access = FILE_SHARE_READ_VALUE | FILE_SHARE_WRITE_VALUE | FILE_SHARE_DELETE_VALUE;
     // Synchronous handles only: the open-file shredder (and any other std
     // file I/O) issues synchronous ReadFile/WriteFile calls with a null
@@ -961,6 +1001,7 @@ mod tests {
     use crate::shredder::root_execution::SecureTreeIo;
     use std::ffi::OsStr;
     use std::fs;
+    use std::io::Write;
     use std::os::windows::fs::{symlink_dir, symlink_file};
     use std::path::Path;
 
@@ -1135,5 +1176,140 @@ mod tests {
         io.sync_parent(&root).expect("sync containing directory");
 
         assert!(!root_path.exists());
+    }
+
+    fn open_directory_handle(path: &Path, access: u32, share: u32) -> std::io::Result<OwnedHandle> {
+        let wide = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        // SAFETY: `wide` is NUL-terminated for the duration of the call and
+        // the returned handle is transferred to the caller exactly once.
+        let handle = unsafe {
+            windows::Win32::Storage::FileSystem::CreateFileW(
+                windows::core::PCWSTR(wide.as_ptr()),
+                access,
+                windows::Win32::Storage::FileSystem::FILE_SHARE_MODE(share),
+                None,
+                windows::Win32::Storage::FileSystem::OPEN_EXISTING,
+                windows::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS,
+                None,
+            )
+        }
+        .map_err(|error| {
+            // CreateFileW failures surface as HRESULT_FROM_WIN32 codes; the
+            // low word is the Win32 error (e.g. ERROR_SHARING_VIOLATION).
+            std::io::Error::from_raw_os_error(error.code().0 & 0xFFFF)
+        })?;
+        if handle.0 == INVALID_HANDLE_VALUE || handle.0.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: CreateFileW returned a valid owned handle exactly once.
+        Ok(unsafe { OwnedHandle::from_raw_handle(handle.0 as RawHandle) })
+    }
+
+    /// Holds `path` open like the shell does: a share mode that excludes
+    /// FILE_SHARE_DELETE, so any open requesting DELETE must be rejected.
+    fn pin_directory_without_delete_share(path: &Path) -> OwnedHandle {
+        let share = windows::Win32::Storage::FileSystem::FILE_SHARE_READ.0
+            | windows::Win32::Storage::FileSystem::FILE_SHARE_WRITE.0;
+        let access = windows::Win32::Storage::FileSystem::FILE_GENERIC_READ.0
+            | windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE.0;
+        open_directory_handle(path, access, share).expect("pin directory without FILE_SHARE_DELETE")
+    }
+
+    /// Proves the pin is effective: opening the pinned directory with DELETE
+    /// must fail with ERROR_SHARING_VIOLATION, so any adapter success below
+    /// demonstrates DELETE was never requested on the pinned directory.
+    fn assert_delete_open_of_pinned_directory_is_rejected(path: &Path) {
+        let share = windows::Win32::Storage::FileSystem::FILE_SHARE_READ.0
+            | windows::Win32::Storage::FileSystem::FILE_SHARE_WRITE.0;
+        let access = windows::Win32::Storage::FileSystem::FILE_GENERIC_READ.0
+            | windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE.0
+            | DELETE;
+        let error = open_directory_handle(path, access, share)
+            .expect_err("opening the pinned directory with DELETE must fail");
+        assert_eq!(
+            error.raw_os_error(),
+            Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32),
+            "expected a sharing violation, got {error}"
+        );
+    }
+
+    /// Mirrors the file-root destruction sequence of the execution pipeline
+    /// (overwrite, no-replace rename, disposition delete) through the real
+    /// Windows adapter.
+    fn execute_file_root_through_real_adapter(io: &WindowsSecureTreeIo, file_path: &Path) {
+        let root = io
+            .open_root_nofollow(file_path)
+            .expect("open file root through the real adapter");
+        assert_eq!(
+            io.identity(&root.as_node()).expect("root identity").kind(),
+            NodeKind::RegularFile
+        );
+
+        let mut file = io
+            .open_regular_for_shred(&root.as_node())
+            .expect("open regular file for shred");
+        file.write_all(&[0u8; 8192]).expect("overwrite pass");
+        file.flush().expect("flush overwrite pass");
+        drop(file);
+
+        let obliterated = OsString::from(".knockknock-regression");
+        io.rename_noreplace(&root, &root.as_node(), &obliterated)
+            .expect("no-replace rename inside pinned directory");
+        io.unlink_leaf(&root, &root.as_node())
+            .expect("disposition delete of renamed file root");
+    }
+
+    #[test]
+    fn pinned_containing_directory_is_never_opened_with_delete() {
+        let fixture = tempfile::tempdir().expect("temporary fixture");
+        let pinned = fixture.path().join("pinned");
+        fs::create_dir(&pinned).expect("pinned directory");
+        let file_path = pinned.join("secret.txt");
+        fs::write(&file_path, b"top secret").expect("target file");
+
+        let _pin = pin_directory_without_delete_share(&pinned);
+        assert_delete_open_of_pinned_directory_is_rejected(&pinned);
+
+        execute_file_root_through_real_adapter(&WindowsSecureTreeIo::new(), &file_path);
+
+        assert!(!file_path.exists(), "file root must be destroyed");
+        assert!(pinned.exists(), "pinned containing directory must survive");
+        assert_eq!(
+            fs::read_dir(&pinned)
+                .expect("read pinned directory")
+                .count(),
+            0,
+            "pinned directory must be empty after destruction"
+        );
+    }
+
+    #[test]
+    fn pinned_intermediate_ancestor_allows_deeper_file_root_destruction() {
+        let fixture = tempfile::tempdir().expect("temporary fixture");
+        let pinned = fixture.path().join("pinned");
+        fs::create_dir(&pinned).expect("pinned directory");
+        let level = pinned.join("level");
+        fs::create_dir(&level).expect("intermediate directory");
+        let file_path = level.join("deep.txt");
+        fs::write(&file_path, b"deep secret").expect("deep target file");
+
+        let _pin = pin_directory_without_delete_share(&pinned);
+        assert_delete_open_of_pinned_directory_is_rejected(&pinned);
+
+        execute_file_root_through_real_adapter(&WindowsSecureTreeIo::new(), &file_path);
+
+        assert!(!file_path.exists(), "deeper file root must be destroyed");
+        assert!(pinned.exists(), "pinned intermediate ancestor must survive");
+        assert_eq!(
+            fs::read_dir(&level)
+                .expect("read intermediate directory")
+                .count(),
+            0,
+            "intermediate directory must be empty"
+        );
     }
 }
