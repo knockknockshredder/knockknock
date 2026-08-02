@@ -9,6 +9,7 @@ export interface ShredFile {
   size: number;
   status: "pending" | "shredding" | "done" | "error";
   error?: string;
+  kind: TargetKind;
   is_shortcut: boolean;
   shortcut_target: string | null;
   /** Per-root status from the last typed execution result (retained targets only). */
@@ -19,14 +20,18 @@ export interface ShredFile {
 
 /**
  * Metadata returned by the Rust `validate_paths` command.
- * `is_shortcut` flags `.lnk` shell shortcuts, NTFS symlinks, junctions,
- * and Unix symlinks. `shortcut_target` is the resolved target path when
- * classification found one (null for normal files).
+ * `kind` is the classification the shredder will see: `directory` for a
+ * preserved folder root, `link` for real filesystem links, `file` for regular
+ * files and `.lnk` shell shortcuts (file data). `is_shortcut` flags `.lnk`
+ * shell shortcuts, NTFS symlinks, junctions, and Unix symlinks. `shortcut_target`
+ * is the resolved target path when classification found one (null for normal
+ * files and directories).
  */
 export interface FileMetadata {
   path: string;
   name: string;
   size: number;
+  kind: TargetKind;
   is_shortcut: boolean;
   shortcut_target: string | null;
 }

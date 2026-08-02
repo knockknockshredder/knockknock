@@ -84,11 +84,12 @@ function renderContext() {
   );
 }
 
-function readyFile(path: string) {
+function readyFile(path: string, kind: TargetKind = "file") {
   return {
     path,
     name: path.split("\\")[path.split("\\").length - 1] ?? path,
     size: 1,
+    kind,
     is_shortcut: false,
     shortcut_target: null,
   };
@@ -487,6 +488,11 @@ describe("typed execution results", () => {
       path,
       name: path.split("\\")[path.split("\\").length - 1] ?? path,
       size: 1,
+      // Backend `validate_paths` kinds `.lnk` shell shortcuts as file data
+      // and real filesystem links as `link`; the fixture mirrors that.
+      kind: path.toLowerCase().endsWith(".lnk")
+        ? ("file" as const)
+        : ("link" as const),
       is_shortcut: true,
       shortcut_target: target,
     };
@@ -550,6 +556,22 @@ describe("typed execution results", () => {
     expect(request.roots.some((root) => root.path === "C:\\blocked.txt")).toBe(
       false
     );
+  });
+
+  it("carries a directory kind from added metadata onto the visible model and the execute request", async () => {
+    renderContext();
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+    await act(async () => {
+      latest.addFiles([readyFile("C:\\folder", "directory")]);
+    });
+
+    const visible = latest.files.find((file) => file.path === "C:\\folder")!;
+    expect(visible.kind).toBe("directory");
+    const request = latest.buildExecuteRootsRequest();
+    expect(request.roots).toHaveLength(1);
+    expect(request.roots[0].kind).toBe("directory");
   });
 
   it("removes only destroyed roots with root_removed and retains the rest with details", async () => {

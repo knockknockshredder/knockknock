@@ -53,6 +53,7 @@ function readyFile(path: string) {
     path,
     name: path,
     size: 1,
+    kind: "file" as const,
     is_shortcut: false,
     shortcut_target: null,
   };

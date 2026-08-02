@@ -6,7 +6,7 @@ use crate::shredder::cancel::CancellationToken;
 use crate::shredder::journal::JournalStore;
 use crate::shredder::logging::LogObfuscation;
 use crate::shredder::progress::TauriProgressReporter;
-use crate::shredder::root_execution::types::{BatchRootResult, ExecuteRootsRequest};
+use crate::shredder::root_execution::types::{BatchRootResult, ExecuteRootsRequest, TargetKind};
 use crate::shredder::root_execution::{execute_roots as run_roots, SecureTreeIo};
 use crate::shredder::traits::ProgressReporter;
 use crate::shredder::types::*;
@@ -224,13 +224,16 @@ pub fn get_algorithms() -> Vec<AlgorithmInfo> {
         .collect()
 }
 
-/// Collect metadata for a single path.
+/// Collect metadata for a single file path.
 ///
-/// `is_shortcut` and `shortcut_target` are populated only when the caller
-/// passed a non-`Normal` classification. Normal files pass `false, None`.
+/// `kind` is the classification surfaced to the frontend (see
+/// `FileMetadata`). `is_shortcut` and `shortcut_target` are populated only
+/// when the caller passed a non-`Normal` classification. Normal files pass
+/// `false, None`.
 fn collect_file_metadata(
     path: &std::path::Path,
     path_str: &str,
+    kind: TargetKind,
     is_shortcut: bool,
     shortcut_target: Option<String>,
 ) -> Option<FileMetadata> {
@@ -252,82 +255,10 @@ fn collect_file_metadata(
         path: path_str.to_string(),
         name,
         size: metadata.len(),
+        kind,
         is_shortcut,
         shortcut_target,
     })
-}
-
-/// Recursively collect all files from a directory, classifying each entry.
-fn collect_files_from_dir(
-    dir: &std::path::Path,
-    valid: &mut Vec<FileMetadata>,
-    errors: &mut Vec<String>,
-    depth: usize,
-) {
-    const MAX_DEPTH: usize = 50;
-    if depth > MAX_DEPTH {
-        errors.push(format!(
-            "Max directory depth ({}) exceeded at: {:?}",
-            MAX_DEPTH, dir
-        ));
-        return;
-    }
-
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) => {
-            errors.push(format!("Cannot read directory {:?}: {}", dir, e));
-            return;
-        }
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-
-        // Classify first â€” shortcuts are surfaced in `valid` with their
-        // resolved target rather than silently skipped. A symlink-to-directory
-        // would short-circuit here and never recurse, which is the desired
-        // safety behaviour.
-        let classification = match classify_path(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                errors.push(format!("Cannot classify {:?}: {}", path, e));
-                continue;
-            }
-        };
-
-        match classification {
-            PathClassification::Shortcut { target } => {
-                let path_str = path.to_string_lossy().to_string();
-                if let Some(meta) = collect_file_metadata(
-                    &path,
-                    &path_str,
-                    true,
-                    Some(target.to_string_lossy().to_string()),
-                ) {
-                    valid.push(meta);
-                }
-            }
-            PathClassification::Normal => {
-                let metadata = match std::fs::symlink_metadata(&path) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        errors.push(format!("Cannot stat {:?}: {}", path, e));
-                        continue;
-                    }
-                };
-
-                if metadata.file_type().is_file() {
-                    let path_str = path.to_string_lossy().to_string();
-                    if let Some(meta) = collect_file_metadata(&path, &path_str, false, None) {
-                        valid.push(meta);
-                    }
-                } else if metadata.file_type().is_dir() {
-                    collect_files_from_dir(&path, valid, errors, depth + 1);
-                }
-            }
-        }
-    }
 }
 
 #[tauri::command]
@@ -340,7 +271,7 @@ pub fn validate_paths(paths: Vec<String>) -> Result<(Vec<FileMetadata>, Vec<Stri
         // Classify via the same logic the shredder uses, so the metadata
         // surfaced to the UI matches what the shredder will see. A
         // classification error (e.g. file disappeared between selection and
-        // validation) is silently skipped â€” `validate_path` already reports
+        // validation) is silently skipped — `validate_path` already reports
         // hard failures during shred.
         let classification = match classify_path(path) {
             Ok(c) => c,
@@ -349,12 +280,20 @@ pub fn validate_paths(paths: Vec<String>) -> Result<(Vec<FileMetadata>, Vec<Stri
 
         match classification {
             PathClassification::Shortcut { target } => {
-                // Surface the shortcut with its resolved target. The frontend
+                // Surface the shortcut with its resolved target. Link policy:
+                // `.lnk` shell shortcuts are ordinary file data (kind `File`),
+                // while real filesystem links (Unix symlinks, NTFS symlinks,
+                // junctions) stay non-executable (kind `Link`). The frontend
                 // uses `is_shortcut` to render the warning badge and
                 // `shortcut_target` for the tooltip.
+                let kind = match std::fs::symlink_metadata(path) {
+                    Ok(meta) if meta.file_type().is_symlink() => TargetKind::Link,
+                    _ => TargetKind::File,
+                };
                 if let Some(meta) = collect_file_metadata(
                     path,
                     &path_str,
+                    kind,
                     true,
                     Some(target.to_string_lossy().to_string()),
                 ) {
@@ -362,19 +301,35 @@ pub fn validate_paths(paths: Vec<String>) -> Result<(Vec<FileMetadata>, Vec<Stri
                 }
             }
             PathClassification::Normal => {
-                // `Normal` covers both files and directories. Recurse into
-                // directories; treat plain files as shred candidates.
+                // `Normal` covers both files and directories. Files become
+                // shred candidates; a selected directory root is preserved as
+                // a single `Directory` record so the frontend can render it as
+                // a folder. Recursion happens only inside `execute_roots` with
+                // the trusted adapters.
                 let sym_meta = match std::fs::symlink_metadata(path) {
                     Ok(m) => m,
                     Err(_) => continue,
                 };
 
                 if sym_meta.file_type().is_file() {
-                    if let Some(meta) = collect_file_metadata(path, &path_str, false, None) {
+                    if let Some(meta) =
+                        collect_file_metadata(path, &path_str, TargetKind::File, false, None)
+                    {
                         valid.push(meta);
                     }
                 } else if sym_meta.file_type().is_dir() {
-                    collect_files_from_dir(path, &mut valid, &mut errors, 0);
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    valid.push(FileMetadata {
+                        path: path_str,
+                        name,
+                        size: sym_meta.len(),
+                        kind: TargetKind::Directory,
+                        is_shortcut: false,
+                        shortcut_target: None,
+                    });
                 }
             }
         }
@@ -804,6 +759,49 @@ mod tests {
         assert!(metadata
             .iter()
             .all(|entry| entry.availability == TargetAvailability::Blocked));
+    }
+
+    #[test]
+    fn validate_paths_preserves_directory_roots_without_flattening() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let dir = temp.path().join("folder");
+        std::fs::create_dir(&dir).expect("create directory");
+        std::fs::write(dir.join("nested.txt"), b"nested").expect("write nested fixture");
+        std::fs::write(dir.join("deep.txt"), b"deep").expect("write deep fixture");
+        let file = temp.path().join("file.txt");
+        std::fs::write(&file, b"data").expect("write file fixture");
+
+        let (valid, errors) = super::validate_paths(vec![
+            dir.to_string_lossy().into_owned(),
+            file.to_string_lossy().into_owned(),
+        ])
+        .expect("validate paths command");
+
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+        assert_eq!(
+            valid.len(),
+            2,
+            "a selected directory must yield one root record, not its files"
+        );
+
+        let dir_meta = valid
+            .iter()
+            .find(|entry| entry.path == dir.to_string_lossy().as_ref())
+            .expect("directory root record");
+        assert_eq!(dir_meta.kind, TargetKind::Directory);
+        assert_eq!(dir_meta.name, "folder");
+        assert!(!dir_meta.is_shortcut);
+        assert!(dir_meta.shortcut_target.is_none());
+
+        let file_meta = valid
+            .iter()
+            .find(|entry| entry.path == file.to_string_lossy().as_ref())
+            .expect("file record");
+        assert_eq!(file_meta.kind, TargetKind::File);
+        assert_eq!(file_meta.size, 4);
     }
 
     #[test]

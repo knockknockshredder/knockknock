@@ -83,16 +83,6 @@ function toError(reason: unknown): Error {
   return reason instanceof Error ? reason : new Error(String(reason));
 }
 
-function targetKindForFile(file: FileMetadata): TargetKind {
-  // `.lnk` shell shortcuts and Finder aliases are ordinary file data — the
-  // OS-level link policy only applies to actual filesystem links (Unix
-  // symlinks, NTFS symlinks, junctions), which `is_shortcut` also flags.
-  if (file.is_shortcut && !file.path.toLowerCase().endsWith(".lnk")) {
-    return "link";
-  }
-  return "file";
-}
-
 function formatRootResultError(result: RootResultDto): string {
   const details = result.errors
     .map((error) => `${error.stage}: ${error.message}`)
@@ -137,13 +127,14 @@ export function ShredProvider({ children }: { children: ReactNode }) {
       for (const entry of newEntries) {
         if (existingPaths.has(entry.path)) continue;
         existingPaths.add(entry.path);
-        targetKindsRef.current.set(entry.path, targetKindForFile(entry));
+        targetKindsRef.current.set(entry.path, entry.kind);
         additions.push({
           id: crypto.randomUUID(),
           path: entry.path,
           name: entry.name,
           size: entry.size,
           status: "pending",
+          kind: entry.kind,
           is_shortcut: entry.is_shortcut,
           shortcut_target: entry.shortcut_target,
         });
@@ -197,7 +188,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
       const targets = Object.freeze(
         source.map((file) => ({
           path: file.path,
-          kind: targetKindsRef.current.get(file.path) ?? targetKindForFile(file),
+          kind: targetKindsRef.current.get(file.path) ?? file.kind,
         }))
       );
       return Object.freeze({ revision, pinEpoch, pin, targets });
@@ -511,6 +502,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         entry.availability === "ready"
           ? undefined
           : entry.reason ?? `Target is ${entry.availability}`,
+      kind: entry.kind,
       is_shortcut: entry.kind === "link",
       shortcut_target: null,
     }));
@@ -613,7 +605,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
       .map((file) => ({
         target_id: file.id,
         path: file.path,
-        kind: targetKindsRef.current.get(file.path) ?? targetKindForFile(file),
+        kind: targetKindsRef.current.get(file.path) ?? file.kind,
       }));
     return { roots };
   }, []);
@@ -672,6 +664,12 @@ export function ShredProvider({ children }: { children: ReactNode }) {
             root_status: "destroyed" as const,
             child_errors: [] as ChildErrorDto[],
           }));
+        // The destroyed roots' kind entries were dropped above; restore them
+        // so `targetKindsRef` and the visible model stay in agreement when
+        // the rollback triggers the next snapshot.
+        for (const file of restored) {
+          targetKindsRef.current.set(file.path, file.kind);
+        }
         const rolledBack = [...next, ...restored];
         filesRef.current = rolledBack;
         setFiles(rolledBack);
