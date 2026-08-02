@@ -1,6 +1,6 @@
 // src-tauri/src/commands/error.rs
 
-use crate::shredder::errors::ShredError;
+use crate::shredder::errors::{JournalError, ShredError};
 use serde::Serialize;
 
 /// IPC-safe error payload returned to the React frontend.
@@ -29,6 +29,34 @@ impl From<&ShredError> for ShredErrorDto {
             path,
             actionable,
         }
+    }
+}
+
+impl From<&JournalError> for ShredErrorDto {
+    fn from(err: &JournalError) -> Self {
+        let message = err.to_string();
+        let path = err.path().map(|path| path.to_string_lossy().into_owned());
+        let error_type = match err {
+            JournalError::Io { .. } => "JournalIo",
+            JournalError::Serialize(_) => "JournalSerialize",
+            JournalError::Decode { .. } => "JournalDecode",
+            JournalError::LegacyRecord { .. } => "JournalLegacyRecord",
+            JournalError::IdentityMismatch { .. } => "JournalIdentityMismatch",
+            JournalError::UnsafeParent { .. } => "JournalUnsafeParent",
+            JournalError::RecordNotFound { .. } => "JournalRecordNotFound",
+        };
+        ShredErrorDto {
+            error_type: error_type.to_string(),
+            message,
+            path,
+            actionable: "Preserve the containing directory and resolve the journal error before retrying; no unverified recovery deletion was performed".to_string(),
+        }
+    }
+}
+
+impl From<JournalError> for ShredErrorDto {
+    fn from(err: JournalError) -> Self {
+        (&err).into()
     }
 }
 
@@ -183,5 +211,17 @@ mod tests {
                 dto.error_type
             );
         }
+    }
+
+    #[test]
+    fn journal_error_maps_to_actionable_ipc_output() {
+        let err = JournalError::LegacyRecord {
+            path: PathBuf::from("C:\\journal.json"),
+        };
+        let dto: ShredErrorDto = (&err).into();
+
+        assert_eq!(dto.error_type, "JournalLegacyRecord");
+        assert_eq!(dto.path.as_deref(), Some("C:\\journal.json"));
+        assert!(dto.actionable.contains("recovery deletion"));
     }
 }

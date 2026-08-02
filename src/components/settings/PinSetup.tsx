@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Lock, WarningCircle } from "@phosphor-icons/react";
+import { useShred } from "@/contexts/ShredContext";
 import {
   Dialog,
   DialogContent,
@@ -26,13 +27,14 @@ interface PinSetupProps {
   /** Called after the backend confirms `setup_pin` / `change_pin`. The
    *  argument is the newly-active PIN so callers can update any cached
    *  copies (e.g. the vault auto-save key) without re-prompting. */
-  onPinSet: (newPin: string) => void;
+  onPinSet: (newPin: string, durabilityWarning?: string) => void;
   /** When true, an "Old PIN" field is shown and `change_pin` is called
    *  instead of `setup_pin` so the vault gets re-encrypted. */
   requireOldPin?: boolean;
 }
 
 export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }: PinSetupProps) {
+  const { changeVaultPin } = useShred();
   const [oldPin, setOldPin] = useState("");
   const [pin, setPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
@@ -72,12 +74,14 @@ export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }
 
     setSubmitting(true);
     try {
+      let durabilityWarning: string | undefined;
       if (requireOldPin) {
-        await invoke<void>("change_pin", { oldPin, newPin: pin });
+        const outcome = await changeVaultPin(oldPin, pin);
+        durabilityWarning = outcome.durability_warning ?? undefined;
       } else {
         await invoke<void>("setup_pin", { newPin: pin });
       }
-      onPinSet(pin);
+      onPinSet(pin, durabilityWarning);
       onOpenChange(false);
     } catch (err) {
       setError(String(err));

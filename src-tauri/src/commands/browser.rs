@@ -13,7 +13,10 @@ pub async fn detect_browsers() -> Result<Vec<DetectedBrowser>, String> {
     let result = tokio::task::spawn_blocking(|| browser::detection::detect_browsers())
         .await
         .map_err(|e| format!("Detection panicked: {:?}", e))?;
-    eprintln!("[detect_browsers command] returning {} browsers", result.len());
+    eprintln!(
+        "[detect_browsers command] returning {} browsers",
+        result.len()
+    );
     Ok(result)
 }
 
@@ -94,7 +97,6 @@ pub async fn shred_browser_data(
             request.pattern,
             request.verification_level,
             progress,
-            false,
         )
     })
     .await

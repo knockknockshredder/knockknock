@@ -3,6 +3,12 @@
 use crate::shredder::errors::ShredError;
 use serde::{Deserialize, Serialize};
 
+pub use crate::shredder::root_execution::types::{
+    BatchRootResult, ChildErrorDto, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage,
+    RootResultDto, RootStatus, TargetAvailability, TargetKind, TargetMetadataDto, VaultError,
+    VaultSchemaSource, VaultTarget,
+};
+
 /// Byte patterns for overwriting
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -102,9 +108,13 @@ pub enum VerificationLevel {
     Full,
 }
 
-/// Metadata returned to the frontend for each file discovered during
+/// Metadata returned to the frontend for each path discovered during
 /// `validate_paths`.
 ///
+/// `kind` is the same classification the shredder uses: `Directory` for a
+/// selected directory root (preserved as one record, never flattened),
+/// `Link` for real filesystem links (Unix symlinks, NTFS symlinks, junctions),
+/// and `File` for regular files and `.lnk` shell shortcuts (file data).
 /// `is_shortcut` flags `.lnk` shell shortcuts, NTFS symlinks, junctions, and
 /// Unix symlinks — any path whose target would survive the link's destruction.
 /// `shortcut_target` is the resolved target path when classification found one.
@@ -113,6 +123,7 @@ pub struct FileMetadata {
     pub path: String,
     pub name: String,
     pub size: u64,
+    pub kind: TargetKind,
     pub is_shortcut: bool,
     pub shortcut_target: Option<String>,
 }

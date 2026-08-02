@@ -4,6 +4,7 @@ import type { ProgressState } from "@/types";
 
 interface ShredButtonProps {
   fileCount: number;
+  folderCount: number;
   profileCount: number;
   isShredding: boolean;
   onClick: () => void;
@@ -13,6 +14,7 @@ interface ShredButtonProps {
 
 export function ShredButton({
   fileCount,
+  folderCount,
   profileCount,
   isShredding,
   onClick,
@@ -20,8 +22,10 @@ export function ShredButton({
   progress,
 }: ShredButtonProps) {
   const hasFiles = fileCount > 0;
+  const hasFolders = folderCount > 0;
   const hasProfiles = profileCount > 0;
-  const disabled = (!hasFiles && !hasProfiles) || isShredding;
+  const disabled =
+    (!hasFiles && !hasFolders && !hasProfiles) || isShredding;
 
   if (isShredding) {
     return (
@@ -50,13 +54,21 @@ export function ShredButton({
     );
   }
 
+  const countParts: string[] = [];
+  if (hasFiles) {
+    countParts.push(`${fileCount} file${fileCount !== 1 ? "s" : ""}`);
+  }
+  if (hasFolders) {
+    countParts.push(`${folderCount} folder${folderCount !== 1 ? "s" : ""}`);
+  }
+  if (hasProfiles) {
+    countParts.push(`${profileCount} profile${profileCount !== 1 ? "s" : ""}`);
+  }
+
   let label: string;
-  if (hasFiles && hasProfiles) {
-    label = `Shred Selected (${fileCount} file${fileCount !== 1 ? "s" : ""} + ${profileCount} profile${profileCount !== 1 ? "s" : ""})`;
-  } else if (hasFiles) {
-    label = `Shred Selected (${fileCount} file${fileCount !== 1 ? "s" : ""})`;
-  } else if (hasProfiles) {
-    label = `Clean Selected (${profileCount} profile${profileCount !== 1 ? "s" : ""})`;
+  if (countParts.length > 0) {
+    const action = hasFiles || hasFolders ? "Shred Selected" : "Clean Selected";
+    label = `${action} (${countParts.join(" + ")})`;
   } else {
     label = "Nothing to shred";
   }
@@ -76,7 +88,7 @@ export function ShredButton({
       >
         {label}
       </button>
-      {(hasFiles || hasProfiles) && !isShredding && (
+      {(hasFiles || hasFolders || hasProfiles) && !isShredding && (
         <p className="font-mono text-xs text-muted-foreground">
           this action is irreversible
         </p>

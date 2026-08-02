@@ -1,5 +1,7 @@
 // src-tauri/src/shredder/errors.rs
 
+use serde::Serialize;
+use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -49,6 +51,48 @@ impl ShredError {
             path,
             kind: format!("{:?}", error.kind()),
             message: error.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Error, Serialize)]
+pub enum JournalError {
+    #[error("journal I/O failed while {operation} at {path}: {message}")]
+    Io {
+        operation: &'static str,
+        path: PathBuf,
+        message: String,
+    },
+
+    #[error("journal serialization failed: {0}")]
+    Serialize(String),
+
+    #[error("journal decode failed at {path}: {message}")]
+    Decode { path: PathBuf, message: String },
+
+    #[error("legacy path-only journal record at {path} is not trusted for recovery")]
+    LegacyRecord { path: PathBuf },
+
+    #[error("journal record identity mismatch at {path}: {reason}")]
+    IdentityMismatch { path: PathBuf, reason: String },
+
+    #[error("journal record has an unsafe recovery parent: {path}: {reason}")]
+    UnsafeParent { path: PathBuf, reason: String },
+
+    #[error("journal record was not found while clearing: {path}")]
+    RecordNotFound { path: PathBuf },
+}
+
+impl JournalError {
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Self::Io { path, .. }
+            | Self::Decode { path, .. }
+            | Self::LegacyRecord { path }
+            | Self::IdentityMismatch { path, .. }
+            | Self::UnsafeParent { path, .. }
+            | Self::RecordNotFound { path } => Some(path),
+            Self::Serialize(_) => None,
         }
     }
 }

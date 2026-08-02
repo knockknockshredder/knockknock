@@ -2,7 +2,9 @@
 
 pub mod config;
 
+use crate::vault::storage::RekeyOutcome;
 use bcrypt::{hash, verify, DEFAULT_COST};
+use serde::Serialize;
 use std::sync::{LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -38,6 +40,11 @@ impl PinState {
             lockout_until_unix: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PinChangeOutcome {
+    pub durability_warning: Option<String>,
 }
 
 static PIN_STATE: LazyLock<Mutex<PinState>> = LazyLock::new(|| Mutex::new(PinState::new()));
@@ -201,17 +208,35 @@ pub fn lockout_remaining() -> Result<Option<u64>, String> {
 /// (and not in a lockout window). The new PIN hash is written before the
 /// vault is re-encrypted, then restored if rekeying fails so the user can
 /// still unlock with the old PIN.
-pub fn change_pin(old_pin: String, new_pin: String) -> Result<(), String> {
+pub fn change_pin(old_pin: String, new_pin: String) -> Result<PinChangeOutcome, String> {
+    change_pin_with_rekey(old_pin, new_pin, |old, new| {
+        crate::vault::storage::rekey(old, new).map_err(String::from)
+    })
+}
+
+fn change_pin_with_rekey(
+    old_pin: String,
+    new_pin: String,
+    rekey: impl FnOnce(&str, &str) -> Result<RekeyOutcome, String>,
+) -> Result<PinChangeOutcome, String> {
     let old_hash = config::load_pin_hash()?.ok_or_else(|| "No PIN configured".to_string())?;
     // Step 1: write new hash (after verifying old PIN matches).
     setup_pin(Some(&old_pin), &new_pin)?;
     // Step 2: rekey vault to new PIN.
-    if let Err(e) = crate::vault::storage::rekey(&old_pin, &new_pin) {
-        // Rollback: restore old hash so user can still unlock.
-        let _ = config::save_pin_hash(&old_hash);
-        return Err(e);
-    }
-    Ok(())
+    let outcome = match rekey(&old_pin, &new_pin) {
+        Ok(outcome) => outcome,
+        Err(rekey_error) => {
+            if let Err(rollback_error) = config::save_pin_hash(&old_hash) {
+                return Err(format!(
+                    "PIN rekey failed: {rekey_error}; PIN hash rollback failed: {rollback_error}"
+                ));
+            }
+            return Err(rekey_error);
+        }
+    };
+    Ok(PinChangeOutcome {
+        durability_warning: outcome.durability_warning,
+    })
 }
 
 fn clear_app_state() -> Result<(), String> {
@@ -329,6 +354,8 @@ pub fn disable_pin(current_pin: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shredder::root_execution::types::{TargetKind, VaultTarget};
+    use crate::vault::storage::RekeyOutcome;
 
     // NOTE: tests touch the on-disk config dir. `bcrypt` hashing is
     // intentionally slow (~100ms with DEFAULT_COST) so these tests
@@ -495,7 +522,14 @@ mod tests {
         reset_state();
         setup_pin(None, "654321").unwrap();
         set_pin_enabled("654321", true).unwrap();
-        crate::vault::storage::save(&["C:\\pending.txt".to_string()], "654321").unwrap();
+        let targets = [VaultTarget {
+            path: "C:\\pending.txt".to_string(),
+            kind: TargetKind::File,
+        }];
+        crate::vault::storage::VaultStore::production()
+            .unwrap()
+            .save_v2(&targets, "654321")
+            .unwrap();
 
         {
             let mut guard = PIN_STATE.lock().unwrap();
@@ -527,6 +561,64 @@ mod tests {
         // Original PIN still works
         assert_eq!(verify_pin("111111").unwrap(), true);
         assert_eq!(verify_pin("222222").unwrap(), false);
+
+        reset_state();
+    }
+
+    #[test]
+    fn change_pin_rolls_back_hash_when_rekey_fails() {
+        reset_state();
+        setup_pin(None, "111111").unwrap();
+
+        let error = change_pin_with_rekey("111111".to_string(), "222222".to_string(), |_, _| {
+            Err("injected rekey failure".to_string())
+        })
+        .expect_err("rekey failure must fail PIN change");
+
+        assert_eq!(error, "injected rekey failure");
+        assert!(verify_pin("111111").unwrap());
+        assert!(!verify_pin("222222").unwrap());
+
+        reset_state();
+    }
+
+    #[test]
+    fn change_pin_rolls_back_hash_when_vault_load_fails() {
+        reset_state();
+        crate::vault::storage::clear().unwrap();
+        setup_pin(None, "111111").unwrap();
+        let store = crate::vault::storage::VaultStore::production().unwrap();
+        std::fs::write(store.path(), b"corrupt vault").unwrap();
+
+        let error = change_pin("111111".to_string(), "222222".to_string())
+            .expect_err("vault load failure must fail PIN change");
+
+        assert!(error.contains("Decode error"));
+        assert!(verify_pin("111111").unwrap());
+        assert!(!verify_pin("222222").unwrap());
+
+        crate::vault::storage::clear().unwrap();
+        reset_state();
+    }
+
+    #[test]
+    fn change_pin_keeps_new_hash_for_committed_rekey_warning() {
+        reset_state();
+        setup_pin(None, "111111").unwrap();
+
+        let outcome = change_pin_with_rekey("111111".to_string(), "222222".to_string(), |_, _| {
+            Ok(RekeyOutcome {
+                durability_warning: Some("durability sync failed after commit".to_string()),
+            })
+        })
+        .expect("committed rekey warning must not roll back the PIN");
+
+        assert_eq!(
+            outcome.durability_warning.as_deref(),
+            Some("durability sync failed after commit")
+        );
+        assert!(!verify_pin("111111").unwrap());
+        assert!(verify_pin("222222").unwrap());
 
         reset_state();
     }

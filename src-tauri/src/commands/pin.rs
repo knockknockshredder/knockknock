@@ -46,7 +46,10 @@ pub fn get_lockout_remaining() -> Result<u64, String> {
 }
 
 #[tauri::command]
-pub async fn change_pin(old_pin: String, new_pin: String) -> Result<(), String> {
+pub async fn change_pin(
+    old_pin: String,
+    new_pin: String,
+) -> Result<crate::pin::PinChangeOutcome, String> {
     tokio::task::spawn_blocking(move || pin::change_pin(old_pin, new_pin))
         .await
         .map_err(|e| format!("Task panicked: {:?}", e))?

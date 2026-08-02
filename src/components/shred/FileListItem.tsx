@@ -1,6 +1,12 @@
 // src/components/shred/FileListItem.tsx
 import { useState } from "react";
-import { X, CheckCircle, Spinner, WarningCircle } from "@phosphor-icons/react";
+import {
+  X,
+  CheckCircle,
+  Folder,
+  Spinner,
+  WarningCircle,
+} from "@phosphor-icons/react";
 import { useShred } from "@/contexts/ShredContext";
 import type { ShredFile } from "@/types";
 import { ElevationPrompt } from "@/components/settings/ElevationPrompt";
@@ -39,14 +45,26 @@ export function FileListItem({ file }: { file: ShredFile }) {
   const { removeFile } = useShred();
   const [elevationOpen, setElevationOpen] = useState(false);
 
+  const isDirectory = file.kind === "directory";
+  // Retained failed roots carry a root_status from applyRootResults. A
+  // blocked or missing target was never executed, so elevation cannot fix
+  // it — the Retry-as-admin offer is only valid for execution failures.
+  const hasExecutionResult = file.root_status !== undefined;
   const showElevation =
-    file.status === "error" && isPermissionDeniedError(file.error);
+    file.status === "error" &&
+    hasExecutionResult &&
+    isPermissionDeniedError(file.error);
+
+  const firstChildError = file.child_errors?.[0];
 
   return (
     <div className="flex items-center gap-3 border-b border-border bg-surface px-4 py-2 hover:bg-elevated">
       <StatusIcon status={file.status} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1 min-w-0">
+          {isDirectory && (
+            <Folder size={14} className="shrink-0 text-muted-foreground" />
+          )}
           <p className="truncate font-mono text-sm text-foreground">{file.name}</p>
           {file.is_shortcut && (
             <span
@@ -62,16 +80,41 @@ export function FileListItem({ file }: { file: ShredFile }) {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <p className="font-mono text-xs text-muted-foreground">
-            {file.size > 0
-              ? file.size > 1073741824
-                ? `${(file.size / 1073741824).toFixed(2)} GB`
-                : `${(file.size / 1048576).toFixed(1)} MB`
-              : "—"}
-          </p>
-          {file.error && (
-            <p className="truncate text-xs text-red-500">{file.error}</p>
+          {isDirectory ? (
+            <p className="font-mono text-xs text-muted-foreground">folder</p>
+          ) : (
+            <p className="font-mono text-xs text-muted-foreground">
+              {file.size > 0
+                ? file.size > 1073741824
+                  ? `${(file.size / 1073741824).toFixed(2)} GB`
+                  : `${(file.size / 1048576).toFixed(1)} MB`
+                : "—"}
+            </p>
           )}
+          {file.status === "error" && !hasExecutionResult && file.error && (
+            <p className="truncate text-xs font-medium text-red-500">
+              {file.error}
+            </p>
+          )}
+          {file.status === "error" &&
+            hasExecutionResult &&
+            (firstChildError ? (
+              <>
+                <p className="truncate text-xs text-red-500">
+                  <span className="font-medium uppercase">{file.root_status}</span>
+                  : {firstChildError.message}
+                </p>
+                {firstChildError.actionable && (
+                  <p className="truncate text-xs text-red-500/80">
+                    {firstChildError.actionable}
+                  </p>
+                )}
+              </>
+            ) : (
+              file.error && (
+                <p className="truncate text-xs text-red-500">{file.error}</p>
+              )
+            ))}
           {showElevation && (
             <button
               type="button"
@@ -83,8 +126,9 @@ export function FileListItem({ file }: { file: ShredFile }) {
           )}
         </div>
       </div>
-      {file.status === "pending" && (
+      {(file.status === "pending" || file.status === "error") && (
         <button
+          type="button"
           onClick={() => removeFile(file.id)}
           aria-label={`Remove ${file.name}`}
           className="p-1 text-muted-foreground hover:bg-elevated hover:text-foreground"

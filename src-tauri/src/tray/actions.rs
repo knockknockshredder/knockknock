@@ -29,9 +29,10 @@ impl TrayState {
 ///
 /// Emits a `quick-shred-request` event to the frontend, which owns the
 /// file list, PIN verification, and confirmation dialog. The frontend
-/// then calls the existing `shred_files` IPC command with the actual
-/// paths. This design keeps file paths behind the PIN gate — the Rust
-/// backend never sees them without frontend-mediated verification.
+/// then runs the same `executeShred` flow (vault flush, typed
+/// `execute_roots` command) as the main Shred button — there is no second
+/// destructive path. This design keeps file paths behind the PIN gate —
+/// the Rust backend never sees them without frontend-mediated verification.
 pub fn quick_shred(app: &AppHandle) {
     use tauri::Emitter;
 

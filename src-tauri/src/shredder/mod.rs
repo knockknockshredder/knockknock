@@ -7,6 +7,7 @@ pub mod journal;
 pub mod logging;
 pub mod platform;
 pub mod progress;
+pub mod root_execution;
 pub mod traits;
 pub mod types;
 pub mod validation;
@@ -16,7 +17,9 @@ pub mod verification;
 mod tests;
 
 use std::collections::HashSet;
+use std::fs::File;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::shredder::validation::{classify_path, PathClassification};
 
@@ -27,13 +30,10 @@ pub use types::{
     MediaType, PatternType, ShredReport, ShredReportError, ShredResult, VerificationLevel,
 };
 
-/// Shred a single file with full pipeline, including shortcut/symlink dispatch.
-///
-/// `shred_targets` controls whether shortcut targets are also shredded after the
-/// link file itself. `visited` is the recursion guard — a `HashSet` of paths
-/// already processed in this batch. If `path` is already present, the call
-/// returns a successful no-op result (the path was handled by an earlier
-/// invocation, possibly via a circular shortcut chain).
+/// Shred a single file with full pipeline, including shortcut/symlink
+/// dispatch. `visited` is the recursion guard — a `HashSet` of paths already
+/// processed in this batch. If `path` is already present, the call returns a
+/// successful no-op result (the path was handled by an earlier invocation).
 pub fn shred_file(
     path: &std::path::Path,
     algorithm: &dyn ShredAlgorithm,
@@ -41,7 +41,6 @@ pub fn shred_file(
     pattern: PatternType,
     verification_level: VerificationLevel,
     progress: &dyn ProgressReporter,
-    shred_targets: bool,
     visited: &mut HashSet<PathBuf>,
     cancel: &CancellationToken,
 ) -> Result<ShredResult, ShredError> {
@@ -93,7 +92,9 @@ pub fn shred_file(
         PathClassification::Shortcut { target } => {
             // Always shred the link file itself first — that is what the user
             // selected. The .lnk (or symlink) is a real file on disk and goes
-            // through the standard pipeline.
+            // through the standard pipeline. Linked targets are never
+            // followed: root execution refuses link roots, and the legacy
+            // pipeline has no target-following mode.
             let link_result = shred_file_inner(
                 path,
                 algorithm,
@@ -104,63 +105,11 @@ pub fn shred_file(
                 cancel,
             )?;
 
-            if !shred_targets {
-                // User did NOT opt in to shredding targets. Surface this loudly
-                // so the operator is aware the target survived.
-                eprintln!(
-                    "[KnockKnock] Shortcut shredded. Target {} was NOT shredded.",
-                    target.display()
-                );
-                return Ok(link_result);
-            }
-
-            // User opted in. Enforce depth limit 1: if the target is itself
-            // a shortcut, stop. We refuse to follow shortcut chains because
-            // each hop multiplies the surface area for unintended shreds.
-            let target_class = classify_path(&target)?;
-            if matches!(target_class, PathClassification::Shortcut { .. }) {
-                eprintln!(
-                    "[KnockKnock] Target {} is itself a shortcut or symlink; \
-                     refusing to follow (depth limit 1). Enable 'Also shred linked targets' \
-                     and run again to destroy the chain manually.",
-                    target.display()
-                );
-                return Ok(link_result);
-            }
-
-            // Target is a Normal file/dir. Run the full validation pipeline on
-            // it (allow_shortcut: false — if the TOCTOU window revealed a
-            // symlink we still refuse).
-            crate::shredder::validation::validate_path(&target, false)?;
-
-            // Recurse into the target. The visited set already contains `path`,
-            // so the target gets inserted normally and is shredded in full.
-            let target_result = shred_file(
-                &target,
-                algorithm,
-                passes,
-                pattern,
-                verification_level,
-                progress,
-                shred_targets,
-                visited,
-                cancel,
-            )?;
-
-            // Combine the two results. Success requires BOTH halves to succeed;
-            // errors from either side propagate in the merged vector.
-            let mut combined_errors = link_result.errors;
-            combined_errors.extend(target_result.errors);
-            let combined_success = link_result.success && target_result.success;
-            let combined_passes = link_result.passes_completed + target_result.passes_completed;
-            let combined_bytes = link_result.bytes_written + target_result.bytes_written;
-
-            Ok(ShredResult {
-                success: combined_success,
-                passes_completed: combined_passes,
-                bytes_written: combined_bytes,
-                errors: combined_errors,
-            })
+            eprintln!(
+                "[KnockKnock] Shortcut shredded. Target {} was NOT shredded.",
+                target.display()
+            );
+            Ok(link_result)
         }
     }
 }
@@ -174,11 +123,39 @@ fn cleanup_after_shred(
     progress: &dyn ProgressReporter,
     media_type: MediaType,
 ) -> Result<(), ShredError> {
+    let journal = crate::shredder::journal::JournalStore::portable()
+        .map_err(|error| journal_error(path, error))?;
+    cleanup_after_shred_with_journal(path, platform_io, progress, media_type, &journal)
+}
+
+fn cleanup_after_shred_with_journal(
+    path: &std::path::Path,
+    platform_io: &dyn PlatformIo,
+    progress: &dyn ProgressReporter,
+    media_type: MediaType,
+    journal: &crate::shredder::journal::JournalStore,
+) -> Result<(), ShredError> {
     // Rename to random name
     let renamed_path = platform_io.rename_random(path)?;
 
-    // Record orphan for crash recovery
-    crate::shredder::journal::write_orphan(path, &renamed_path);
+    // Record orphan for crash recovery. Restore the original name if the
+    // journal cannot be made durable, so no untracked renamed file remains.
+    let entry = match journal.append_orphan(path, &renamed_path) {
+        Ok(entry) => entry,
+        Err(error) => {
+            let journal_error = journal_error(&renamed_path, error);
+            return match platform_io.restore_renamed(&renamed_path, path) {
+                Ok(()) => Err(journal_error),
+                Err(restore_error) => Err(ShredError::IoError {
+                    path: path.to_path_buf(),
+                    kind: "JournalRecovery".to_string(),
+                    message: format!(
+                        "{journal_error}; restoring renamed file failed: {restore_error}"
+                    ),
+                }),
+            };
+        }
+    };
 
     // Truncate to zero
     {
@@ -197,9 +174,22 @@ fn cleanup_after_shred(
     platform_io.delete(&renamed_path)?;
 
     // Clear orphan entry
-    crate::shredder::journal::clear_orphan(&renamed_path);
+    journal
+        .clear(&entry)
+        .map_err(|error| journal_error(&renamed_path, error))?;
 
     Ok(())
+}
+
+fn journal_error(
+    path: &std::path::Path,
+    error: crate::shredder::errors::JournalError,
+) -> ShredError {
+    ShredError::IoError {
+        path: path.to_path_buf(),
+        kind: "Journal".to_string(),
+        message: error.to_string(),
+    }
 }
 
 /// Inner shred pipeline — the actual overwrite/rename/truncate/delete sequence
@@ -484,9 +474,8 @@ fn shred_file_inner(
 
 /// Shred multiple files, continuing on error.
 ///
-/// `shred_targets` propagates to each individual `shred_file` call. A fresh
-/// `visited` set is created per batch — cross-batch deduplication is not
-/// required (each user-initiated shred is a distinct operation).
+/// A fresh `visited` set is created per batch — cross-batch deduplication is
+/// not required (each user-initiated shred is a distinct operation).
 pub fn shred_files(
     paths: Vec<std::path::PathBuf>,
     algorithm: std::sync::Arc<dyn ShredAlgorithm>,
@@ -494,7 +483,6 @@ pub fn shred_files(
     pattern: PatternType,
     verification_level: VerificationLevel,
     progress: std::sync::Arc<dyn ProgressReporter>,
-    shred_targets: bool,
 ) -> ShredReport {
     use crate::commands::error::ShredErrorDto;
 
@@ -523,7 +511,6 @@ pub fn shred_files(
             pattern,
             verification_level,
             progress.as_ref(),
-            shred_targets,
             &mut visited,
             &cancel_token,
         ) {
@@ -566,5 +553,208 @@ pub fn shred_files(
         errors,
         total_bytes_shredded: total_bytes,
         duration_secs: start.elapsed().as_secs_f64(),
+    }
+}
+
+/// Adapter for the legacy overwrite/verification core.
+///
+/// Root execution owns all directory-relative cleanup. This adapter therefore
+/// accepts only an already-open regular file, performs overwrite and
+/// verification, truncates the same handle, and leaves rename/unlink to the
+/// secure tree adapter.
+pub(crate) struct LegacyOpenFileShredder {
+    algorithm: Arc<dyn ShredAlgorithm>,
+    passes: u32,
+    pattern: PatternType,
+    verification_level: VerificationLevel,
+    progress: Arc<dyn ProgressReporter>,
+}
+
+impl LegacyOpenFileShredder {
+    pub(crate) fn new(
+        algorithm: Arc<dyn ShredAlgorithm>,
+        passes: u32,
+        pattern: PatternType,
+        verification_level: VerificationLevel,
+        progress: Arc<dyn ProgressReporter>,
+    ) -> Self {
+        Self {
+            algorithm,
+            passes,
+            pattern,
+            verification_level,
+            progress,
+        }
+    }
+}
+
+impl crate::shredder::root_execution::OpenFileShredder for LegacyOpenFileShredder {
+    fn shred_open_file(
+        &self,
+        mut file: File,
+        identity: crate::shredder::root_execution::NodeIdentity,
+        request: &crate::shredder::root_execution::FileShredRequest,
+    ) -> Result<crate::shredder::root_execution::FileShredResult, ShredError> {
+        if identity.kind() != crate::shredder::root_execution::NodeKind::RegularFile {
+            return Err(ShredError::ValidationFailed(
+                "open-file shredder requires a regular-file identity".to_string(),
+            ));
+        }
+
+        let metadata = file.metadata().map_err(|error| {
+            ShredError::from_io_error(request.diagnostic_path().to_path_buf(), error)
+        })?;
+        if !metadata.file_type().is_file() {
+            return Err(ShredError::ValidationFailed(
+                "open-file shredder rejected a non-regular file handle".to_string(),
+            ));
+        }
+
+        let path = request.diagnostic_path();
+        let file_size = metadata.len();
+        self.progress.on_file_start(path, file_size);
+        if !self.algorithm.accepted_patterns().contains(&self.pattern) {
+            return Err(ShredError::ValidationFailed(format!(
+                "Algorithm '{}' does not support pattern '{:?}'",
+                self.algorithm.name(),
+                self.pattern
+            )));
+        }
+
+        if file_size == 0 {
+            file.set_len(0)
+                .map_err(|error| ShredError::from_io_error(path.to_path_buf(), error))?;
+            file.sync_all()
+                .map_err(|error| ShredError::from_io_error(path.to_path_buf(), error))?;
+            let result = crate::shredder::root_execution::FileShredResult::success(0);
+            self.progress.on_file_complete(
+                path,
+                &ShredResult {
+                    success: true,
+                    passes_completed: 0,
+                    bytes_written: 0,
+                    errors: Vec::new(),
+                },
+                0,
+            );
+            return Ok(result);
+        }
+
+        let seed = if self.pattern == PatternType::Random {
+            Some(verification::PrngSeed::generate()?)
+        } else {
+            None
+        };
+        let verifier = verification::create_verifier(self.verification_level);
+        let mut bytes_written = 0u64;
+        let mut errors = Vec::new();
+
+        if self.algorithm.has_fixed_pattern_sequence() {
+            self.progress.on_pass_start(1, self.passes);
+            match self.algorithm.shred(
+                &mut file,
+                file_size,
+                self.passes,
+                self.pattern,
+                self.progress.as_ref(),
+                seed.as_ref(),
+                path,
+            ) {
+                Ok(result) => bytes_written = result.bytes_written,
+                Err(error) => errors.push(error),
+            }
+            if errors.is_empty() {
+                if let Err(error) = file.sync_all() {
+                    errors.push(ShredError::from_io_error(path.to_path_buf(), error));
+                } else {
+                    match verifier.verify(
+                        &mut file,
+                        &self.algorithm.final_pattern(self.pattern),
+                        file_size,
+                        seed.as_ref(),
+                        path,
+                    ) {
+                        Ok(result) if !result.passed => {
+                            errors.push(ShredError::VerificationFailed {
+                                path: path.to_path_buf(),
+                                pass: self.passes,
+                            })
+                        }
+                        Err(error) => errors.push(error),
+                        Ok(_) => {}
+                    }
+                }
+            }
+            self.progress.on_pass_complete(self.passes, self.passes);
+        } else {
+            for pass in 0..self.passes {
+                if crate::shredder::cancel::is_cancelled_global() {
+                    errors.push(ShredError::IoError {
+                        path: path.to_path_buf(),
+                        kind: "Cancelled".to_string(),
+                        message: format!("Shredding cancelled before pass {}", pass + 1),
+                    });
+                    break;
+                }
+
+                self.progress.on_pass_start(pass + 1, self.passes);
+                match self.algorithm.shred(
+                    &mut file,
+                    file_size,
+                    1,
+                    self.pattern,
+                    self.progress.as_ref(),
+                    seed.as_ref(),
+                    path,
+                ) {
+                    Ok(result) => bytes_written += result.bytes_written,
+                    Err(error) => {
+                        errors.push(error);
+                        break;
+                    }
+                }
+                if let Err(error) = file.sync_all() {
+                    errors.push(ShredError::from_io_error(path.to_path_buf(), error));
+                    break;
+                }
+                match verifier.verify(&mut file, &self.pattern, file_size, seed.as_ref(), path) {
+                    Ok(result) if !result.passed => errors.push(ShredError::VerificationFailed {
+                        path: path.to_path_buf(),
+                        pass: pass + 1,
+                    }),
+                    Err(error) => errors.push(error),
+                    Ok(_) => {}
+                }
+                self.progress.on_pass_complete(pass + 1, self.passes);
+                if !errors.is_empty() {
+                    break;
+                }
+            }
+        }
+
+        let success = errors.is_empty();
+        if success {
+            file.set_len(0)
+                .map_err(|error| ShredError::from_io_error(path.to_path_buf(), error))?;
+            file.sync_all()
+                .map_err(|error| ShredError::from_io_error(path.to_path_buf(), error))?;
+        }
+
+        let result = crate::shredder::root_execution::FileShredResult {
+            success,
+            bytes_shredded: bytes_written,
+            errors,
+        };
+        self.progress.on_file_complete(
+            path,
+            &ShredResult {
+                success: result.success,
+                passes_completed: self.passes,
+                bytes_written: result.bytes_shredded,
+                errors: Vec::new(),
+            },
+            self.passes,
+        );
+        Ok(result)
     }
 }

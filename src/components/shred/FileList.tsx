@@ -38,6 +38,24 @@ interface Group {
   drive: DriveInfo | undefined;
 }
 
+/**
+ * Folder-aware count label for a drive group, e.g. "2 files + 1 folder".
+ * Folders are listed as folder roots, so they are counted separately and
+ * never flattened into the file count.
+ */
+function countLabel(files: ShredFile[]): string {
+  const fileCount = files.filter((f) => f.kind !== "directory").length;
+  const folderCount = files.filter((f) => f.kind === "directory").length;
+  const parts: string[] = [];
+  if (fileCount > 0) {
+    parts.push(`${fileCount} file${fileCount === 1 ? "" : "s"}`);
+  }
+  if (folderCount > 0) {
+    parts.push(`${folderCount} folder${folderCount === 1 ? "" : "s"}`);
+  }
+  return parts.join(" + ");
+}
+
 export function FileList() {
   const { files } = useShred();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -158,14 +176,14 @@ export function FileList() {
               {group.drive ? (
                 <DriveGroupHeader
                   drive={group.drive}
-                  fileCount={group.files.length}
+                  countLabel={countLabel(group.files)}
                   isCollapsed={isCollapsed}
                   onToggle={() => toggleKey(group.key)}
                 />
               ) : (
                 <FallbackHeader
                   driveKey={group.key}
-                  fileCount={group.files.length}
+                  countLabel={countLabel(group.files)}
                   isCollapsed={isCollapsed}
                   onToggle={() => toggleKey(group.key)}
                 />
@@ -189,12 +207,12 @@ export function FileList() {
  */
 function FallbackHeader({
   driveKey,
-  fileCount,
+  countLabel,
   isCollapsed,
   onToggle,
 }: {
   driveKey: string;
-  fileCount: number;
+  countLabel: string;
   isCollapsed: boolean;
   onToggle: () => void;
 }) {
@@ -206,9 +224,7 @@ function FallbackHeader({
       className="flex w-full items-center gap-2 border-b border-border bg-elevated/40 px-4 py-2 text-left font-mono text-xs text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground"
     >
       <span className="font-semibold text-foreground">{driveKey}</span>
-      <span className="ml-auto text-muted-foreground">
-        {fileCount} file{fileCount === 1 ? "" : "s"}
-      </span>
+      <span className="ml-auto text-muted-foreground">{countLabel}</span>
       <span className="text-muted-foreground">{isCollapsed ? "▶" : "▼"}</span>
     </button>
   );
