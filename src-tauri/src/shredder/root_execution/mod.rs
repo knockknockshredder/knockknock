@@ -2,6 +2,8 @@ pub(crate) mod plan;
 pub mod types;
 #[cfg(unix)]
 pub(crate) mod unix;
+#[cfg(windows)]
+pub(crate) mod windows;
 
 pub use types::{
     BatchRootResult, ChildErrorDto, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage,

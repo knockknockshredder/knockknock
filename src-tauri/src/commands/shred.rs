@@ -499,73 +499,115 @@ pub fn validate_targets(targets: Vec<VaultTarget>) -> Result<Vec<TargetMetadataD
 #[cfg(windows)]
 #[tauri::command]
 pub fn open_files_windows() -> Result<Vec<String>, String> {
-    use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
-    use windows::Win32::UI::Shell::{
-        FOS_FILEMUSTEXIST, FOS_NODEREFERENCELINKS, FOS_PATHMUSTEXIST, FileOpenDialog,
-        FILEOPENDIALOGOPTIONS, IFileOpenDialog, SIGDN,
-    };
-
-    unsafe {
-        // CoCreateInstance returns a COM pointer; bind it to the
-        // IFileOpenDialog interface so we can use the high-level methods.
-        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
-            .map_err(|e| format!("Failed to create file dialog: {}", e))?;
-
-        // Combine the three required flags into the FILEOPENDIALOGOPTIONS
-        // bitfield. The `.0` accessors strip the newtype wrappers.
-        let options = FILEOPENDIALOGOPTIONS(
-            FOS_FILEMUSTEXIST.0 | FOS_PATHMUSTEXIST.0 | FOS_NODEREFERENCELINKS.0,
-        );
-        dialog
-            .SetOptions(options)
-            .map_err(|e| format!("Failed to set dialog options: {}", e))?;
-
-        // `None` here means no parent HWND — fine for a modeless top-level
-        // dialog. Tauri commands run on their own thread and we do not have
-        // access to the window handle here.
-        dialog
-            .Show(None)
-            .map_err(|e| format!("Failed to show dialog: {}", e))?;
-
-        let results = dialog
-            .GetResults()
-            .map_err(|e| format!("Failed to get dialog results: {}", e))?;
-        let count = results
-            .GetCount()
-            .map_err(|e| format!("Failed to get result count: {}", e))?;
-        let mut paths = Vec::with_capacity(count as usize);
-
-        for i in 0..count {
-            let item = results
-                .GetItemAt(i)
-                .map_err(|e| format!("Failed to get item at index {}: {}", i, e))?;
-            // SIGDN_FILESYSPATH (= 0x80058000) returns the filesystem path
-            // verbatim. The spec example showed `GetDisplayName(0)` which is
-            // SIGDN_NORMALDISPLAY — that returns a human-friendly display
-            // name like "Notepad.lnk", NOT a filesystem path. We need the
-            // path so the shredder receives the raw `.lnk` file, not its
-            // display label. SIGDN_FILESYSPATH is the correct constant.
-            let display_name = item
-                .GetDisplayName(SIGDN(0x80058000u32 as i32))
-                .map_err(|e| format!("Failed to get display name for item {}: {}", i, e))?;
-            // PWSTR -> String. `to_string()` is unsafe (reads the raw wide
-            // pointer); in windows-rs 0.59 it returns `Result<String,
-            // windows_core::Error>`. We are already inside an unsafe block
-            // for COM, so this is the right scope.
-            let path_str = display_name
-                .to_string()
-                .map_err(|e| format!("Failed to convert display name for item {}: {}", i, e))?;
-            paths.push(path_str);
-        }
-
-        Ok(paths)
-    }
+    run_windows_picker(crate::shredder::root_execution::windows::file_picker_options())
 }
 
 #[cfg(not(windows))]
 #[tauri::command]
 pub fn open_files_windows() -> Result<Vec<String>, String> {
     Err("This command is only available on Windows".to_string())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+pub fn open_folders_windows() -> Result<Vec<String>, String> {
+    run_windows_picker(crate::shredder::root_execution::windows::folder_picker_options())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn open_folders_windows() -> Result<Vec<String>, String> {
+    Err("This command is only available on Windows".to_string())
+}
+
+#[cfg(windows)]
+fn run_windows_picker(options: u32) -> Result<Vec<String>, String> {
+    let thread = std::thread::Builder::new()
+        .name("knockknock-file-picker".to_string())
+        .spawn(move || run_windows_picker_sta(options))
+        .map_err(|error| format!("Failed to start file picker STA thread: {error}"))?;
+    thread
+        .join()
+        .map_err(|_| "File picker STA thread panicked".to_string())?
+}
+
+#[cfg(windows)]
+fn run_windows_picker_sta(options: u32) -> Result<Vec<String>, String> {
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        FileOpenDialog, IFileOpenDialog, FILEOPENDIALOGOPTIONS, SIGDN,
+    };
+
+    // SAFETY: this function runs only on the dedicated picker thread, which has
+    // no other COM apartment. The matching CoUninitialize is below.
+    let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    if initialized.0 < 0 {
+        return Err(format!(
+            "Failed to initialize picker STA: 0x{:08X}",
+            initialized.0 as u32
+        ));
+    }
+
+    let result = unsafe {
+        (|| -> Result<Vec<String>, String> {
+            // CoCreateInstance returns a COM pointer; bind it to the
+            // IFileOpenDialog interface so we can use the high-level methods.
+            let dialog: IFileOpenDialog =
+                CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|e| format!("Failed to create file dialog: {}", e))?;
+
+            dialog
+                .SetOptions(FILEOPENDIALOGOPTIONS(options))
+                .map_err(|e| format!("Failed to set dialog options: {}", e))?;
+
+            // `None` here means no parent HWND — fine for a modeless top-level
+            // dialog. Tauri commands run on their own thread and we do not have
+            // access to the window handle here.
+            dialog
+                .Show(None)
+                .map_err(|e| format!("Failed to show dialog: {}", e))?;
+
+            let results = dialog
+                .GetResults()
+                .map_err(|e| format!("Failed to get dialog results: {}", e))?;
+            let count = results
+                .GetCount()
+                .map_err(|e| format!("Failed to get result count: {}", e))?;
+            let mut paths = Vec::with_capacity(count as usize);
+
+            for i in 0..count {
+                let item = results
+                    .GetItemAt(i)
+                    .map_err(|e| format!("Failed to get item at index {}: {}", i, e))?;
+                // SIGDN_FILESYSPATH (= 0x80058000) returns the filesystem path
+                // verbatim. The spec example showed `GetDisplayName(0)` which is
+                // SIGDN_NORMALDISPLAY — that returns a human-friendly display
+                // name like "Notepad.lnk", NOT a filesystem path. We need the
+                // path so the shredder receives the raw `.lnk` file, not its
+                // display label. SIGDN_FILESYSPATH is the correct constant.
+                let display_name = item
+                    .GetDisplayName(SIGDN(0x80058000u32 as i32))
+                    .map_err(|e| format!("Failed to get display name for item {}: {}", i, e))?;
+                // PWSTR -> String. `to_string()` is unsafe (reads the raw wide
+                // pointer); in windows-rs 0.59 it returns `Result<String,
+                // windows_core::Error>`. We are already inside an unsafe block
+                // for COM, so this is the right scope.
+                let path_str = display_name
+                    .to_string()
+                    .map_err(|e| format!("Failed to convert display name for item {}: {}", i, e))?;
+                paths.push(path_str);
+            }
+
+            Ok(paths)
+        })()
+    };
+
+    // SAFETY: the preceding CoInitializeEx succeeded on this same thread.
+    unsafe { CoUninitialize() };
+    result
 }
 
 /// Detect drive info for a single path.

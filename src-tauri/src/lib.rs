@@ -82,6 +82,7 @@ pub fn run() {
             commands::shred::get_algorithms,
             commands::shred::validate_paths,
             commands::shred::open_files_windows,
+            commands::shred::open_folders_windows,
             commands::shred::get_drive_info,
             commands::shred::get_all_drive_info,
             commands::shred::validate_targets,
