@@ -34,7 +34,7 @@ pub(crate) fn ensure_local_volume(path: &Path) -> Result<(), ShredError> {
     }
     // SAFETY: `statfs` returned success and initialized `stats`.
     let stats = unsafe { stats.assume_init() };
-    if stats.f_flags & libc::MNT_LOCAL as _ == 0 {
+    if stats.f_flags & libc::MNT_LOCAL as u32 == 0 {
         return Err(ShredError::NetworkDrive(path.to_path_buf()));
     }
     Ok(())
