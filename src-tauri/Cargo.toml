@@ -32,6 +32,7 @@ getrandom = "0.2"
 chacha20 = "0.9"
 arboard = "3"
 libc = "0.2"
+rustix = { version = "1", features = ["fs"] }
 tokio = { version = "1", features = ["rt"] }
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-notification = "2"

@@ -15,6 +15,36 @@ impl LinuxIo {
     }
 }
 
+pub(crate) fn ensure_local_volume(path: &Path) -> Result<(), ShredError> {
+    let filesystem = rustix::fs::statfs(path).map_err(|error| {
+        ShredError::from_io_error(path.to_path_buf(), std::io::Error::from(error))
+    })?;
+    let filesystem_type = filesystem.f_type as u64;
+
+    // Linux filesystem magic values for network filesystems. `statfs` is used
+    // instead of `/proc/mounts` so local-volume validation does not depend on a
+    // process-global text file or on path-prefix parsing.
+    const AFS_SUPER_MAGIC: u64 = 0x5346414f;
+    const CODA_SUPER_MAGIC: u64 = 0x73757245;
+    const CIFS_MAGIC_NUMBER: u64 = 0xff53_4d42;
+    const SMB2_MAGIC_NUMBER: u64 = 0xfe53_4d42;
+    const NCP_SUPER_MAGIC: u64 = 0x564c;
+    if filesystem_type == rustix::fs::NFS_SUPER_MAGIC as u64
+        || matches!(
+            filesystem_type,
+            AFS_SUPER_MAGIC
+                | CODA_SUPER_MAGIC
+                | CIFS_MAGIC_NUMBER
+                | SMB2_MAGIC_NUMBER
+                | NCP_SUPER_MAGIC
+        )
+    {
+        return Err(ShredError::NetworkDrive(path.to_path_buf()));
+    }
+
+    Ok(())
+}
+
 impl PlatformIo for LinuxIo {
     fn open_for_shred(&self, path: &Path) -> Result<File, ShredError> {
         OpenOptions::new()

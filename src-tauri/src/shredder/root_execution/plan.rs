@@ -81,7 +81,7 @@ pub(crate) struct NodeIdentity {
 
 impl PartialEq for NodeIdentity {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.mount_id == other.mount_id
+        self.id == other.id && self.mount_id == other.mount_id && self.kind == other.kind
     }
 }
 
@@ -91,6 +91,7 @@ impl std::hash::Hash for NodeIdentity {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
         self.mount_id.hash(state);
+        self.kind.hash(state);
     }
 }
 

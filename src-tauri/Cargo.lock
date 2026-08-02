@@ -2091,6 +2091,7 @@ dependencies = [
  "native-dialog",
  "pbkdf2",
  "rand 0.8.7",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
