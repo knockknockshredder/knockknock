@@ -129,7 +129,8 @@ pub fn request_elevation() -> Result<(), String> {
 
 #[tauri::command]
 pub fn cleanup_orphans() -> Result<Vec<String>, String> {
-    let remaining = crate::shredder::journal::cleanup_orphans().map_err(|error| error.to_string())?;
+    let remaining =
+        crate::shredder::journal::cleanup_orphans().map_err(|error| error.to_string())?;
     Ok(remaining
         .iter()
         .map(|e| format!("Orphaned: {:?}", e.renamed_path))
