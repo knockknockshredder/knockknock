@@ -43,6 +43,7 @@ const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
 const DELETE: u32 = 0x0001_0000;
 const SYNCHRONIZE: u32 = 0x0010_0000;
 const FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
 const FILE_DISPOSITION_FLAG_DELETE: u32 = 0x0000_0001;
 const FILE_DISPOSITION_FLAG_POSIX_SEMANTICS: u32 = 0x0000_0002;
 const STATUS_INVALID_PARAMETER: i32 = 0xC000_000D_u32 as i32;
@@ -367,7 +368,11 @@ impl SecureTreeIo for WindowsSecureTreeIo {
                 .parent
                 .handle
                 .as_ref()
-                .expect("mutation parent was verified")
+                .ok_or_else(|| {
+                    ShredError::ValidationFailed(
+                        "rename mutation parent handle is closed".to_string(),
+                    )
+                })?
                 .as_raw_handle();
             (*info).file_name_length = (destination.len() * 2) as u32;
             std::ptr::copy_nonoverlapping(
@@ -416,7 +421,9 @@ impl SecureTreeIo for WindowsSecureTreeIo {
                 "unlink_leaf received a directory handle".to_string(),
             ));
         }
-        set_delete_disposition(target.node.handle.as_ref().expect("node was verified"))?;
+        set_delete_disposition(target.node.handle.as_ref().ok_or_else(|| {
+            ShredError::ValidationFailed("unlink node handle is closed".to_string())
+        })?)?;
         table.entries.remove(&node.id());
         Ok(())
     }
@@ -429,7 +436,9 @@ impl SecureTreeIo for WindowsSecureTreeIo {
                 "remove_empty_dir received a non-directory handle".to_string(),
             ));
         }
-        set_delete_disposition(target.node.handle.as_ref().expect("node was verified"))?;
+        set_delete_disposition(target.node.handle.as_ref().ok_or_else(|| {
+            ShredError::ValidationFailed("remove node handle is closed".to_string())
+        })?)?;
         let retain_root_handle = parent.id() == node.id();
         if retain_root_handle {
             let node_entry = table.entries.get_mut(&node.id()).ok_or_else(|| {
@@ -563,7 +572,12 @@ fn open_relative(
             0
         };
     let share_access = FILE_SHARE_READ_VALUE | FILE_SHARE_WRITE_VALUE | FILE_SHARE_DELETE_VALUE;
-    let open_options = FILE_OPEN_REPARSE_POINT;
+    // Synchronous handles only: the open-file shredder (and any other std
+    // file I/O) issues synchronous ReadFile/WriteFile calls with a null
+    // OVERLAPPED, which Windows rejects with STATUS_INVALID_PARAMETER on
+    // asynchronous handles. Without this flag no file could ever be shredded
+    // through the secure adapter.
+    let open_options = FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT;
     // SAFETY: all pointers refer to stack values or the live UTF-16 component;
     // NtOpenFile is synchronous and consumes only the one relative component.
     let status = unsafe {
@@ -657,6 +671,11 @@ fn enumerate_handle(handle: RawHandle) -> Result<Vec<ChildName>, ShredError> {
         if bytes_used == 0 {
             break;
         }
+        // The 8-byte alignment of the FileId field pushes FileName to offset
+        // 104, not the 102 implied by the unaligned field listing. Parsing
+        // against the wrong header reads names six bytes late and rejects the
+        // final record of every enumeration.
+        let header_length = file_name_offset();
         let mut offset = 0usize;
         while offset < bytes_used {
             if bytes_used - offset < size_of::<u32>() {
@@ -671,9 +690,6 @@ fn enumerate_handle(handle: RawHandle) -> Result<Vec<ChildName>, ShredError> {
                     as *const windows_sys::Wdk::Storage::FileSystem::FILE_ID_BOTH_DIR_INFORMATION)
             };
             let name_length = record.FileNameLength as usize;
-            let header_length = size_of::<
-                windows_sys::Wdk::Storage::FileSystem::FILE_ID_BOTH_DIR_INFORMATION,
-            >() - size_of::<u16>();
             if name_length % 2 != 0 || offset + header_length + name_length > bytes_used {
                 return Err(ShredError::ValidationFailed(
                     "directory enumeration returned an invalid name record".to_string(),
@@ -700,6 +716,29 @@ fn enumerate_handle(handle: RawHandle) -> Result<Vec<ChildName>, ShredError> {
         restart_scan = false;
     }
     Ok(names)
+}
+
+fn file_name_offset() -> usize {
+    // offsetof(FILE_ID_BOTH_DIR_INFORMATION, FileName), computed from a
+    // zeroed instance so the parser stays correct if the layout changes.
+    let instance = windows_sys::Wdk::Storage::FileSystem::FILE_ID_BOTH_DIR_INFORMATION {
+        NextEntryOffset: 0,
+        FileIndex: 0,
+        CreationTime: 0,
+        LastAccessTime: 0,
+        LastWriteTime: 0,
+        ChangeTime: 0,
+        EndOfFile: 0,
+        AllocationSize: 0,
+        FileAttributes: 0,
+        FileNameLength: 0,
+        EaSize: 0,
+        ShortNameLength: 0,
+        ShortName: [0; 12],
+        FileId: 0,
+        FileName: [0; 1],
+    };
+    (&instance.FileName as *const u16 as usize) - (&instance as *const _ as usize)
 }
 
 fn query_identity(handle: RawHandle) -> Result<NodeIdentity, ShredError> {
@@ -1051,6 +1090,35 @@ mod tests {
         assert_eq!(
             fs::read(root_path.join("destination")).expect("destination remains"),
             b"destination"
+        );
+    }
+
+    #[test]
+    fn enumerate_returns_child_names_without_dot_entries() {
+        let fixture = tempfile::tempdir().expect("temporary fixture");
+        let root_path = fixture.path().join("root");
+        fs::create_dir(&root_path).expect("root");
+        fs::write(root_path.join("alpha.txt"), b"a").expect("alpha");
+        fs::write(root_path.join("beta"), b"b").expect("beta");
+        fs::create_dir(root_path.join("gamma")).expect("gamma");
+
+        let io = WindowsSecureTreeIo::new();
+        let root = io.open_root_nofollow(&root_path).expect("open root");
+        let mut names = io
+            .enumerate(&root)
+            .expect("enumerate root")
+            .into_iter()
+            .map(|child| child.as_os_str().to_os_string())
+            .collect::<Vec<_>>();
+        names.sort();
+
+        assert_eq!(
+            names,
+            vec![
+                OsString::from("alpha.txt"),
+                OsString::from("beta"),
+                OsString::from("gamma")
+            ]
         );
     }
 

@@ -11,9 +11,12 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AlgorithmOption,
+  ChildErrorDto,
+  ExecuteRootsRequest,
   FileMetadata,
   LogEntry,
   ProgressState,
+  RootResultDto,
   ShredFile,
   TargetMetadataDto,
   TargetKind,
@@ -70,7 +73,8 @@ interface ShredState {
   changeVaultPin: (oldPin: string, newPin: string) => Promise<PinChangeOutcome>;
   loadVault: (pin: string) => Promise<void>;
   flushVault: () => Promise<void>;
-  saveVault: (pin: string) => Promise<boolean>;
+  buildExecuteRootsRequest: () => ExecuteRootsRequest;
+  applyRootResults: (results: RootResultDto[]) => Promise<void>;
 }
 
 const ShredContext = createContext<ShredState | null>(null);
@@ -80,7 +84,20 @@ function toError(reason: unknown): Error {
 }
 
 function targetKindForFile(file: FileMetadata): TargetKind {
-  return file.is_shortcut ? "link" : "file";
+  // `.lnk` shell shortcuts and Finder aliases are ordinary file data — the
+  // OS-level link policy only applies to actual filesystem links (Unix
+  // symlinks, NTFS symlinks, junctions), which `is_shortcut` also flags.
+  if (file.is_shortcut && !file.path.toLowerCase().endsWith(".lnk")) {
+    return "link";
+  }
+  return "file";
+}
+
+function formatRootResultError(result: RootResultDto): string {
+  const details = result.errors
+    .map((error) => `${error.stage}: ${error.message}`)
+    .join("; ");
+  return details ? `${result.status}: ${details}` : result.status;
 }
 
 function readQueuedSnapshot(ref: { current: VaultSnapshot | null }): VaultSnapshot | null {
@@ -590,30 +607,78 @@ export function ShredProvider({ children }: { children: ReactNode }) {
     [flushRevision]
   );
 
-  const saveVault = useCallback(
-    async (pin: string) => {
-      if (
-        pin !== vaultPinRef.current ||
-        writerLockedRef.current ||
-        !vaultLoadedRef.current
-      ) {
-        return false;
+  const buildExecuteRootsRequest = useCallback((): ExecuteRootsRequest => {
+    const roots = filesRef.current
+      .filter((file) => file.status === "pending")
+      .map((file) => ({
+        target_id: file.id,
+        path: file.path,
+        kind: targetKindsRef.current.get(file.path) ?? targetKindForFile(file),
+      }));
+    return { roots };
+  }, []);
+
+  const applyRootResults = useCallback(
+    async (results: RootResultDto[]): Promise<void> => {
+      const previous = filesRef.current;
+      const removedIds = new Set<string>();
+      const next = previous
+        .map((file) => {
+          const result = results.find(
+            (candidate) => candidate.target_id === file.id
+          );
+          if (!result) return file;
+          if (result.status === "destroyed" && result.root_removed) {
+            removedIds.add(file.id);
+            return null;
+          }
+          return {
+            ...file,
+            status: "error" as const,
+            error: formatRootResultError(result),
+            root_status: result.status,
+            child_errors: result.errors as ChildErrorDto[],
+          };
+        })
+        .filter((file): file is ShredFile => file !== null);
+      for (const id of removedIds) {
+        const removed = previous.find((file) => file.id === id);
+        if (removed) targetKindsRef.current.delete(removed.path);
       }
+      filesRef.current = next;
+      setFiles(next);
+
+      if (removedIds.size === 0 || !vaultPinRef.current) return;
 
       const revision = ++revisionRef.current;
       queueSnapshot(
-        createSnapshot(pin, pinEpochRef.current, revision),
+        createSnapshot(vaultPinRef.current, pinEpochRef.current, revision, next),
         true
       );
       try {
         await flushRevision(pinEpochRef.current, revision);
-        return true;
       } catch (reason) {
-        addLogEntry("error", `Failed to save session: ${toError(reason).message}`);
-        return false;
+        // The vault still lists the destroyed targets on disk. Restore them
+        // in memory so the UI never silently drops a destroyed target: it
+        // stays visible until a successful save (on reload it validates as
+        // missing/blocked — safe either way).
+        const error = toError(reason);
+        const restored = previous
+          .filter((file) => removedIds.has(file.id))
+          .map((file) => ({
+            ...file,
+            status: "error" as const,
+            error: `Destroyed but vault save failed: ${error.message}`,
+            root_status: "destroyed" as const,
+            child_errors: [] as ChildErrorDto[],
+          }));
+        const rolledBack = [...next, ...restored];
+        filesRef.current = rolledBack;
+        setFiles(rolledBack);
+        throw error;
       }
     },
-    [addLogEntry, createSnapshot, flushRevision, queueSnapshot]
+    [createSnapshot, flushRevision, queueSnapshot]
   );
 
   useEffect(() => {
@@ -672,7 +737,8 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         changeVaultPin,
         loadVault,
         flushVault,
-        saveVault,
+        buildExecuteRootsRequest,
+        applyRootResults,
       }}
     >
       {children}

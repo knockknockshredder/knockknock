@@ -2,6 +2,9 @@ import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ShredProvider, useShred } from "./ShredContext";
 import type {
+  ChildErrorDto,
+  RootResultDto,
+  RootStatus,
   TargetAvailability,
   TargetKind,
   TargetMetadataDto,
@@ -467,5 +470,197 @@ describe("authoritative vault writer", () => {
       latest.addFiles([readyFile("C:\\must-not-save.txt")]);
     });
     expect(saveCalls()).toHaveLength(0);
+  });
+});
+
+describe("typed execution results", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(false);
+      return Promise.resolve(undefined);
+    });
+  });
+
+  function shortcutFile(path: string, target: string | null) {
+    return {
+      path,
+      name: path.split("\\")[path.split("\\").length - 1] ?? path,
+      size: 1,
+      is_shortcut: true,
+      shortcut_target: target,
+    };
+  }
+
+  function resultFor(
+    files: Array<{ id: string; path: string }>,
+    path: string,
+    status: RootStatus,
+    rootRemoved: boolean,
+    errors: ChildErrorDto[] = []
+  ): RootResultDto {
+    const file = files.find((candidate) => candidate.path === path);
+    expect(file).toBeDefined();
+    return {
+      target_id: file!.id,
+      requested_path: path,
+      kind: "file",
+      status,
+      root_removed: rootRemoved,
+      files_destroyed: 0,
+      directories_removed: 0,
+      bytes_shredded: 0,
+      errors,
+    };
+  }
+
+  it("builds an execute request from only pending targets with correct kinds", async () => {
+    renderContext();
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+    configureLoadedVault(
+      "v2",
+      [target("C:\\plain.txt"), target("C:\\blocked.txt")],
+      [
+        metadata("C:\\plain.txt", "file", "ready"),
+        metadata("C:\\blocked.txt", "file", "blocked"),
+      ]
+    );
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+    await act(async () => {
+      latest.addFiles([
+        shortcutFile("C:\\app.lnk", "C:\\target.exe"),
+        shortcutFile("C:\\unix-link", null),
+      ]);
+    });
+
+    const request = latest.buildExecuteRootsRequest();
+
+    const byPath = new Map(request.roots.map((root) => [root.path, root]));
+    expect(request.roots).toHaveLength(3);
+    expect(byPath.get("C:\\plain.txt")?.kind).toBe("file");
+    expect(byPath.get("C:\\plain.txt")?.target_id).toBe(
+      latest.files.find((file) => file.path === "C:\\plain.txt")?.id
+    );
+    expect(byPath.get("C:\\app.lnk")?.kind).toBe("file");
+    expect(byPath.get("C:\\unix-link")?.kind).toBe("link");
+    expect(request.roots.some((root) => root.path === "C:\\blocked.txt")).toBe(
+      false
+    );
+  });
+
+  it("removes only destroyed roots with root_removed and retains the rest with details", async () => {
+    renderContext();
+    const paths = [
+      "C:\\a.txt",
+      "C:\\b.txt",
+      "C:\\c.txt",
+      "C:\\d.txt",
+      "C:\\e.txt",
+    ];
+    configureLoadedVault(
+      "v2",
+      paths.map((path) => target(path)),
+      paths.map((path) => metadata(path))
+    );
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+
+    const childError: ChildErrorDto = {
+      path: "C:\\c.txt",
+      stage: "verify",
+      error_type: "verification_failed",
+      message: "verification did not pass",
+      actionable: "Inspect the target before retrying",
+    };
+    const files = latest.files;
+    await act(async () => {
+      await latest.applyRootResults([
+        resultFor(files, "C:\\a.txt", "destroyed", true),
+        resultFor(files, "C:\\b.txt", "destroyed", false),
+        resultFor(files, "C:\\c.txt", "failed", false, [childError]),
+        resultFor(files, "C:\\d.txt", "cancelled", false),
+        resultFor(files, "C:\\e.txt", "skipped", false),
+      ]);
+    });
+
+    expect(latest.files.map((file) => file.path)).toEqual([
+      "C:\\b.txt",
+      "C:\\c.txt",
+      "C:\\d.txt",
+      "C:\\e.txt",
+    ]);
+    const b = latest.files.find((file) => file.path === "C:\\b.txt")!;
+    expect(b.status).toBe("error");
+    expect(b.root_status).toBe("destroyed");
+    expect(b.error).toContain("destroyed");
+    const c = latest.files.find((file) => file.path === "C:\\c.txt")!;
+    expect(c.status).toBe("error");
+    expect(c.root_status).toBe("failed");
+    expect(c.child_errors).toEqual([childError]);
+    expect(c.error).toContain("verify");
+    expect(c.error).toContain("verification did not pass");
+    expect(
+      latest.files.find((file) => file.path === "C:\\d.txt")?.root_status
+    ).toBe("cancelled");
+    expect(
+      latest.files.find((file) => file.path === "C:\\e.txt")?.root_status
+    ).toBe("skipped");
+
+    await waitFor(() => expect(saveCalls().length).toBeGreaterThanOrEqual(1));
+    expect(saveCalls().at(-1)!.targets.map((entry) => entry.path)).toEqual([
+      "C:\\b.txt",
+      "C:\\c.txt",
+      "C:\\d.txt",
+      "C:\\e.txt",
+    ]);
+  });
+
+  it("retains destroyed targets and surfaces the error when the post-result save fails", async () => {
+    renderContext();
+    const paths = ["C:\\a.txt", "C:\\b.txt"];
+    configureLoadedVault(
+      "v2",
+      paths.map((path) => target(path)),
+      paths.map((path) => metadata(path))
+    );
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "save_vault") return Promise.reject(new Error("disk full"));
+      return Promise.resolve(undefined);
+    });
+
+    const files = latest.files;
+    let rejected = false;
+    let rejection: unknown;
+    await act(async () => {
+      try {
+        await latest.applyRootResults([
+          resultFor(files, "C:\\a.txt", "destroyed", true),
+          resultFor(files, "C:\\b.txt", "destroyed", true),
+        ]);
+      } catch (reason) {
+        rejected = true;
+        rejection = reason;
+      }
+    });
+
+    expect(rejected).toBe(true);
+    expect((rejection as Error).message).toBe("disk full");
+    expect(latest.files.map((file) => file.path).sort()).toEqual([
+      "C:\\a.txt",
+      "C:\\b.txt",
+    ]);
+    expect(latest.files.every((file) => file.status === "error")).toBe(true);
+    expect(
+      latest.files.every((file) => file.root_status === "destroyed")
+    ).toBe(true);
+    expect(latest.files[0].error).toContain("Destroyed but vault save failed");
   });
 });

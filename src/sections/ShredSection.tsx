@@ -11,8 +11,9 @@ import { useBrowser } from "@/contexts/BrowserContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { PinVerify } from "@/components/settings/PinVerify";
 import type {
-  ShredReport,
+  BatchRootResult,
   ProgressEvent,
+  ShredReport,
   ShredStatus,
   AlgorithmOption,
 } from "@/types";
@@ -36,7 +37,9 @@ export function ShredSection() {
     setProgress,
     vaultPin,
     setVaultPin,
-    saveVault,
+    flushVault,
+    buildExecuteRootsRequest,
+    applyRootResults,
   } = useShred();
 
   const { getSelectedCount, browsers } = useBrowser();
@@ -46,7 +49,6 @@ export function ShredSection() {
   const [passes, setPasses] = useState(1);
   const [pattern, setPattern] = useState<"random" | "zeros" | "ones">("random");
   const [verificationLevel, setVerificationLevel] = useState<"none" | "sample" | "full">("sample");
-  const [shredTargets, setShredTargets] = useState(false);
   const unlistenRef = useRef<(() => void) | null>(null);
   const isExecutingRef = useRef(false); // guards against StrictMode double-fire
   const completedCountRef = useRef(0);
@@ -68,9 +70,6 @@ export function ShredSection() {
   const selectedProfileCount = getSelectedCount();
   const currentAlgorithm = algorithms[algorithmIndex];
   const runningBrowsers = browsers.filter((b) => b.isRunning).map((b) => b.name);
-  // Count of shortcut/symlink entries (pending or otherwise). Drives the
-  // visibility of the "Also shred linked targets" opt-in checkbox.
-  const shortcutCount = files.filter((f) => f.is_shortcut).length;
 
   // Load algorithms on mount and sync default from settings
   useEffect(() => {
@@ -134,18 +133,20 @@ export function ShredSection() {
     setIsShredding(true);
     // Persist the pending shred list one last time before the destructive
     // operation. The auto-save effect is suppressed while isShredding is
-    // true, so this explicit call is the final checkpoint. If the save
+    // true, so this explicit flush is the final checkpoint. If the flush
     // fails we MUST abort — proceeding would shred the files without a
     // recoverable session backup.
     if (vaultPin) {
-      const ok = await saveVault(vaultPin);
-      if (!ok) {
-        addLogEntry("error", "Refusing to shred: vault save failed");
+      try {
+        await flushVault();
+      } catch (err) {
+        addLogEntry("error", `Refusing to shred: vault save failed: ${String(err)}`);
         setIsShredding(false);
         isExecutingRef.current = false;
         return;
       }
     }
+    const request = buildExecuteRootsRequest();
     addLogEntry(
       "command",
       `shredding ${pendingFiles.length} file(s) and ${selectedProfileCount} browser profile(s)...`
@@ -179,41 +180,39 @@ export function ShredSection() {
     unlistenRef.current = unlisten;
 
     try {
-      const paths = pendingFiles.map((f) => f.path);
-      const report: ShredReport = await invoke<ShredReport>("shred_files", {
-        paths,
+      const report: BatchRootResult = await invoke<BatchRootResult>("execute_roots", {
+        request,
         algorithmIndex,
         passes,
         pattern,
         verificationLevel,
         logObfuscation,
-        shredTargets,
       });
 
-      // Map report errors to per-file status
-      const failedPaths = new Set(report.errors.map((e) => e.path));
-      for (const file of pendingFiles) {
-        if (failedPaths.has(file.path)) {
-          const errorEntry = report.errors.find((e) => e.path === file.path);
-          updateFileStatus(file.id, "error", errorEntry?.error ?? "Unknown error");
-        } else {
-          updateFileStatus(file.id, "done");
-        }
-      }
+      // Apply typed per-root results: destroyed roots with root_removed are
+      // removed from the list, everything else is retained with error details.
+      await applyRootResults(report.roots);
+
+      const destroyed = report.roots.filter(
+        (root) => root.status === "destroyed" && root.root_removed
+      ).length;
+      const failed = report.roots.filter((root) => root.status === "failed").length;
+      const cancelled = report.roots.filter((root) => root.status === "cancelled").length;
+      const skipped = report.roots.filter((root) => root.status === "skipped").length;
 
       addLogEntry(
         "success",
-        `Complete: ${report.successful} destroyed, ${report.failed} failed, ${report.skipped} skipped (${report.duration_secs.toFixed(1)}s)`
+        `Complete: ${destroyed} destroyed, ${failed} failed, ${cancelled} cancelled, ${skipped} skipped`
       );
 
-      if (autoClearLog && report.failed === 0) {
+      if (autoClearLog && failed === 0) {
         clearLog();
       }
 
       // Send system notification for the main shred result.
       invoke("send_notification", {
         title: "Shred Complete",
-        body: `${report.successful} destroyed, ${report.failed} failed, ${report.skipped} skipped (${report.duration_secs.toFixed(1)}s)`,
+        body: `${destroyed} destroyed, ${failed} failed, ${cancelled} cancelled, ${skipped} skipped`,
       }).catch(() => {});
 
       // Shred browser profiles if any
@@ -319,16 +318,6 @@ export function ShredSection() {
           onCancel={handleCancel}
           progress={progress}
         />
-        {shortcutCount > 0 && (
-          <label className="flex items-center gap-2 text-sm text-amber-400 mt-2">
-            <input
-              type="checkbox"
-              checked={shredTargets}
-              onChange={(e) => setShredTargets(e.target.checked)}
-            />
-            Also shred linked targets ({shortcutCount})
-          </label>
-        )}
       </div>
       <ConfirmationDialog
         open={dialogOpen}

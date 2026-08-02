@@ -11,6 +11,10 @@ export interface ShredFile {
   error?: string;
   is_shortcut: boolean;
   shortcut_target: string | null;
+  /** Per-root status from the last typed execution result (retained targets only). */
+  root_status?: RootStatus;
+  /** Structured child errors from the last typed execution result (retained targets only). */
+  child_errors?: ChildErrorDto[];
 }
 
 /**

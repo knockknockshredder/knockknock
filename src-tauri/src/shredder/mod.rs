@@ -30,13 +30,10 @@ pub use types::{
     MediaType, PatternType, ShredReport, ShredReportError, ShredResult, VerificationLevel,
 };
 
-/// Shred a single file with full pipeline, including shortcut/symlink dispatch.
-///
-/// `shred_targets` controls whether shortcut targets are also shredded after the
-/// link file itself. `visited` is the recursion guard — a `HashSet` of paths
-/// already processed in this batch. If `path` is already present, the call
-/// returns a successful no-op result (the path was handled by an earlier
-/// invocation, possibly via a circular shortcut chain).
+/// Shred a single file with full pipeline, including shortcut/symlink
+/// dispatch. `visited` is the recursion guard — a `HashSet` of paths already
+/// processed in this batch. If `path` is already present, the call returns a
+/// successful no-op result (the path was handled by an earlier invocation).
 pub fn shred_file(
     path: &std::path::Path,
     algorithm: &dyn ShredAlgorithm,
@@ -44,7 +41,6 @@ pub fn shred_file(
     pattern: PatternType,
     verification_level: VerificationLevel,
     progress: &dyn ProgressReporter,
-    shred_targets: bool,
     visited: &mut HashSet<PathBuf>,
     cancel: &CancellationToken,
 ) -> Result<ShredResult, ShredError> {
@@ -96,7 +92,9 @@ pub fn shred_file(
         PathClassification::Shortcut { target } => {
             // Always shred the link file itself first — that is what the user
             // selected. The .lnk (or symlink) is a real file on disk and goes
-            // through the standard pipeline.
+            // through the standard pipeline. Linked targets are never
+            // followed: root execution refuses link roots, and the legacy
+            // pipeline has no target-following mode.
             let link_result = shred_file_inner(
                 path,
                 algorithm,
@@ -107,63 +105,11 @@ pub fn shred_file(
                 cancel,
             )?;
 
-            if !shred_targets {
-                // User did NOT opt in to shredding targets. Surface this loudly
-                // so the operator is aware the target survived.
-                eprintln!(
-                    "[KnockKnock] Shortcut shredded. Target {} was NOT shredded.",
-                    target.display()
-                );
-                return Ok(link_result);
-            }
-
-            // User opted in. Enforce depth limit 1: if the target is itself
-            // a shortcut, stop. We refuse to follow shortcut chains because
-            // each hop multiplies the surface area for unintended shreds.
-            let target_class = classify_path(&target)?;
-            if matches!(target_class, PathClassification::Shortcut { .. }) {
-                eprintln!(
-                    "[KnockKnock] Target {} is itself a shortcut or symlink; \
-                     refusing to follow (depth limit 1). Enable 'Also shred linked targets' \
-                     and run again to destroy the chain manually.",
-                    target.display()
-                );
-                return Ok(link_result);
-            }
-
-            // Target is a Normal file/dir. Run the full validation pipeline on
-            // it (allow_shortcut: false — if the TOCTOU window revealed a
-            // symlink we still refuse).
-            crate::shredder::validation::validate_path(&target, false)?;
-
-            // Recurse into the target. The visited set already contains `path`,
-            // so the target gets inserted normally and is shredded in full.
-            let target_result = shred_file(
-                &target,
-                algorithm,
-                passes,
-                pattern,
-                verification_level,
-                progress,
-                shred_targets,
-                visited,
-                cancel,
-            )?;
-
-            // Combine the two results. Success requires BOTH halves to succeed;
-            // errors from either side propagate in the merged vector.
-            let mut combined_errors = link_result.errors;
-            combined_errors.extend(target_result.errors);
-            let combined_success = link_result.success && target_result.success;
-            let combined_passes = link_result.passes_completed + target_result.passes_completed;
-            let combined_bytes = link_result.bytes_written + target_result.bytes_written;
-
-            Ok(ShredResult {
-                success: combined_success,
-                passes_completed: combined_passes,
-                bytes_written: combined_bytes,
-                errors: combined_errors,
-            })
+            eprintln!(
+                "[KnockKnock] Shortcut shredded. Target {} was NOT shredded.",
+                target.display()
+            );
+            Ok(link_result)
         }
     }
 }
@@ -528,9 +474,8 @@ fn shred_file_inner(
 
 /// Shred multiple files, continuing on error.
 ///
-/// `shred_targets` propagates to each individual `shred_file` call. A fresh
-/// `visited` set is created per batch — cross-batch deduplication is not
-/// required (each user-initiated shred is a distinct operation).
+/// A fresh `visited` set is created per batch — cross-batch deduplication is
+/// not required (each user-initiated shred is a distinct operation).
 pub fn shred_files(
     paths: Vec<std::path::PathBuf>,
     algorithm: std::sync::Arc<dyn ShredAlgorithm>,
@@ -538,7 +483,6 @@ pub fn shred_files(
     pattern: PatternType,
     verification_level: VerificationLevel,
     progress: std::sync::Arc<dyn ProgressReporter>,
-    shred_targets: bool,
 ) -> ShredReport {
     use crate::commands::error::ShredErrorDto;
 
@@ -567,7 +511,6 @@ pub fn shred_files(
             pattern,
             verification_level,
             progress.as_ref(),
-            shred_targets,
             &mut visited,
             &cancel_token,
         ) {
