@@ -679,6 +679,8 @@ fn enumerate_handle(handle: RawHandle) -> Result<Vec<ChildName>, ShredError> {
                     "directory enumeration returned an invalid name record".to_string(),
                 ));
             }
+            // SAFETY: the checked record bounds include the UTF-16 file-name
+            // payload, and the slice remains within `buffer` for this iteration.
             let name =
                 unsafe { std::slice::from_raw_parts(record.FileName.as_ptr(), name_length / 2) };
             if name != [b'.' as u16] && name != [b'.' as u16, b'.' as u16] {
@@ -710,6 +712,8 @@ fn query_identity(handle: RawHandle) -> Result<NodeIdentity, ShredError> {
             std::io::Error::last_os_error(),
         ));
     }
+    // SAFETY: GetFileInformationByHandle returned success and initialized the
+    // complete BY_HANDLE_FILE_INFORMATION structure.
     let information = unsafe { information.assume_init() };
     let mut tag = FILE_ATTRIBUTE_TAG_INFO {
         FileAttributes: 0,
