@@ -634,7 +634,8 @@ describe("typed execution results", () => {
     ).toBe("skipped");
 
     await waitFor(() => expect(saveCalls().length).toBeGreaterThanOrEqual(1));
-    expect(saveCalls().at(-1)!.targets.map((entry) => entry.path)).toEqual([
+    const lastSave = saveCalls()[saveCalls().length - 1];
+    expect(lastSave!.targets.map((entry) => entry.path)).toEqual([
       "C:\\b.txt",
       "C:\\c.txt",
       "C:\\d.txt",
