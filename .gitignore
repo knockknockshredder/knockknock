@@ -40,6 +40,7 @@ Thumbs.db
 
 # Rust
 # Cargo.lock — tracked for reproducible builds (apps should commit lockfiles)
+sweep.timestamp
 
 # OS
 desktop.ini
