@@ -77,8 +77,8 @@ describe("root execution contract", () => {
     const error: ChildErrorDto = {
       path: "C:\\selected\\root\\child",
       stage: "verify",
-      error_type: "verification_failed",
-      message: "verification failed",
+      error_type: "write_check_failed",
+      message: "write check did not pass",
       actionable: "Retry the operation",
     };
     const result: RootResultDto = {

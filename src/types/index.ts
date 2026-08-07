@@ -116,16 +116,6 @@ export interface ProgressState {
 /** Matches backend LogObfuscation enum. Serialized to backend as snake_case string. */
 export type LogObfuscation = "none" | "numbered" | "partial_mask";
 
-export interface ShredReport {
-  total_files: number;
-  successful: number;
-  failed: number;
-  skipped: number;
-  errors: Array<{ path: string; error: string }>;
-  total_bytes_shredded: number;
-  duration_secs: number;
-}
-
 /**
  * Drive classification. Mirrors backend `DriveType` snake_case
  * serialization in `src-tauri/src/drive/mod.rs`.

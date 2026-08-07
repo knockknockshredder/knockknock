@@ -1,5 +1,5 @@
 // src/sections/ShredSection.tsx
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ShredButton } from "@/components/shred/ShredButton";
@@ -13,12 +13,44 @@ import { PinVerify } from "@/components/settings/PinVerify";
 import type {
   BatchRootResult,
   ProgressEvent,
-  ShredReport,
+  RootResultDto,
   ShredStatus,
 } from "@/types";
 
 function statusToString(status: ShredStatus): string {
   return status.type.toLowerCase();
+}
+
+/**
+ * Pass-local progress percent (M5): completed passes plus the fraction of
+ * the current pass, divided by the total pass count. Guarded so
+ * `total_passes < 1` yields 0 and the result is clamped to 0..=100; a
+ * zero-length file (file_size 0) contributes no fraction.
+ */
+export function computeProgressPercent(
+  currentPass: number,
+  totalPasses: number,
+  bytesInPass: number,
+  fileSize: number
+): number {
+  if (totalPasses < 1) return 0;
+  const completedPasses = Math.max(0, currentPass - 1);
+  const passFraction = fileSize > 0 ? Math.min(1, bytesInPass / fileSize) : 0;
+  const percent = ((completedPasses + passFraction) / totalPasses) * 100;
+  return Math.min(100, Math.max(0, percent));
+}
+
+/**
+ * A root whose final write check did not pass: either the aggregate outcome
+ * is `failed`, or a child error was reported at the `verify` stage. Such
+ * roots are not a clean success — the frontend renders a warning instead of
+ * a plain "Success" (M3).
+ */
+function isWriteCheckFailure(root: RootResultDto): boolean {
+  return (
+    root.write_check === "failed" ||
+    root.errors.some((error) => error.stage === "verify")
+  );
 }
 
 export function ShredSection() {
@@ -40,13 +72,17 @@ export function ShredSection() {
     applyRootResults,
   } = useShred();
 
-  const { getSelectedCount, browsers } = useBrowser();
+  const { getSelectedCount, browsers, rescanBrowsers } = useBrowser();
   const { logObfuscation, autoClearLog } = useSettings();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const unlistenRef = useRef<(() => void) | null>(null);
   const isExecutingRef = useRef(false); // guards against StrictMode double-fire
   const completedCountRef = useRef(0);
+  // Honest consent flag (M10, ora-2 amendment 5): set ONLY by the DELETE
+  // action on the confirmation dialog. Never derived from a stale browser
+  // scan, never unconditional. The backend lock check remains authoritative.
+  const dialogConfirmedRef = useRef(false);
 
   // PIN verification gates
   const [pinNeeded, setPinNeeded] = useState(false);
@@ -71,13 +107,17 @@ export function ShredSection() {
   const selectedProfileCount = getSelectedCount();
   const runningBrowsers = browsers.filter((b) => b.isRunning).map((b) => b.name);
 
-  // Transitional IPC shim (removed when the v2 contract lands): map the
-  // policy state to the legacy execute_roots argument surface. The engine
-  // derives its pass plan from the policy, so `passes`/`pattern` are
-  // placeholders that are validated for bounds and otherwise ignored.
-  const algorithmIndex = deletionMethod === "legacy_three_pass" ? 1 : 0;
-  const verificationLevel =
-    writeCheck === "off" ? "none" : writeCheck === "full" ? "full" : "sample";
+  /**
+   * Open the confirmation dialog with a fresh consent flag and refresh the
+   * running-browser scan so the warning list is current while it is open.
+   * The consent flag itself remains `dialogConfirmedRef` — set only by the
+   * DELETE action (M10).
+   */
+  const openConfirmationDialog = useCallback(() => {
+    dialogConfirmedRef.current = false;
+    setDialogOpen(true);
+    void rescanBrowsers();
+  }, [rescanBrowsers]);
 
   // Handle tray menu "Quick Shred" — triggers the same PIN→confirmation
   // flow as clicking the Shred button, using the existing executeShred
@@ -95,16 +135,16 @@ export function ShredSection() {
       }
 
       if (pinNeeded) {
-        setDeferredShred(() => () => setDialogOpen(true));
+        setDeferredShred(() => openConfirmationDialog);
         setShredPinOpen(true);
       } else {
-        setDialogOpen(true);
+        openConfirmationDialog();
       }
     });
     return () => {
       unlistenPromise.then((fn) => fn());
     };
-  }, [pinNeeded, pendingFiles.length, selectedProfileCount]);
+  }, [pinNeeded, pendingFiles.length, selectedProfileCount, openConfirmationDialog]);
 
   // Cleanup progress listener on unmount
   useEffect(() => {
@@ -117,11 +157,17 @@ export function ShredSection() {
 
   const handleShredClick = () => {
     if (pinNeeded) {
-      setDeferredShred(() => () => setDialogOpen(true));
+      setDeferredShred(() => openConfirmationDialog);
       setShredPinOpen(true);
     } else {
-      setDialogOpen(true);
+      openConfirmationDialog();
     }
+  };
+
+  const handleConfirm = () => {
+    // The DELETE action on the dialog IS the explicit user action (M10).
+    dialogConfirmedRef.current = true;
+    void executeShred();
   };
 
   const executeShred = async () => {
@@ -156,23 +202,44 @@ export function ShredSection() {
 
     // Listen for progress events
     const unlisten = await listen<ProgressEvent>("shred-progress", (event) => {
-      const { file_path, status, current_pass, total_passes } = event.payload;
+      const {
+        file_path,
+        status,
+        current_pass,
+        total_passes,
+        bytes_written,
+        file_size,
+      } = event.payload;
       const statusStr = statusToString(status);
       const message =
         status.type === "Error"
           ? `[${file_path}] error: ${status.message}`
-          : `[${file_path}] ${statusStr} (pass ${current_pass}/${total_passes})`;
-      addLogEntry(status.type === "Error" ? "error" : "info", message);
+          : status.type === "Warning"
+            ? `[${file_path}] warning: ${status.message}`
+            : `[${file_path}] ${statusStr} (pass ${current_pass}/${total_passes})`;
+      const level =
+        status.type === "Error"
+          ? "error"
+          : status.type === "Warning"
+            ? "warning"
+            : "info";
+      addLogEntry(level, message);
 
       if (status.type === "Complete") {
         completedCountRef.current += 1;
       }
 
-      // Update progress state
+      // Pass-local progress percent (M5): completed passes plus the fraction
+      // of the current pass over the total pass count, guarded and clamped.
       setProgress({
         current: completedCountRef.current,
         total: pendingFiles.length,
-        percent: Math.round((current_pass / total_passes) * 100),
+        percent: computeProgressPercent(
+          current_pass,
+          total_passes,
+          bytes_written,
+          file_size
+        ),
         currentFile: file_path,
       });
     });
@@ -181,10 +248,8 @@ export function ShredSection() {
     try {
       const report: BatchRootResult = await invoke<BatchRootResult>("execute_roots", {
         request,
-        algorithmIndex,
-        passes: 1,
-        pattern: "random",
-        verificationLevel,
+        method: deletionMethod,
+        writeCheck,
         logObfuscation,
       });
 
@@ -203,6 +268,15 @@ export function ShredSection() {
         "success",
         `Complete: ${removed} removed, ${failed} failed, ${cancelled} cancelled, ${skipped} skipped`
       );
+
+      // A root whose write check did not pass is not a clean success — warn
+      // instead of rendering a plain "Success" (M3).
+      if (report.roots.some(isWriteCheckFailure)) {
+        addLogEntry(
+          "warning",
+          "Deletion completed, but the requested write check did not pass."
+        );
+      }
 
       if (autoClearLog && failed === 0) {
         clearLog();
@@ -232,22 +306,38 @@ export function ShredSection() {
               "info",
               `Deleting selected local data from ${profile.browser_name} profile: ${profile.profile_path}`
             );
-            const browserReport: ShredReport = await invoke<ShredReport>("shred_browser_data", {
-              request: {
-                browser_name: profile.browser_name,
-                profile_path: profile.profile_path,
-                data_types: profile.data_types,
-                algorithm_index: algorithmIndex,
-                passes: 1,
-                pattern: "random",
-                verification_level: verificationLevel,
-                explicit_consent: true,
-              },
-            });
+            const browserReport: BatchRootResult = await invoke<BatchRootResult>(
+              "shred_browser_data",
+              {
+                request: {
+                  browser_name: profile.browser_name,
+                  profile_path: profile.profile_path,
+                  data_types: profile.data_types,
+                  method: deletionMethod,
+                  write_check: writeCheck,
+                  explicit_consent: dialogConfirmedRef.current,
+                },
+              }
+            );
+            const removed = browserReport.roots.filter(
+              (root) => root.status === "destroyed" && root.root_removed
+            ).length;
+            const failed = browserReport.roots.filter(
+              (root) => root.status === "failed"
+            ).length;
+            const cancelled = browserReport.roots.filter(
+              (root) => root.status === "cancelled"
+            ).length;
             addLogEntry(
               "success",
-              `${profile.browser_name}: ${browserReport.successful} files processed, ${browserReport.failed} failed`
+              `${profile.browser_name}: ${removed} removed, ${failed} failed, ${cancelled} cancelled`
             );
+            if (browserReport.roots.some(isWriteCheckFailure)) {
+              addLogEntry(
+                "warning",
+                "Deletion completed, but the requested write check did not pass."
+              );
+            }
           } catch (err) {
             addLogEntry(
               "error",
@@ -317,7 +407,7 @@ export function ShredSection() {
         folderCount={pendingFolderCount}
         profileCount={selectedProfileCount}
         runningBrowsers={runningBrowsers}
-        onConfirm={executeShred}
+        onConfirm={handleConfirm}
       />
       <PinVerify
         open={shredPinOpen}
