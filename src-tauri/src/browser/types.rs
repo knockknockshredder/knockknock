@@ -38,9 +38,10 @@ pub struct BrowserShredRequest {
     pub browser_name: String,
     pub profile_path: String,
     pub data_types: Vec<BrowserDataType>,
-    pub algorithm_index: usize,
-    pub passes: u32,
-    pub pattern: crate::shredder::PatternType,
-    pub verification_level: crate::shredder::VerificationLevel,
+    /// Deletion policy (Phase 3): method + write check, same policy model as
+    /// file shredding. `explicit_consent` reflects the actual confirmation
+    /// dialog state (M10) — it is never hardcoded `true` by the backend.
+    pub method: crate::shredder::types::DeletionMethod,
+    pub write_check: crate::shredder::types::WriteCheck,
     pub explicit_consent: bool,
 }

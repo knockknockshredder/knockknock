@@ -2,7 +2,13 @@
 
 use crate::browser;
 use crate::browser::types::*;
-use crate::shredder::types::ShredReport;
+use crate::shredder::cancel::CancellationToken;
+use crate::shredder::journal::JournalStore;
+use crate::shredder::logging::LogObfuscation;
+use crate::shredder::progress::TauriProgressReporter;
+use crate::shredder::root_execution::types::{ExecuteRootRequest, ExecuteRootsRequest, TargetKind};
+use crate::shredder::types::DeletionPolicy;
+use crate::shredder::traits::ProgressReporter;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -20,30 +26,72 @@ pub async fn detect_browsers() -> Result<Vec<DetectedBrowser>, String> {
     Ok(result)
 }
 
+/// Tauri command wrapper around `shred_browser_core` (M8/M10-backend):
+/// browser cleanup now feeds candidates into the secure root execution
+/// pipeline (`execute_roots_core`) with the policy taken from the request.
 #[tauri::command]
 pub async fn shred_browser_data(
     app: AppHandle,
     request: BrowserShredRequest,
-) -> Result<ShredReport, String> {
-    use crate::shredder::algorithms::all_algorithms;
-    use crate::shredder::logging::LogObfuscation;
-    use crate::shredder::progress::TauriProgressReporter;
-
+) -> Result<crate::shredder::root_execution::types::BatchRootResult, String> {
     eprintln!(
         "[shred_browser_data] called for browser={}, profile={}",
         request.browser_name, request.profile_path
     );
 
+    let progress: Arc<dyn ProgressReporter> =
+        Arc::new(TauriProgressReporter::new(app, LogObfuscation::None));
+    let journal = JournalStore::portable().map_err(|error| error.to_string())?;
+
+    // Fresh cancellation token per operation (mirrors `execute_roots`).
+    crate::shredder::cancel::reset_global();
+    let cancel = crate::shredder::cancel::get_global_token();
+
+    tokio::task::spawn_blocking(move || shred_browser_core(request, progress, &cancel, &journal))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// Command core without the `AppHandle` (testable without a Tauri runtime).
+///
+/// Pipeline (Task 3.3):
+/// 1. profile exists AND is a real directory, not a filesystem link;
+/// 2. running-browser lock check, `explicit_consent` honored (M10 —
+///    backend authoritative; the flag reflects the confirmed dialog state);
+/// 3. collect candidates (Result-propagating, no-follow — M9);
+/// 4. feed candidates into `execute_roots_core` as File roots with the
+///    request's `DeletionPolicy`;
+/// 5. return the structured `BatchRootResult`.
+pub(crate) fn shred_browser_core(
+    request: BrowserShredRequest,
+    progress: Arc<dyn ProgressReporter>,
+    cancel: &CancellationToken,
+    journal: &JournalStore,
+) -> Result<crate::shredder::root_execution::types::BatchRootResult, String> {
     let profile_path = PathBuf::from(&request.profile_path);
-    if !profile_path.exists() {
+
+    // 1. The profile must exist and be a real directory. A profile path that
+    // is a filesystem link (Unix symlink / Windows reparse point) would let
+    // cleanup escape the selected profile — refuse it (M9).
+    let profile_metadata = std::fs::symlink_metadata(&profile_path).map_err(|error| {
+        format!(
+            "Profile path does not exist or cannot be inspected: {} ({error})",
+            request.profile_path
+        )
+    })?;
+    if browser::paths::is_link_metadata(&profile_metadata) {
+        return Err("Profile path is a filesystem link; cleanup is blocked".to_string());
+    }
+    if !profile_metadata.is_dir() {
         return Err(format!(
-            "Profile path does not exist: {}",
+            "Profile path is not a directory: {}",
             request.profile_path
         ));
     }
 
-    // Safety: refuse to shred browser data while the browser is running
-    // unless the user has explicitly acknowledged the warning.
+    // 2. Safety: refuse to shred browser data while the browser is running
+    // unless the user has explicitly acknowledged the warning. The backend
+    // check remains authoritative (M10) — the frontend may be stale.
     if check_browser_lock_file(&profile_path) && !request.explicit_consent {
         return Err(format!(
             "Browser {} is currently running. Close it first or acknowledge the warning.",
@@ -51,14 +99,13 @@ pub async fn shred_browser_data(
         ));
     }
 
-    // Collect files to shred based on selected data types. Collection
+    // 3. Collect files to shred based on selected data types. Collection
     // failures are surfaced, never silently swallowed (M9).
     let mut files_to_shred = Vec::new();
     for data_type in &request.data_types {
         collect_browser_data_files(&profile_path, data_type, &mut files_to_shred)
             .map_err(|error| error.to_string())?;
     }
-
     if files_to_shred.is_empty() {
         return Err("No browser data files found to shred".to_string());
     }
@@ -68,46 +115,29 @@ pub async fn shred_browser_data(
         files_to_shred.len()
     );
 
-    // Use the SAME algorithm settings as file shredding
-    let algorithms = all_algorithms();
-    let algorithm = algorithms
-        .get(request.algorithm_index)
-        .ok_or_else(|| format!("Invalid algorithm index: {}", request.algorithm_index))?
-        .clone();
-
-    if request.passes > algorithm.max_passes() {
-        return Err(format!(
-            "Passes {} exceeds maximum {}",
-            request.passes,
-            algorithm.max_passes()
-        ));
-    }
-
-    let progress: Arc<dyn crate::shredder::traits::ProgressReporter> =
-        Arc::new(TauriProgressReporter::new(app, LogObfuscation::None));
-
-    let report = tokio::task::spawn_blocking(move || {
-        // Browser profile data is plain files inside the profile directory;
-        // shortcuts are not expected there and we never want to follow them
-        // (a stray .lnk in a profile should not drag in user files outside it).
-        crate::shredder::shred_files(
-            files_to_shred,
-            algorithm,
-            request.passes,
-            request.pattern,
-            request.verification_level,
-            progress,
-        )
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?;
-
-    eprintln!(
-        "[shred_browser_data] complete: {} successful, {} failed",
-        report.successful, report.failed
-    );
-
-    Ok(report)
+    // 4. Secure root execution with the request's policy. Each candidate is
+    // an independent File root (the batch layer owns per-file lifecycles,
+    // journaling, and rename/unlink through the trusted adapters).
+    let roots = files_to_shred
+        .iter()
+        .enumerate()
+        .map(|(index, path)| ExecuteRootRequest {
+            target_id: format!("browser-{index}"),
+            path: path.to_string_lossy().into_owned(),
+            kind: TargetKind::File,
+        })
+        .collect();
+    let policy = DeletionPolicy {
+        method: request.method,
+        write_check: request.write_check,
+    };
+    Ok(crate::commands::shred::execute_roots_core(
+        ExecuteRootsRequest { roots },
+        policy,
+        progress,
+        cancel,
+        journal,
+    ))
 }
 
 /// Collect files for a specific browser data type into `files`.
@@ -344,6 +374,11 @@ fn check_browser_lock_file(profile_path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shredder::cancel::CancellationToken;
+    use crate::shredder::journal::JournalStore;
+    use crate::shredder::progress::NoopProgressReporter;
+    use crate::shredder::root_execution::types::{BatchRootResult, RootStatus};
+    use crate::shredder::types::{DeletionMethod, WriteCheck};
     use std::path::Path;
 
     /// Collects the given data types from `profile_path` into a sorted list.
@@ -494,5 +529,225 @@ mod tests {
 
         assert_eq!(profiles, vec![base.join("Default")]);
         drop(tmp);
+    }
+
+    // --- Command-level destructive tests (Task 3.3) ---------------------
+    //
+    // Root execution confines roots to the home directory, so destructive
+    // fixtures live under a `.knockknock-browser-*` child of the real home
+    // directory and are removed on drop (same pattern as commands/shred.rs).
+
+    struct TempHome(PathBuf);
+
+    impl TempHome {
+        fn profile(&self) -> PathBuf {
+            self.0.join("profile")
+        }
+    }
+
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_home() -> TempHome {
+        let home = std::env::home_dir().expect("home directory");
+        let unique = format!(
+            ".knockknock-browser-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        );
+        let unique_dir = home.join(unique);
+        std::fs::create_dir_all(unique_dir.join("profile")).expect("create fixture profile");
+        TempHome(unique_dir)
+    }
+
+    fn request(
+        profile_path: &Path,
+        data_types: Vec<BrowserDataType>,
+        explicit_consent: bool,
+    ) -> BrowserShredRequest {
+        BrowserShredRequest {
+            browser_name: "TestBrowser".to_string(),
+            profile_path: profile_path.to_string_lossy().into_owned(),
+            data_types,
+            method: DeletionMethod::Automatic,
+            write_check: WriteCheck::Off,
+            explicit_consent,
+        }
+    }
+
+    fn run(request: BrowserShredRequest) -> Result<BatchRootResult, String> {
+        let journal_directory = tempfile::tempdir().expect("temporary journal directory");
+        let journal = JournalStore::at(journal_directory.path().join("journal.json"));
+        shred_browser_core(
+            request,
+            Arc::new(NoopProgressReporter),
+            &CancellationToken::new(),
+            &journal,
+        )
+    }
+
+    #[test]
+    fn browser_cleanup_processes_nested_directories() {
+        let home = temp_home();
+        let profile = home.profile();
+        write(&profile.join("top.txt"), b"top");
+        std::fs::create_dir_all(profile.join("a/b")).expect("create nested dirs");
+        write(&profile.join("a/b/deep.txt"), b"deep");
+
+        let result = run(request(&profile, vec![BrowserDataType::Profile], false))
+            .expect("cleanup must succeed");
+
+        assert_eq!(result.roots.len(), 2);
+        assert!(result
+            .roots
+            .iter()
+            .all(|root| root.status == RootStatus::Destroyed));
+        assert!(!profile.join("top.txt").exists(), "top file must be removed");
+        assert!(
+            !profile.join("a/b/deep.txt").exists(),
+            "nested file must be removed"
+        );
+    }
+
+    #[test]
+    fn browser_non_target_neighbor_unchanged() {
+        let home = temp_home();
+        let profile = home.profile();
+        write(&profile.join("Cookies"), b"cookies payload");
+        write(&profile.join("neighbor.txt"), b"neighbor payload");
+
+        let result = run(request(&profile, vec![BrowserDataType::Cookies], false))
+            .expect("cleanup must succeed");
+
+        assert_eq!(result.roots.len(), 1);
+        assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+        assert!(!profile.join("Cookies").exists(), "Cookies must be removed");
+        assert_eq!(
+            std::fs::read(profile.join("neighbor.txt")).expect("neighbor readable"),
+            b"neighbor payload",
+            "non-target neighbor must be byte-for-byte unchanged"
+        );
+    }
+
+    /// M9: cleanup must never escape the profile through a link directory —
+    /// the link is skipped, the outside target is byte-for-byte untouched.
+    #[cfg(unix)]
+    #[test]
+    fn browser_cleanup_never_escapes_profile_through_links() {
+        let home = temp_home();
+        let profile = home.profile();
+        let outside = home.0.join("outside");
+        std::fs::create_dir(&outside).expect("create outside dir");
+        write(&profile.join("real.txt"), b"real payload");
+        write(&outside.join("secret.txt"), b"secret payload");
+        std::os::unix::fs::symlink(&outside, profile.join("link_dir")).expect("create symlink");
+
+        let result = run(request(&profile, vec![BrowserDataType::Profile], false))
+            .expect("cleanup must succeed");
+
+        assert_eq!(result.roots.len(), 1, "the link must not be collected");
+        assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+        assert!(!profile.join("real.txt").exists(), "real file must be removed");
+        assert!(
+            profile.join("link_dir").symlink_metadata().is_ok(),
+            "the link itself must remain"
+        );
+        assert_eq!(
+            std::fs::read(&outside.join("secret.txt")).expect("outside readable"),
+            b"secret payload",
+            "the link target must be byte-for-byte unchanged"
+        );
+    }
+
+    /// M9: an unreadable profile subdirectory fails the cleanup with an
+    /// explicit error instead of silently shredding the readable subset.
+    #[cfg(unix)]
+    #[test]
+    fn browser_inspection_error_is_surfaced_not_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = temp_home();
+        let profile = home.profile();
+        write(&profile.join("readable.txt"), b"readable");
+        let locked = profile.join("locked");
+        std::fs::create_dir(&locked).expect("create locked dir");
+        write(&locked.join("inside.txt"), b"inside");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 0");
+
+        let error = run(request(&profile, vec![BrowserDataType::Profile], false))
+            .expect_err("cleanup must fail");
+        assert!(
+            error.contains("browser data collection failed"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            profile.join("readable.txt").exists(),
+            "nothing may be shredded when collection fails"
+        );
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+            .expect("restore permissions");
+    }
+
+    /// M9: a profile path that is itself a link is rejected before any
+    /// collection or mutation.
+    #[cfg(unix)]
+    #[test]
+    fn browser_profile_that_is_a_link_is_rejected() {
+        let home = temp_home();
+        let real_profile = home.profile();
+        write(&real_profile.join("data.txt"), b"data");
+        let link_profile = home.0.join("profile-link");
+        std::os::unix::fs::symlink(&real_profile, &link_profile).expect("create symlink");
+
+        let error = run(request(&link_profile, vec![BrowserDataType::Profile], false))
+            .expect_err("cleanup must be blocked");
+        assert!(
+            error.contains("filesystem link; cleanup is blocked"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            std::fs::read(real_profile.join("data.txt")).expect("data readable"),
+            b"data",
+            "nothing may be shredded through the link"
+        );
+    }
+
+    /// M10: a running browser (lock file present) is rejected without
+    /// explicit consent, and accepted with it — the backend honors the flag
+    /// and never hardcodes it.
+    #[test]
+    fn browser_running_condition_rejected_without_consent() {
+        let home = temp_home();
+        let profile = home.profile();
+        write(&profile.join("Cookies"), b"cookies payload");
+        write(&profile.join("SingletonLock"), b"lock");
+
+        let rejected =
+            run(request(&profile, vec![BrowserDataType::Cookies], false)).expect_err("must reject");
+        assert!(
+            rejected.contains("is currently running"),
+            "unexpected error: {rejected}"
+        );
+        assert!(
+            profile.join("Cookies").exists(),
+            "nothing may be shredded while rejected"
+        );
+
+        let accepted = run(request(&profile, vec![BrowserDataType::Cookies], true))
+            .expect("consent must allow cleanup");
+        assert_eq!(accepted.roots.len(), 1);
+        assert_eq!(accepted.roots[0].status, RootStatus::Destroyed);
+        assert!(
+            !profile.join("Cookies").exists(),
+            "Cookies must be removed after consent"
+        );
     }
 }
