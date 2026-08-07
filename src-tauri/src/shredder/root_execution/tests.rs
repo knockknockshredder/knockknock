@@ -3,7 +3,6 @@ use super::plan::{
     RenamedNode,
 };
 use super::{execute_roots, OpenFileShredder, SecureTreeIo};
-use crate::shredder::algorithms::nist_clear::NistClear;
 use crate::shredder::cancel::CancellationToken;
 use crate::shredder::engine::OverwriteState;
 use crate::shredder::errors::JournalError;
@@ -15,9 +14,9 @@ use crate::shredder::progress::NoopProgressReporter;
 use crate::shredder::traits::ProgressReporter;
 use crate::shredder::types::{
     BatchRootResult, DeletionPolicy, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage,
-    RootStatus, TargetKind, VerificationLevel, WriteCheckOutcome,
+    RootStatus, TargetKind, WriteCheckOutcome,
 };
-use crate::shredder::LegacyOpenFileShredder;
+use crate::shredder::PolicyFileShredder;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
@@ -317,6 +316,37 @@ impl OpenFileShredder for FakeShredder {
 
 fn home_child(name: &str) -> PathBuf {
     std::env::home_dir().expect("home directory").join(name)
+}
+
+/// A temporary directory under the real home directory (root execution
+/// refuses roots outside home), removed on drop.
+struct TempHomeDir(PathBuf);
+
+impl TempHomeDir {
+    fn new(label: &str) -> Self {
+        let home = std::env::home_dir().expect("home directory");
+        let unique = format!(
+            ".knockknock-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        );
+        let path = home.join(unique);
+        std::fs::create_dir(&path).expect("create home fixture");
+        TempHomeDir(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempHomeDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn root_request(id: &str, path: &Path, kind: TargetKind) -> ExecuteRootRequest {
@@ -1083,14 +1113,9 @@ fn rejects_special_files_mount_crossings_and_depth_overflow() {
 }
 
 #[test]
-fn legacy_open_file_shredder_rejects_directory_identity() {
-    let adapter = LegacyOpenFileShredder::new(
-        Arc::new(NistClear),
-        1,
-        crate::shredder::PatternType::Zeros,
-        VerificationLevel::None,
-        Arc::new(NoopProgressReporter),
-    );
+fn policy_file_shredder_rejects_directory_identity() {
+    let adapter =
+        PolicyFileShredder::new(DeletionPolicy::default(), Arc::new(NoopProgressReporter));
     let request = FileShredRequest::new(
         home_child("task7-directory-handle"),
         DeletionPolicy::default(),
@@ -1104,4 +1129,260 @@ fn legacy_open_file_shredder_rejects_directory_identity() {
         .expect_err("directory identity must be rejected");
 
     assert!(matches!(error, ShredError::ValidationFailed(_)));
+}
+
+/// The M6 execution-time recheck must refuse an already-open handle whose
+/// link count grew past 1 (a link created after preflight), without ever
+/// reopening by path, and must leave both names byte-for-byte untouched.
+#[test]
+fn policy_file_shredder_rechecks_hard_links_on_open_handle() {
+    let fixture = TempHomeDir::new("openhandle");
+    let target = fixture.path().join("target.txt");
+    std::fs::write(&target, b"payload").expect("write fixture");
+    let sibling = fixture.path().join("sibling.txt");
+    if let Err(error) = std::fs::hard_link(&target, &sibling) {
+        // Filesystems without hard-link support skip cleanly.
+        eprintln!("skipping hard-link fixture: {error}");
+        return;
+    }
+
+    let file = File::open(&target).expect("open target");
+    let adapter =
+        PolicyFileShredder::new(DeletionPolicy::default(), Arc::new(NoopProgressReporter));
+    let request = FileShredRequest::new(target.clone(), DeletionPolicy::default());
+    let error = adapter
+        .shred_open_file(file, NodeIdentity::regular(1, 1), &request)
+        .expect_err("hard-linked open handle must be blocked");
+
+    assert!(matches!(error, ShredError::HardLinkBlocked { .. }));
+    assert_eq!(
+        std::fs::read(&target).expect("target readable"),
+        b"payload",
+        "selected name must be untouched"
+    );
+    assert_eq!(
+        std::fs::read(&sibling).expect("sibling readable"),
+        b"payload",
+        "sibling name must be untouched"
+    );
+}
+
+#[test]
+fn write_check_failure_does_not_prevent_removal() {
+    let parent = home_child("task22-check-failure");
+    let root = parent.join("file");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2));
+    let shredder = FakeShredder::new().outcome(FakeShredOutcome::CompletedCheckFailed);
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request("check-failure", &root, TargetKind::File)],
+        },
+        &io,
+        &shredder,
+        &journal,
+    );
+
+    // Removal continues after a failed write check (M2 rule 3): the entry is
+    // gone, but the root is not a clean Destroyed and the failed check is
+    // surfaced with a Verify-stage error.
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Failed);
+    assert!(root_result.root_removed);
+    assert_eq!(root_result.files_destroyed, 1);
+    assert_eq!(root_result.write_check, WriteCheckOutcome::Failed);
+    assert!(root_result.errors.iter().any(|error| {
+        error.stage == ExecutionStage::Verify && error.error_type == "write_check_failed"
+    }));
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert!(events.calls.iter().any(|call| call == "rename"));
+    assert!(events.calls.iter().any(|call| call == "unlink"));
+    assert!(journal.read().expect("journal read").is_empty());
+}
+
+#[test]
+fn not_started_failure_leaves_target_intact() {
+    let parent = home_child("task22-not-started");
+    let root = parent.join("file");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2));
+    let shredder = FakeShredder::new().outcome(FakeShredOutcome::NotStarted);
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request("not-started", &root, TargetKind::File)],
+        },
+        &io,
+        &shredder,
+        &journal,
+    );
+
+    // A NotStarted failure means no byte was written (M2 rule 1): no
+    // journal/rename/unlink, the root reports the Overwrite-stage issue, and
+    // the entry is not removed.
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Failed);
+    assert!(!root_result.root_removed);
+    assert_eq!(root_result.files_destroyed, 0);
+    assert_eq!(root_result.write_check, WriteCheckOutcome::NotRun);
+    assert_eq!(shredder.calls.lock().unwrap().len(), 1);
+    assert!(root_result
+        .errors
+        .iter()
+        .any(|error| error.stage == ExecutionStage::Overwrite));
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert!(!events.calls.iter().any(|call| call == "rename"));
+    assert!(!events.calls.iter().any(|call| call == "unlink"));
+    assert!(journal.read().expect("journal read").is_empty());
+}
+
+#[test]
+fn partial_failure_cleans_up_current_file() {
+    let parent = home_child("task22-partial");
+    let root = parent.join("file");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2));
+    let shredder = FakeShredder::new().outcome(FakeShredOutcome::Partial);
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request("partial", &root, TargetKind::File)],
+        },
+        &io,
+        &shredder,
+        &journal,
+    );
+
+    // The partially overwritten file still completes its destructive
+    // lifecycle (M2 rule 2): rename/unlink run, the partial-destruction
+    // issue is preserved with the Overwrite stage, and the root is never a
+    // clean Destroyed.
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Failed);
+    assert!(root_result.root_removed);
+    assert_eq!(root_result.files_destroyed, 1);
+    assert_eq!(root_result.write_check, WriteCheckOutcome::NotRun);
+    assert!(root_result.errors.iter().any(|error| {
+        error.stage == ExecutionStage::Overwrite
+            && error.message.contains("injected partial shredding")
+    }));
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert!(events.calls.iter().any(|call| call == "rename"));
+    assert!(events.calls.iter().any(|call| call == "unlink"));
+}
+
+#[test]
+fn root_with_file_issues_is_failed_not_destroyed_but_removed_and_batch_continues() {
+    let first_parent = home_child("task22-issue-root-parent");
+    let first = first_parent.join("file");
+    let second_parent = home_child("task22-later-root-parent");
+    let second = second_parent.join("file");
+    let io = FakeIo::new()
+        .root(first_parent.clone(), 1, directory(1, vec![]))
+        .root(first.clone(), 2, regular(2))
+        .root(second_parent.clone(), 3, directory(3, vec![]))
+        .root(second.clone(), 4, regular(4));
+    let shredder = FakeShredder::new().outcome(FakeShredOutcome::CompletedCheckFailed);
+
+    let result = run(
+        ExecuteRootsRequest {
+            roots: vec![
+                root_request("issue", &first, TargetKind::File),
+                root_request("later", &second, TargetKind::File),
+            ],
+        },
+        &io,
+        &shredder,
+    );
+
+    // The first root's entry was removed (write-check failure does not stop
+    // removal) but the root is Failed, not Destroyed (ora-2 amendment 2) —
+    // and the batch continues: the later root still executes.
+    assert_eq!(result.roots[0].status, RootStatus::Failed);
+    assert!(result.roots[0].root_removed);
+    assert_eq!(result.roots[0].write_check, WriteCheckOutcome::Failed);
+    assert_eq!(result.roots[1].status, RootStatus::Destroyed);
+    assert!(result.roots[1].root_removed);
+    assert_eq!(result.roots[1].write_check, WriteCheckOutcome::Passed);
+    assert_eq!(
+        io.events()
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .filter(|call| *call == "open_regular")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn root_result_aggregates_write_check() {
+    let alpha = home_child("task22-aggregate-alpha");
+    let beta = home_child("task22-aggregate-beta");
+    let gamma = home_child("task22-aggregate-gamma");
+    let io = FakeIo::new()
+        .root(
+            alpha.clone(),
+            1,
+            directory(1, vec![(2, "failed"), (3, "passed")]),
+        )
+        .add_node(2, regular(2))
+        .add_node(3, regular(3))
+        .root(
+            beta.clone(),
+            4,
+            directory(4, vec![(5, "passed-a"), (6, "passed-b")]),
+        )
+        .add_node(5, regular(5))
+        .add_node(6, regular(6))
+        .root(
+            gamma.clone(),
+            7,
+            directory(7, vec![(8, "nocheck-a"), (9, "nocheck-b")]),
+        )
+        .add_node(8, regular(8))
+        .add_node(9, regular(9));
+    let shredder = FakeShredder::new().outcomes(vec![
+        FakeShredOutcome::CompletedCheckFailed,
+        FakeShredOutcome::Completed,
+        FakeShredOutcome::Completed,
+        FakeShredOutcome::Completed,
+        FakeShredOutcome::CompletedNoCheck,
+        FakeShredOutcome::CompletedNoCheck,
+    ]);
+
+    let result = run(
+        ExecuteRootsRequest {
+            roots: vec![
+                root_request("alpha", &alpha, TargetKind::Directory),
+                root_request("beta", &beta, TargetKind::Directory),
+                root_request("gamma", &gamma, TargetKind::Directory),
+            ],
+        },
+        &io,
+        &shredder,
+    );
+
+    // Aggregate rule: Failed if any file failed, else Passed if any file
+    // passed, else NotRun.
+    assert_eq!(result.roots[0].write_check, WriteCheckOutcome::Failed);
+    assert_eq!(result.roots[0].status, RootStatus::Failed);
+    assert_eq!(result.roots[1].write_check, WriteCheckOutcome::Passed);
+    assert_eq!(result.roots[1].status, RootStatus::Destroyed);
+    assert_eq!(result.roots[2].write_check, WriteCheckOutcome::NotRun);
+    assert_eq!(result.roots[2].status, RootStatus::Destroyed);
 }

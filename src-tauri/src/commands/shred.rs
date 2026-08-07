@@ -13,7 +13,7 @@ use crate::shredder::types::*;
 use crate::shredder::validation::{
     classify_path, is_network_drive, validate_path, PathClassification,
 };
-use crate::shredder::{LegacyOpenFileShredder, ShredAlgorithm, VerificationLevel};
+use crate::shredder::{PolicyFileShredder, VerificationLevel};
 use std::sync::Arc;
 use tauri::AppHandle;
 
@@ -33,21 +33,19 @@ pub async fn execute_roots(
         _ => LogObfuscation::None,
     };
 
-    let algorithms = all_algorithms();
-    let algorithm = algorithms
-        .get(algorithm_index)
-        .ok_or_else(|| format!("Invalid algorithm index: {}", algorithm_index))?
-        .clone();
-
-    if passes > algorithm.max_passes() {
+    // Transitional IPC shim (ORACLE-0 M4; removed in Phase 4): map the
+    // legacy argument surface to the v2 policy. `passes` is validated for
+    // bounds but otherwise ignored — the engine derives its pass plan from
+    // the policy. `pattern` is ignored entirely (the policy model has no
+    // selectable pattern).
+    let policy = policy_from_legacy_args(algorithm_index, verification_level)?;
+    if passes == 0 || passes > 3 {
         return Err(format!(
-            "Passes {} exceeds maximum {}",
-            passes,
-            algorithm.max_passes()
+            "Passes {} is outside the supported range 1..=3",
+            passes
         ));
     }
-
-    let policy = policy_from_legacy_args(algorithm_index, verification_level)?;
+    let _ = pattern;
 
     // Reset cancellation token for fresh operation
     crate::shredder::cancel::reset_global();
@@ -58,17 +56,7 @@ pub async fn execute_roots(
     let journal = JournalStore::portable().map_err(|error| error.to_string())?;
 
     tokio::task::spawn_blocking(move || {
-        execute_roots_core(
-            request,
-            algorithm,
-            passes,
-            pattern,
-            verification_level,
-            policy,
-            progress,
-            &cancel,
-            &journal,
-        )
+        execute_roots_core(request, policy, progress, &cancel, &journal)
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))
@@ -114,28 +102,19 @@ fn platform_adapter() -> Arc<dyn SecureTreeIo> {
 }
 
 /// Command core without the `AppHandle`: builds the platform adapter, the
-/// open-file shredder, and runs the `execute_roots` seam against the given
-/// policy, journal, and progress reporter. Kept separate so command behavior
-/// is covered by tests that never construct a Tauri runtime.
+/// policy-driven open-file shredder, and runs the `execute_roots` seam
+/// against the given policy, journal, and progress reporter. Kept separate
+/// so command behavior is covered by tests that never construct a Tauri
+/// runtime.
 pub(crate) fn execute_roots_core(
     request: ExecuteRootsRequest,
-    algorithm: Arc<dyn ShredAlgorithm>,
-    passes: u32,
-    pattern: PatternType,
-    verification_level: VerificationLevel,
     policy: DeletionPolicy,
     progress: Arc<dyn ProgressReporter>,
     cancel: &CancellationToken,
     journal: &JournalStore,
 ) -> BatchRootResult {
     let adapter = platform_adapter();
-    let file_shredder = LegacyOpenFileShredder::new(
-        algorithm,
-        passes,
-        pattern,
-        verification_level,
-        Arc::clone(&progress),
-    );
+    let file_shredder = PolicyFileShredder::new(policy, Arc::clone(&progress));
     run_roots(
         request,
         policy,
@@ -679,7 +658,6 @@ pub fn get_all_drive_info(paths: Vec<String>) -> Result<Vec<DriveInfo>, String> 
 mod tests {
     use super::execute_roots_core;
     use super::validate_targets;
-    use crate::shredder::algorithms::nist_clear::NistClear;
     use crate::shredder::cancel::CancellationToken;
     use crate::shredder::journal::JournalStore;
     use crate::shredder::progress::NoopProgressReporter;
@@ -687,9 +665,35 @@ mod tests {
         BatchRootResult, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage, RootStatus,
         TargetAvailability, TargetKind, VaultTarget,
     };
-    use crate::shredder::types::{DeletionMethod, DeletionPolicy, PatternType, VerificationLevel, WriteCheck};
+    use crate::shredder::types::{DeletionMethod, DeletionPolicy, VerificationLevel, WriteCheck};
     use std::path::PathBuf;
     use std::sync::Arc;
+
+    #[test]
+    fn legacy_command_args_map_to_policy() {
+        assert_eq!(
+            super::policy_from_legacy_args(0, VerificationLevel::None).unwrap(),
+            DeletionPolicy {
+                method: DeletionMethod::Automatic,
+                write_check: WriteCheck::Off,
+            }
+        );
+        assert_eq!(
+            super::policy_from_legacy_args(1, VerificationLevel::Sample).unwrap(),
+            DeletionPolicy {
+                method: DeletionMethod::LegacyThreePass,
+                write_check: WriteCheck::Spot,
+            }
+        );
+        assert_eq!(
+            super::policy_from_legacy_args(2, VerificationLevel::Full).unwrap(),
+            DeletionPolicy {
+                method: DeletionMethod::Automatic,
+                write_check: WriteCheck::Full,
+            }
+        );
+        assert!(super::policy_from_legacy_args(3, VerificationLevel::None).is_err());
+    }
 
     /// A real directory under the real home directory (root execution refuses
     /// roots outside the home directory), removed on drop.
@@ -743,10 +747,6 @@ mod tests {
         let journal = JournalStore::at(journal_directory.path().join("journal.json"));
         execute_roots_core(
             request,
-            Arc::new(NistClear),
-            1,
-            PatternType::Zeros,
-            VerificationLevel::None,
             DeletionPolicy {
                 method: DeletionMethod::Automatic,
                 write_check: WriteCheck::Off,
