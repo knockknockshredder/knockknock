@@ -52,6 +52,8 @@ docs/
 !LICENSE
 !SECURITY.md
 !CONTRIBUTING.md
+!THREAT_MODEL.md
+!LIMITATIONS.md
 
 # AI agent artifacts
 .scripts/
