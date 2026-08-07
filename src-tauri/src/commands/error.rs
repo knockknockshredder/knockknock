@@ -102,6 +102,10 @@ fn extract_path_and_action(err: &ShredError) -> (Option<String>, String) {
             Some(path.to_string_lossy().into_owned()),
             "The requested write check did not pass after the overwrite. Review the result before assuming the overwrite verified.".to_string(),
         ),
+        ShredError::BrowserCollectionFailed { path, .. } => (
+            Some(path.to_string_lossy().into_owned()),
+            "Browser data collection failed during cleanup. Check that the profile directory is readable and retry.".to_string(),
+        ),
         ShredError::NetworkDrive(p) => (
             Some(p.to_string_lossy().into_owned()),
             "Copy the file to a local drive and retry. Network drives cannot be reliably shredded.".to_string(),
@@ -146,6 +150,7 @@ fn error_type_name(err: &ShredError) -> String {
         ShredError::HardLinkBlocked { .. } => "HardLinkBlocked",
         ShredError::UnsupportedStorageForMethod { .. } => "UnsupportedStorageForMethod",
         ShredError::WriteCheckFailed { .. } => "WriteCheckFailed",
+        ShredError::BrowserCollectionFailed { .. } => "BrowserCollectionFailed",
         ShredError::NetworkDrive(_) => "NetworkDrive",
         ShredError::SystemFile(_) => "SystemFile",
         ShredError::ShortcutDetected { .. } => "ShortcutDetected",
@@ -219,6 +224,10 @@ mod tests {
             },
             ShredError::WriteCheckFailed {
                 path: PathBuf::from("a"),
+            },
+            ShredError::BrowserCollectionFailed {
+                path: PathBuf::from("a"),
+                detail: "unreadable".into(),
             },
             ShredError::NetworkDrive(PathBuf::from("a")),
             ShredError::SystemFile(PathBuf::from("a")),

@@ -1216,6 +1216,7 @@ fn error_type(error: &ShredError) -> &'static str {
         ShredError::HardLinkBlocked { .. } => "hard_link_blocked",
         ShredError::UnsupportedStorageForMethod { .. } => "unsupported_storage_for_method",
         ShredError::WriteCheckFailed { .. } => "write_check_failed",
+        ShredError::BrowserCollectionFailed { .. } => "browser_collection_failed",
         ShredError::NetworkDrive(_) => "network_drive",
         ShredError::SystemFile(_) => "system_file",
         ShredError::ShortcutDetected { .. } => "shortcut_detected",
