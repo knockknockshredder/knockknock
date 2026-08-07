@@ -22,6 +22,8 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::shredder::engine::OverwriteState;
+use crate::shredder::types::WriteCheckOutcome;
 use crate::shredder::validation::{classify_path, PathClassification};
 
 pub use cancel::CancellationToken;
@@ -627,7 +629,12 @@ impl crate::shredder::root_execution::OpenFileShredder for LegacyOpenFileShredde
                 .map_err(|error| ShredError::from_io_error(path.to_path_buf(), error))?;
             file.sync_all()
                 .map_err(|error| ShredError::from_io_error(path.to_path_buf(), error))?;
-            let result = crate::shredder::root_execution::FileShredResult::success(0);
+            let result = crate::shredder::root_execution::FileShredResult {
+                overwrite_state: OverwriteState::Completed,
+                write_check_status: WriteCheckOutcome::NotRun,
+                bytes_shredded: 0,
+                issues: Vec::new(),
+            };
             self.progress.on_file_complete(
                 path,
                 &ShredResult {
@@ -741,15 +748,28 @@ impl crate::shredder::root_execution::OpenFileShredder for LegacyOpenFileShredde
                 .map_err(|error| ShredError::from_io_error(path.to_path_buf(), error))?;
         }
 
+        // Transitional mapping into the v2 result shape: the legacy pipeline
+        // reports a single success flag, so any error is approximated as
+        // Partial (bytes may have been written) with an unknown write check.
+        // Replaced by `PolicyFileShredder` in Phase 2 Task 2.2.
         let result = crate::shredder::root_execution::FileShredResult {
-            success,
+            overwrite_state: if success {
+                OverwriteState::Completed
+            } else {
+                OverwriteState::Partial
+            },
+            write_check_status: if success {
+                WriteCheckOutcome::Passed
+            } else {
+                WriteCheckOutcome::NotRun
+            },
             bytes_shredded: bytes_written,
-            errors,
+            issues: errors,
         };
         self.progress.on_file_complete(
             path,
             &ShredResult {
-                success: result.success,
+                success: result.overwrite_state == OverwriteState::Completed,
                 passes_completed: self.passes,
                 bytes_written: result.bytes_shredded,
                 errors: Vec::new(),

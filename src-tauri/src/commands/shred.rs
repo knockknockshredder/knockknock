@@ -47,6 +47,8 @@ pub async fn execute_roots(
         ));
     }
 
+    let policy = policy_from_legacy_args(algorithm_index, verification_level)?;
+
     // Reset cancellation token for fresh operation
     crate::shredder::cancel::reset_global();
     let cancel = crate::shredder::cancel::get_global_token();
@@ -62,6 +64,7 @@ pub async fn execute_roots(
             passes,
             pattern,
             verification_level,
+            policy,
             progress,
             &cancel,
             &journal,
@@ -69,6 +72,28 @@ pub async fn execute_roots(
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))
+}
+
+/// Map the legacy IPC argument surface to the v2 deletion policy
+/// (transitional shim, ORACLE-0 M4; removed in Phase 4). Legacy algorithm
+/// index 1 (DoD 5220.22-M) maps to the fixed 3-pass method; indexes 0
+/// (NIST 800-88 Clear) and 2 (Random Only) both map to Automatic (single
+/// random pass). Unknown indexes are rejected fail-closed.
+fn policy_from_legacy_args(
+    algorithm_index: usize,
+    verification_level: VerificationLevel,
+) -> Result<DeletionPolicy, String> {
+    let method = match algorithm_index {
+        0 | 2 => DeletionMethod::Automatic,
+        1 => DeletionMethod::LegacyThreePass,
+        _ => return Err(format!("Invalid algorithm index: {algorithm_index}")),
+    };
+    let write_check = match verification_level {
+        VerificationLevel::None => WriteCheck::Off,
+        VerificationLevel::Sample => WriteCheck::Spot,
+        VerificationLevel::Full => WriteCheck::Full,
+    };
+    Ok(DeletionPolicy { method, write_check })
 }
 
 /// Build the platform's secure tree adapter. Only Windows and Unix adapters
@@ -90,14 +115,15 @@ fn platform_adapter() -> Arc<dyn SecureTreeIo> {
 
 /// Command core without the `AppHandle`: builds the platform adapter, the
 /// open-file shredder, and runs the `execute_roots` seam against the given
-/// journal and progress reporter. Kept separate so command behavior is
-/// covered by tests that never construct a Tauri runtime.
+/// policy, journal, and progress reporter. Kept separate so command behavior
+/// is covered by tests that never construct a Tauri runtime.
 pub(crate) fn execute_roots_core(
     request: ExecuteRootsRequest,
     algorithm: Arc<dyn ShredAlgorithm>,
     passes: u32,
     pattern: PatternType,
     verification_level: VerificationLevel,
+    policy: DeletionPolicy,
     progress: Arc<dyn ProgressReporter>,
     cancel: &CancellationToken,
     journal: &JournalStore,
@@ -112,6 +138,7 @@ pub(crate) fn execute_roots_core(
     );
     run_roots(
         request,
+        policy,
         adapter.as_ref(),
         &file_shredder,
         journal,
@@ -660,7 +687,7 @@ mod tests {
         BatchRootResult, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage, RootStatus,
         TargetAvailability, TargetKind, VaultTarget,
     };
-    use crate::shredder::types::{PatternType, VerificationLevel};
+    use crate::shredder::types::{DeletionMethod, DeletionPolicy, PatternType, VerificationLevel, WriteCheck};
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -720,6 +747,10 @@ mod tests {
             1,
             PatternType::Zeros,
             VerificationLevel::None,
+            DeletionPolicy {
+                method: DeletionMethod::Automatic,
+                write_check: WriteCheck::Off,
+            },
             Arc::new(NoopProgressReporter),
             &CancellationToken::new(),
             &journal,

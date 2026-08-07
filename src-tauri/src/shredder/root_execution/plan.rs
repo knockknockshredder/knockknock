@@ -1,11 +1,12 @@
 use super::{OpenFileShredder, SecureTreeIo};
 use crate::shredder::cancel::CancellationToken;
+use crate::shredder::engine::OverwriteState;
 use crate::shredder::errors::{JournalError, ShredError};
 use crate::shredder::journal::{JournalEntry, JournalStore};
 use crate::shredder::traits::ProgressReporter;
 use crate::shredder::types::{
-    BatchRootResult, ChildErrorDto, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage,
-    RootResultDto, RootStatus, TargetKind,
+    BatchRootResult, ChildErrorDto, DeletionPolicy, ExecuteRootRequest, ExecuteRootsRequest,
+    ExecutionStage, RootResultDto, RootStatus, TargetKind, WriteCheckOutcome,
 };
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
@@ -141,33 +142,39 @@ impl RenamedNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileShredRequest {
     diagnostic_path: PathBuf,
+    policy: DeletionPolicy,
 }
 
 impl FileShredRequest {
-    pub(crate) fn new(diagnostic_path: PathBuf) -> Self {
-        Self { diagnostic_path }
+    pub(crate) fn new(diagnostic_path: PathBuf, policy: DeletionPolicy) -> Self {
+        Self {
+            diagnostic_path,
+            policy,
+        }
     }
 
     pub(crate) fn diagnostic_path(&self) -> &Path {
         &self.diagnostic_path
     }
-}
 
-#[derive(Debug, Default)]
-pub(crate) struct FileShredResult {
-    pub(crate) success: bool,
-    pub(crate) bytes_shredded: u64,
-    pub(crate) errors: Vec<ShredError>,
-}
-
-impl FileShredResult {
-    pub(crate) fn success(bytes_shredded: u64) -> Self {
-        Self {
-            success: true,
-            bytes_shredded,
-            errors: Vec::new(),
-        }
+    pub(crate) fn policy(&self) -> DeletionPolicy {
+        self.policy
     }
+}
+
+/// Structured outcome of one file's destructive lifecycle (v2, M2/M3).
+///
+/// `overwrite_state` is the authoritative decision field: `NotStarted` means
+/// the target is intact (no journal/rename), `Partial` and `Completed` both
+/// proceed to best-effort cleanup. `write_check_status` aggregates the final
+/// read-back result. There is deliberately no `success: bool` — callers
+/// branch on state (M3).
+#[derive(Debug)]
+pub(crate) struct FileShredResult {
+    pub(crate) overwrite_state: OverwriteState,
+    pub(crate) write_check_status: WriteCheckOutcome,
+    pub(crate) bytes_shredded: u64,
+    pub(crate) issues: Vec<ShredError>,
 }
 
 #[derive(Debug)]
@@ -204,6 +211,7 @@ enum PreflightOutcome {
 
 pub(crate) fn execute_roots(
     request: ExecuteRootsRequest,
+    policy: DeletionPolicy,
     io: &dyn SecureTreeIo,
     file_shredder: &dyn OpenFileShredder,
     journal: &JournalStore,
@@ -254,8 +262,13 @@ pub(crate) fn execute_roots(
         }
 
         let request = plan.request.clone();
-        let mut result =
-            RootExecution::new(plan.request, plan.handle, plan.trusted_parent, plan.node);
+        let mut result = RootExecution::new(
+            plan.request,
+            plan.handle,
+            plan.trusted_parent,
+            plan.node,
+            policy,
+        );
         if let Err(mut error) = result.execute(io, file_shredder, journal, progress, cancel) {
             if result.partial_destruction || result.bytes_shredded > 0 {
                 error.message = format!(
@@ -615,7 +628,10 @@ struct RootExecution {
     directories_removed: u64,
     bytes_shredded: u64,
     partial_destruction: bool,
+    write_check_failed_any: bool,
+    write_check_passed_any: bool,
     errors: Vec<ChildErrorDto>,
+    policy: DeletionPolicy,
 }
 
 impl RootExecution {
@@ -624,6 +640,7 @@ impl RootExecution {
         handle: DirHandle,
         trusted_parent: Option<DirHandle>,
         mut node: PlannedNode,
+        policy: DeletionPolicy,
     ) -> Self {
         if let Some(parent) = trusted_parent {
             node.parent = parent;
@@ -637,7 +654,10 @@ impl RootExecution {
             directories_removed: 0,
             bytes_shredded: 0,
             partial_destruction: false,
+            write_check_failed_any: false,
+            write_check_passed_any: false,
             errors: Vec::new(),
+            policy,
         }
     }
 
@@ -662,8 +682,11 @@ impl RootExecution {
                 children: Vec::new(),
             },
         );
-        self.execute_node(&root, io, file_shredder, journal, progress, cancel)?;
-        self.root_removed = true;
+        // A file root is removed only when its own file was destroyed; a
+        // directory root is removed when the walk completed its cleanup.
+        let root_removed =
+            self.execute_node(&root, io, file_shredder, journal, progress, cancel)?;
+        self.root_removed = root_removed;
         Ok(())
     }
 
@@ -675,7 +698,7 @@ impl RootExecution {
         journal: &JournalStore,
         progress: &dyn ProgressReporter,
         cancel: &CancellationToken,
-    ) -> Result<(), ChildErrorDto> {
+    ) -> Result<bool, ChildErrorDto> {
         if cancel.is_cancelled() {
             return Err(child_error(
                 &node.diagnostic_path,
@@ -707,7 +730,7 @@ impl RootExecution {
                     child_error(&node.diagnostic_path, ExecutionStage::Sync, error)
                 })?;
                 self.directories_removed += 1;
-                Ok(())
+                Ok(true)
             }
             NodeKind::Special => Err(child_error(
                 &node.diagnostic_path,
@@ -719,6 +742,12 @@ impl RootExecution {
         }
     }
 
+    /// Shred one planned regular file and remove it. Returns `Ok(true)` when
+    /// the file was removed, `Ok(false)` when a per-file issue left the
+    /// target intact (the walk continues — per-file issues never stop the
+    /// batch, ora-2 amendment 2), and `Err` only for hard node-level failures
+    /// (journal/rename/unlink/sync) that abort this file's cleanup and stop
+    /// the walk (M2 rule 4).
     fn execute_file(
         &mut self,
         node: &PlannedNode,
@@ -726,37 +755,101 @@ impl RootExecution {
         file_shredder: &dyn OpenFileShredder,
         journal: &JournalStore,
         _progress: &dyn ProgressReporter,
-    ) -> Result<(), ChildErrorDto> {
+    ) -> Result<bool, ChildErrorDto> {
         let file = io.open_regular_for_shred(&node.handle).map_err(|error| {
             child_error(&node.diagnostic_path, ExecutionStage::Overwrite, error)
         })?;
-        let request = FileShredRequest::new(node.diagnostic_path.clone());
+        let request = FileShredRequest::new(node.diagnostic_path.clone(), self.policy);
         let shred_result = match file_shredder.shred_open_file(file, node.identity, &request) {
             Ok(result) => result,
             Err(error) => {
-                self.partial_destruction = true;
-                return Err(child_error(
+                // Hard shredder error (identity/kind rejection, execution-time
+                // hard-link recheck): the handle was refused before any byte
+                // was written — the target is intact. Report the issue and
+                // continue the walk.
+                self.errors.push(child_error(
                     &node.diagnostic_path,
-                    ExecutionStage::Verify,
+                    ExecutionStage::Overwrite,
                     error,
                 ));
+                return Ok(false);
             }
         };
         self.bytes_shredded += shred_result.bytes_shredded;
-        if !shred_result.success {
-            self.partial_destruction = true;
-            let error = shred_result.errors.into_iter().next().unwrap_or_else(|| {
-                ShredError::ValidationFailed(
-                    "file shredder reported irreversible partial destruction".to_string(),
-                )
-            });
-            return Err(child_error(
-                &node.diagnostic_path,
-                ExecutionStage::Verify,
-                error,
-            ));
+
+        match (
+            shred_result.overwrite_state,
+            shred_result.write_check_status,
+        ) {
+            // Failure before any byte was modified (M2 rule 1): the target is
+            // intact — it must not be journaled, renamed, or unlinked. The
+            // issue is reported and the walk continues.
+            (OverwriteState::NotStarted, _) => {
+                for error in shred_result.issues {
+                    self.errors.push(child_error(
+                        &node.diagnostic_path,
+                        ExecutionStage::Overwrite,
+                        error,
+                    ));
+                }
+                return Ok(false);
+            }
+            // At least one byte was written but the overwrite did not
+            // complete: best-effort cleanup below; the root is never a clean
+            // Destroyed (M2 rule 2).
+            (OverwriteState::Partial, _) => {
+                self.partial_destruction = true;
+                for error in shred_result.issues {
+                    self.errors.push(child_error(
+                        &node.diagnostic_path,
+                        ExecutionStage::Overwrite,
+                        error,
+                    ));
+                }
+            }
+            // Overwrite completed; the final read-back failed. Removal
+            // continues, but write_check reports Failed and the root is not
+            // a clean success (M2 rule 3).
+            (OverwriteState::Completed, WriteCheckOutcome::Failed) => {
+                self.write_check_failed_any = true;
+                for error in shred_result.issues {
+                    self.errors.push(child_error(
+                        &node.diagnostic_path,
+                        ExecutionStage::Verify,
+                        error,
+                    ));
+                }
+            }
+            (OverwriteState::Completed, WriteCheckOutcome::Passed) => {
+                self.write_check_passed_any = true;
+                // The engine produces no issues on this path; surface any a
+                // shredder reports instead of silently dropping them.
+                for error in shred_result.issues {
+                    self.errors.push(child_error(
+                        &node.diagnostic_path,
+                        ExecutionStage::Overwrite,
+                        error,
+                    ));
+                }
+            }
+            // Zero-length vacuous completion or Off write check: nothing to
+            // report beyond the state.
+            (OverwriteState::Completed, WriteCheckOutcome::NotRun) => {
+                for error in shred_result.issues {
+                    self.errors.push(child_error(
+                        &node.diagnostic_path,
+                        ExecutionStage::Overwrite,
+                        error,
+                    ));
+                }
+            }
         }
 
+        // Best-effort cleanup — journal → rename → unlink → sync parent →
+        // clear (M4 lifecycle; no truncate). Runs for Partial and Completed
+        // outcomes regardless of write-check status. Journal/rename/unlink/
+        // sync failures at the node level remain hard errors that abort this
+        // file's cleanup and stop the walk (M2 rule 4).
         let new_name = OsString::from(format!(".knockknock-{:032x}", node.identity.id()));
         let parent_path = &node.trusted_parent_path;
         let parent = node.parent;
@@ -807,7 +900,7 @@ impl RootExecution {
         journal
             .clear(&entry)
             .map_err(|error| journal_child_error(&node.diagnostic_path, error))?;
-        Ok(())
+        Ok(true)
     }
 
     fn rollback_after_failure(
@@ -835,16 +928,30 @@ impl RootExecution {
         &mut self,
         node: &PlannedNode,
         io: &dyn SecureTreeIo,
-    ) -> Result<(), ChildErrorDto> {
+    ) -> Result<bool, ChildErrorDto> {
         io.unlink_leaf(&node.parent, &node.handle)
             .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Delete, error))?;
         io.sync_parent(&node.parent)
             .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Sync, error))?;
         self.files_destroyed += 1;
-        Ok(())
+        Ok(true)
     }
 
-    fn finish(self, request: ExecuteRootRequest) -> RootResultDto {
+    fn finish(mut self, request: ExecuteRootRequest) -> RootResultDto {
+        // A root with any per-file issue is not a clean Destroyed: downgrade
+        // so the frontend never renders plain success for a degraded
+        // operation (ora-2 amendment 2). `root_removed` is preserved — the
+        // entry may still have been removed.
+        if self.status == RootStatus::Destroyed && !self.errors.is_empty() {
+            self.status = RootStatus::Failed;
+        }
+        let write_check = if self.write_check_failed_any {
+            WriteCheckOutcome::Failed
+        } else if self.write_check_passed_any {
+            WriteCheckOutcome::Passed
+        } else {
+            WriteCheckOutcome::NotRun
+        };
         RootResultDto {
             target_id: request.target_id,
             requested_path: request.path,
@@ -854,6 +961,7 @@ impl RootExecution {
             files_destroyed: self.files_destroyed,
             directories_removed: self.directories_removed,
             bytes_shredded: self.bytes_shredded,
+            write_check,
             errors: self.errors,
         }
     }
@@ -869,6 +977,7 @@ fn failed_result(request: ExecuteRootRequest, errors: Vec<ChildErrorDto>) -> Roo
         files_destroyed: 0,
         directories_removed: 0,
         bytes_shredded: 0,
+        write_check: WriteCheckOutcome::NotRun,
         errors,
     }
 }
@@ -883,6 +992,7 @@ fn skipped_result(request: ExecuteRootRequest) -> RootResultDto {
         files_destroyed: 0,
         directories_removed: 0,
         bytes_shredded: 0,
+        write_check: WriteCheckOutcome::NotRun,
         errors: Vec::new(),
     }
 }
@@ -897,6 +1007,7 @@ fn cancelled_result(request: ExecuteRootRequest) -> RootResultDto {
         files_destroyed: 0,
         directories_removed: 0,
         bytes_shredded: 0,
+        write_check: WriteCheckOutcome::NotRun,
         errors: Vec::new(),
     }
 }

@@ -5,18 +5,20 @@ use super::plan::{
 use super::{execute_roots, OpenFileShredder, SecureTreeIo};
 use crate::shredder::algorithms::nist_clear::NistClear;
 use crate::shredder::cancel::CancellationToken;
+use crate::shredder::engine::OverwriteState;
 use crate::shredder::errors::JournalError;
 use crate::shredder::errors::ShredError;
 use crate::shredder::journal::{
     JournalEntry, JournalIo, JournalNodeIdentity, JournalNodeKind, JournalStore,
 };
 use crate::shredder::progress::NoopProgressReporter;
+use crate::shredder::traits::ProgressReporter;
 use crate::shredder::types::{
-    BatchRootResult, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage, RootStatus,
-    TargetKind, VerificationLevel,
+    BatchRootResult, DeletionPolicy, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage,
+    RootStatus, TargetKind, VerificationLevel, WriteCheckOutcome,
 };
 use crate::shredder::LegacyOpenFileShredder;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -217,9 +219,55 @@ impl SecureTreeIo for FakeIo {
     }
 }
 
+/// Outcome a fake shredder reports for one file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FakeShredOutcome {
+    /// Completed overwrite with a passed write check (clean removal).
+    Completed,
+    /// Completed overwrite with a failed final write check: removal still
+    /// proceeds, but the root must never be a clean Destroyed.
+    CompletedCheckFailed,
+    /// Partial overwrite with a cancelled issue: cleanup still proceeds.
+    Partial,
+    /// Zero-length vacuous completion or Off write check: nothing to report.
+    CompletedNoCheck,
+    /// Hard shredder error before any byte was written (NotStarted
+    /// semantics): the target stays intact and must not be renamed.
+    NotStarted,
+}
+
 struct FakeShredder {
     calls: Arc<Mutex<Vec<FileShredRequest>>>,
-    fail: bool,
+    outcomes: Mutex<VecDeque<FakeShredOutcome>>,
+}
+
+impl FakeShredder {
+    fn new() -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            outcomes: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// Every file answered with `outcome` (queue is consumed per call and
+    /// defaults to `Completed` once exhausted).
+    fn outcome(self, outcome: FakeShredOutcome) -> Self {
+        self.outcomes.lock().unwrap().push_back(outcome);
+        self
+    }
+
+    fn outcomes(self, outcomes: Vec<FakeShredOutcome>) -> Self {
+        self.outcomes.lock().unwrap().extend(outcomes);
+        self
+    }
+
+    fn next_outcome(&self) -> FakeShredOutcome {
+        self.outcomes
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(FakeShredOutcome::Completed)
+    }
 }
 
 impl OpenFileShredder for FakeShredder {
@@ -230,12 +278,39 @@ impl OpenFileShredder for FakeShredder {
         request: &FileShredRequest,
     ) -> Result<FileShredResult, ShredError> {
         self.calls.lock().unwrap().push(request.clone());
-        if self.fail {
-            Err(ShredError::ValidationFailed(
+        let path = request.diagnostic_path().to_path_buf();
+        match self.next_outcome() {
+            FakeShredOutcome::Completed => Ok(FileShredResult {
+                overwrite_state: OverwriteState::Completed,
+                write_check_status: WriteCheckOutcome::Passed,
+                bytes_shredded: 7,
+                issues: Vec::new(),
+            }),
+            FakeShredOutcome::CompletedCheckFailed => Ok(FileShredResult {
+                overwrite_state: OverwriteState::Completed,
+                write_check_status: WriteCheckOutcome::Failed,
+                bytes_shredded: 7,
+                issues: vec![ShredError::WriteCheckFailed { path }],
+            }),
+            FakeShredOutcome::Partial => Ok(FileShredResult {
+                overwrite_state: OverwriteState::Partial,
+                write_check_status: WriteCheckOutcome::NotRun,
+                bytes_shredded: 7,
+                issues: vec![ShredError::IoError {
+                    path,
+                    kind: "Cancelled".to_string(),
+                    message: "injected partial shredding".to_string(),
+                }],
+            }),
+            FakeShredOutcome::CompletedNoCheck => Ok(FileShredResult {
+                overwrite_state: OverwriteState::Completed,
+                write_check_status: WriteCheckOutcome::NotRun,
+                bytes_shredded: 0,
+                issues: Vec::new(),
+            }),
+            FakeShredOutcome::NotStarted => Err(ShredError::ValidationFailed(
                 "injected child failure".to_string(),
-            ))
-        } else {
-            Ok(FileShredResult::success(7))
+            )),
         }
     }
 }
@@ -271,12 +346,17 @@ fn directory(identity: u128, children: Vec<(u64, &str)>) -> FakeNode {
     }
 }
 
-fn run(request: ExecuteRootsRequest, io: &FakeIo, shredder: &FakeShredder) -> BatchRootResult {
+fn run(
+    request: ExecuteRootsRequest,
+    io: &dyn SecureTreeIo,
+    shredder: &dyn OpenFileShredder,
+) -> BatchRootResult {
     let progress = NoopProgressReporter;
     let directory = tempfile::tempdir().expect("temporary directory");
     let journal = JournalStore::at(directory.path().join("journal.json"));
-    run_with_journal_inner(
+    run_full(
         request,
+        DeletionPolicy::default(),
         io,
         shredder,
         &journal,
@@ -291,10 +371,7 @@ fn journal_write_failure_prevents_root_rename() {
     let io = FakeIo::new()
         .root(root.clone(), 1, directory(1, vec![(2, "file")]))
         .add_node(2, regular(2));
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
     let directory = tempfile::tempdir().expect("temporary directory");
     let journal = JournalStore::with_io(
         directory.path().join("journal.json"),
@@ -330,10 +407,7 @@ fn journal_sync_failure_prevents_root_rename() {
     let io = FakeIo::new()
         .root(root.clone(), 1, directory(1, vec![(2, "file")]))
         .add_node(2, regular(2));
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
     let directory = tempfile::tempdir().expect("temporary directory");
     let journal = JournalStore::with_io(
         directory.path().join("journal.json"),
@@ -366,10 +440,7 @@ fn executes_file_root_using_its_containing_directory() {
     let io = FakeIo::new()
         .root(parent.clone(), 1, directory(1, vec![]))
         .root(root.clone(), 2, regular(2));
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
 
     let result = run(
         ExecuteRootsRequest {
@@ -412,10 +483,7 @@ fn rename_failure_retains_identity_bound_journal_record() {
         .root(root.clone(), 1, directory(1, vec![(2, "file")]))
         .add_node(2, regular(2))
         .fail_rename();
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
     let directory = tempfile::tempdir().expect("temporary directory");
     let journal = JournalStore::at(directory.path().join("journal.json"));
 
@@ -439,10 +507,7 @@ fn parent_sync_failure_rolls_back_without_deleting() {
         .root(root.clone(), 1, directory(1, vec![(2, "file")]))
         .add_node(2, regular(2))
         .fail_sync();
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
     let directory = tempfile::tempdir().expect("temporary directory");
     let journal = JournalStore::at(directory.path().join("journal.json"));
 
@@ -473,10 +538,7 @@ fn deletion_failure_rolls_back_and_retains_journal_record() {
         .root(root.clone(), 1, directory(1, vec![(2, "file")]))
         .add_node(2, regular(2))
         .fail_unlink();
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
     let directory = tempfile::tempdir().expect("temporary directory");
     let journal = JournalStore::at(directory.path().join("journal.json"));
 
@@ -503,10 +565,7 @@ fn rollback_failure_is_reported_and_never_widens_scope() {
         .add_node(2, regular(2))
         .fail_unlink()
         .fail_rollback();
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
     let directory = tempfile::tempdir().expect("temporary directory");
     let journal = JournalStore::at(directory.path().join("journal.json"));
 
@@ -560,10 +619,7 @@ fn journal_clear_failure_after_delete_is_reported_and_retained() {
     let io = FakeIo::new()
         .root(root.clone(), 1, directory(1, vec![(2, "file")]))
         .add_node(2, regular(2));
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
     let directory = tempfile::tempdir().expect("temporary directory");
     let state = Arc::new(Mutex::new(ClearFailState {
         fail_sync_at: Some(4),
@@ -701,13 +757,14 @@ impl JournalIo for ClearFailJournalIo {
 
 fn run_with_journal(
     request: ExecuteRootsRequest,
-    io: &FakeIo,
-    shredder: &FakeShredder,
+    io: &dyn SecureTreeIo,
+    shredder: &dyn OpenFileShredder,
     journal: &JournalStore,
 ) -> BatchRootResult {
     let progress = NoopProgressReporter;
-    run_with_journal_inner(
+    run_full(
         request,
+        DeletionPolicy::default(),
         io,
         shredder,
         journal,
@@ -716,24 +773,22 @@ fn run_with_journal(
     )
 }
 
-fn run_with_journal_inner(
+fn run_full(
     request: ExecuteRootsRequest,
-    io: &FakeIo,
-    shredder: &FakeShredder,
+    policy: DeletionPolicy,
+    io: &dyn SecureTreeIo,
+    shredder: &dyn OpenFileShredder,
     journal: &JournalStore,
-    progress: &NoopProgressReporter,
+    progress: &dyn ProgressReporter,
     cancel: &CancellationToken,
 ) -> BatchRootResult {
-    execute_roots(request, io, shredder, journal, progress, cancel)
+    execute_roots(request, policy, io, shredder, journal, progress, cancel)
 }
 
 #[test]
 fn rejects_unsafe_roots_before_opening_or_mutation() {
     let io = FakeIo::new();
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
     let roots = [
         root_request("relative", Path::new("relative"), TargetKind::Directory),
         root_request("filesystem", Path::new("/"), TargetKind::Directory),
@@ -775,10 +830,7 @@ fn completes_batch_preflight_before_any_mutation() {
         .add_node(2, regular(2))
         .root(second.clone(), 3, directory(3, vec![]))
         .fail_directory(3);
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
 
     let result = run(
         ExecuteRootsRequest {
@@ -823,11 +875,7 @@ fn discovered_links_are_unlink_only() {
             },
         )
         .add_node(3, regular(3));
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let shredder = FakeShredder {
-        calls: Arc::clone(&calls),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
 
     let result = run(
         ExecuteRootsRequest {
@@ -838,7 +886,7 @@ fn discovered_links_are_unlink_only() {
     );
 
     assert_eq!(result.roots[0].status, RootStatus::Destroyed);
-    assert_eq!(calls.lock().unwrap().len(), 1);
+    assert_eq!(shredder.calls.lock().unwrap().len(), 1);
     let events = io.events();
     let events = events.lock().unwrap();
     assert_eq!(
@@ -856,7 +904,7 @@ fn discovered_links_are_unlink_only() {
 }
 
 #[test]
-fn child_failure_keeps_directories_and_stops_later_roots() {
+fn child_failure_reports_issue_and_later_roots_still_process() {
     let first = home_child("task7-failing");
     let second = home_child("task7-later");
     let io = FakeIo::new()
@@ -864,10 +912,7 @@ fn child_failure_keeps_directories_and_stops_later_roots() {
         .add_node(2, regular(2))
         .root(second.clone(), 3, directory(3, vec![(4, "file")]))
         .add_node(4, regular(4));
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: true,
-    };
+    let shredder = FakeShredder::new().outcome(FakeShredOutcome::NotStarted);
 
     let result = run(
         ExecuteRootsRequest {
@@ -880,27 +925,44 @@ fn child_failure_keeps_directories_and_stops_later_roots() {
         &shredder,
     );
 
+    // Per-file outcome issues never stop the batch (ora-2 amendment 2): the
+    // first root reports the intact-target issue, and the later root is
+    // still processed to completion.
     assert_eq!(result.roots[0].status, RootStatus::Failed);
-    assert!(!result.roots[0].root_removed);
-    assert_eq!(result.roots[1].status, RootStatus::Skipped);
+    assert_eq!(result.roots[1].status, RootStatus::Destroyed);
+    assert!(result.roots[1].root_removed);
     assert!(result.roots[0]
         .errors
         .iter()
-        .any(|error| error.message.contains("irreversible partial destruction")));
+        .any(|error| error.message.contains("injected child failure")));
     assert!(result.roots[0]
         .errors
         .iter()
-        .all(|error| !error.message.contains("zero bytes")));
+        .all(|error| error.stage == ExecutionStage::Overwrite));
+    assert!(result.roots[0]
+        .errors
+        .iter()
+        .all(|error| !error.message.contains("irreversible partial destruction")));
     let events = io.events();
     let events = events.lock().unwrap();
-    assert!(!events.calls.iter().any(|call| call == "remove_dir"));
+    // The intact target is never renamed or unlinked; only the second root's
+    // file goes through the cleanup lifecycle. The walk continued, so the
+    // second root's file was opened and destroyed.
+    assert_eq!(
+        events.calls.iter().filter(|call| *call == "rename").count(),
+        1
+    );
+    assert_eq!(
+        events.calls.iter().filter(|call| *call == "unlink").count(),
+        1
+    );
     assert_eq!(
         events
             .calls
             .iter()
             .filter(|call| *call == "open_regular")
             .count(),
-        1
+        2
     );
 }
 
@@ -911,10 +973,7 @@ fn rejects_parent_child_root_overlap_before_mutation() {
     let io = FakeIo::new()
         .root(parent.clone(), 1, directory(1, vec![]))
         .root(child.clone(), 2, regular(2));
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
 
     let result = run(
         ExecuteRootsRequest {
@@ -945,10 +1004,7 @@ fn rejects_duplicate_node_identities_before_mutation() {
     let io = FakeIo::new()
         .root(first.clone(), 1, regular(42))
         .root(second.clone(), 2, regular(42));
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
 
     let result = run(
         ExecuteRootsRequest {
@@ -1006,10 +1062,7 @@ fn rejects_special_files_mount_crossings_and_depth_overflow() {
     }
     io = io.add_node(252, regular(252));
 
-    let shredder = FakeShredder {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        fail: false,
-    };
+    let shredder = FakeShredder::new();
     let result = run(
         ExecuteRootsRequest {
             roots: vec![
@@ -1038,7 +1091,10 @@ fn legacy_open_file_shredder_rejects_directory_identity() {
         VerificationLevel::None,
         Arc::new(NoopProgressReporter),
     );
-    let request = FileShredRequest::new(home_child("task7-directory-handle"));
+    let request = FileShredRequest::new(
+        home_child("task7-directory-handle"),
+        DeletionPolicy::default(),
+    );
     let error = adapter
         .shred_open_file(
             tempfile::tempfile().unwrap(),
