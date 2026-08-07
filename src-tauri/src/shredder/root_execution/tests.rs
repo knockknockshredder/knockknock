@@ -13,8 +13,8 @@ use crate::shredder::journal::{
 use crate::shredder::progress::NoopProgressReporter;
 use crate::shredder::traits::ProgressReporter;
 use crate::shredder::types::{
-    BatchRootResult, DeletionPolicy, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage,
-    RootStatus, TargetKind, WriteCheckOutcome,
+    BatchRootResult, DeletionMethod, DeletionPolicy, ExecuteRootRequest, ExecuteRootsRequest,
+    ExecutionStage, RootStatus, ShredResult, TargetKind, WriteCheck, WriteCheckOutcome,
 };
 use crate::shredder::PolicyFileShredder;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -41,6 +41,7 @@ struct FakeIo {
     roots: HashMap<PathBuf, u64>,
     nodes: HashMap<u64, FakeNode>,
     link_counts: HashMap<u64, u64>,
+    regular_file_size: Option<u64>,
     fail_enumerate: HashSet<u64>,
     fail_rename: bool,
     fail_rollback: bool,
@@ -57,6 +58,7 @@ impl FakeIo {
             roots: HashMap::new(),
             nodes: HashMap::new(),
             link_counts: HashMap::new(),
+            regular_file_size: None,
             fail_enumerate: HashSet::new(),
             fail_rename: false,
             fail_rollback: false,
@@ -91,6 +93,13 @@ impl FakeIo {
     /// Hard-link count for a node handle (default 1).
     fn link_count(mut self, handle: u64, count: u64) -> Self {
         self.link_counts.insert(handle, count);
+        self
+    }
+
+    /// Byte length of the real temp file handed to the shredder (default 0 —
+    /// the vacuous zero-length path).
+    fn regular_file_size(mut self, size: u64) -> Self {
+        self.regular_file_size = Some(size);
         self
     }
 
@@ -207,8 +216,13 @@ impl SecureTreeIo for FakeIo {
                 "fake adapter opened a non-regular node".to_string(),
             ));
         }
-        tempfile::tempfile()
-            .map_err(|error| ShredError::from_io_error(PathBuf::from("fake"), error))
+        let mut file = tempfile::tempfile()
+            .map_err(|error| ShredError::from_io_error(PathBuf::from("fake"), error))?;
+        if let Some(size) = self.regular_file_size {
+            file.set_len(size)
+                .map_err(|error| ShredError::from_io_error(PathBuf::from("fake"), error))?;
+        }
+        Ok(file)
     }
 
     fn rename_noreplace(
@@ -819,6 +833,125 @@ impl JournalIo for ClearFailJournalIo {
         self.state.lock().unwrap().temporary = None;
         Ok(())
     }
+}
+
+/// Journal IO that records every operation it performs while tracking the
+/// journal contents like the real store, so tests can prove the append →
+/// ... → clear lifecycle without depending on journal internals.
+struct RecordingJournalState {
+    ops: Vec<String>,
+    current: Option<Vec<u8>>,
+    temporary: Option<Vec<u8>>,
+}
+
+struct RecordingJournalIo {
+    state: Arc<Mutex<RecordingJournalState>>,
+}
+
+impl RecordingJournalIo {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(RecordingJournalState {
+                ops: Vec::new(),
+                current: None,
+                temporary: None,
+            })),
+        }
+    }
+
+    fn ops(&self) -> Vec<String> {
+        self.state.lock().unwrap().ops.clone()
+    }
+}
+
+impl JournalIo for RecordingJournalIo {
+    fn read(&self, _path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+        Ok(self.state.lock().unwrap().current.clone())
+    }
+
+    fn write_temp(&self, _path: &Path, contents: &[u8]) -> std::io::Result<PathBuf> {
+        let mut state = self.state.lock().unwrap();
+        state.ops.push("write_temp".to_string());
+        state.temporary = Some(contents.to_vec());
+        Ok(PathBuf::from("journal.tmp"))
+    }
+
+    fn sync(&self, _path: &Path) -> std::io::Result<()> {
+        self.state.lock().unwrap().ops.push("sync".to_string());
+        Ok(())
+    }
+
+    fn sync_parent(&self, _path: &Path) -> std::io::Result<()> {
+        self.state
+            .lock()
+            .unwrap()
+            .ops
+            .push("sync_parent".to_string());
+        Ok(())
+    }
+
+    fn atomic_replace(&self, _temporary: &Path, _destination: &Path) -> std::io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.ops.push("atomic_replace".to_string());
+        state.current = state.temporary.take();
+        Ok(())
+    }
+
+    fn delete(&self, _path: &Path) -> std::io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.ops.push("delete".to_string());
+        state.temporary = None;
+        Ok(())
+    }
+}
+
+/// Progress reporter that records every call, for pass-local progress
+/// invariant assertions (M5/D8).
+#[derive(Default)]
+struct RecordingProgress {
+    file_starts: Mutex<Vec<u64>>,
+    pass_starts: Mutex<Vec<(u32, u32)>>,
+    pass_completes: Mutex<Vec<(u32, u32)>>,
+    progress_events: Mutex<Vec<(u64, u64)>>,
+    /// (path, bytes_written, passes_completed, total_passes)
+    file_completes: Mutex<Vec<(PathBuf, u64, u32, u32)>>,
+}
+
+impl ProgressReporter for RecordingProgress {
+    fn on_file_start(&self, _path: &Path, file_size: u64) {
+        self.file_starts.lock().unwrap().push(file_size);
+    }
+
+    fn on_pass_start(&self, pass: u32, total_passes: u32) {
+        self.pass_starts.lock().unwrap().push((pass, total_passes));
+    }
+
+    fn on_progress(&self, bytes_written: u64, total: u64) {
+        self.progress_events
+            .lock()
+            .unwrap()
+            .push((bytes_written, total));
+    }
+
+    fn on_pass_complete(&self, pass: u32, total_passes: u32) {
+        self.pass_completes
+            .lock()
+            .unwrap()
+            .push((pass, total_passes));
+    }
+
+    fn on_file_complete(&self, path: &Path, result: &ShredResult, total_passes: u32) {
+        self.file_completes.lock().unwrap().push((
+            path.to_path_buf(),
+            result.bytes_written,
+            result.passes_completed,
+            total_passes,
+        ));
+    }
+
+    fn on_error(&self, _path: &Path, _error: &ShredError) {}
+
+    fn on_warning(&self, _path: &Path, _message: &str) {}
 }
 
 fn run_with_journal(
@@ -1708,4 +1841,214 @@ fn stop_between_roots_marks_remaining_cancelled() {
             .count(),
         1
     );
+}
+
+#[test]
+fn zero_length_file_root_removed_and_journaled() {
+    let parent = home_child("task25-zero-length");
+    let root = parent.join("empty");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2));
+    let journal_io = Arc::new(RecordingJournalIo::new());
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::with_io(
+        directory.path().join("journal.json"),
+        Arc::clone(&journal_io) as Arc<dyn JournalIo>,
+    );
+    let progress = Arc::new(RecordingProgress::default());
+    let shredder = PolicyFileShredder::new(
+        DeletionPolicy::default(),
+        Arc::clone(&progress) as Arc<dyn ProgressReporter>,
+    );
+
+    let result = run_full(
+        ExecuteRootsRequest {
+            roots: vec![root_request("zero", &root, TargetKind::File)],
+        },
+        DeletionPolicy::default(),
+        &io,
+        &shredder,
+        &journal,
+        progress.as_ref(),
+        &CancellationToken::new(),
+    );
+
+    // M4 zero-length lifecycle: journal → rename → unlink → sync → clear,
+    // with the vacuous Completed/NotRun overwrite outcome.
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Destroyed);
+    assert!(root_result.root_removed);
+    assert_eq!(root_result.files_destroyed, 1);
+    assert_eq!(root_result.write_check, WriteCheckOutcome::NotRun);
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert!(events.calls.iter().any(|call| call == "rename"));
+    assert!(events.calls.iter().any(|call| call == "unlink"));
+    // The journal was appended and then cleared.
+    let ops = journal_io.ops();
+    // The journal lifecycle ran: append wrote the record and clear rewrote
+    // the journal back to empty — both through the temp-file + atomic
+    // replace dance (no `delete` op exists in the durable-rewrite path).
+    assert!(
+        ops.iter().filter(|op| *op == "write_temp").count() >= 2,
+        "append and clear must each write a temporary journal record"
+    );
+    assert!(
+        ops.iter().filter(|op| *op == "atomic_replace").count() >= 2,
+        "append and clear must each atomically replace the journal"
+    );
+    // No pass or progress events for the vacuous overwrite (M5).
+    assert!(progress.pass_starts.lock().unwrap().is_empty());
+    assert!(progress.pass_completes.lock().unwrap().is_empty());
+    assert!(progress.progress_events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn zero_length_emits_no_pass_events_and_valid_completion() {
+    let parent = home_child("task25-zero-progress");
+    let root = parent.join("empty");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2));
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+    let progress = Arc::new(RecordingProgress::default());
+    let shredder = PolicyFileShredder::new(
+        DeletionPolicy::default(),
+        Arc::clone(&progress) as Arc<dyn ProgressReporter>,
+    );
+
+    let result = run_full(
+        ExecuteRootsRequest {
+            roots: vec![root_request("zero", &root, TargetKind::File)],
+        },
+        DeletionPolicy::default(),
+        &io,
+        &shredder,
+        &journal,
+        progress.as_ref(),
+        &CancellationToken::new(),
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+    // The file lifecycle is announced, but no pass exists for zero-length.
+    assert_eq!(*progress.file_starts.lock().unwrap(), vec![0]);
+    assert!(progress.pass_starts.lock().unwrap().is_empty());
+    assert!(progress.pass_completes.lock().unwrap().is_empty());
+    assert!(progress.progress_events.lock().unwrap().is_empty());
+    // Valid completion event: 0 passes completed, total_passes is the
+    // policy's (>= 1, never 0 — D8).
+    let completes = progress.file_completes.lock().unwrap();
+    assert_eq!(completes.len(), 1);
+    assert_eq!(completes[0].0, root);
+    assert_eq!(completes[0].1, 0);
+    assert_eq!(completes[0].2, 0);
+    assert_eq!(completes[0].3, 1);
+}
+
+#[test]
+fn legacy_progress_never_exceeds_100_percent() {
+    let parent = home_child("task25-legacy-progress");
+    let root = parent.join("file");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2))
+        .regular_file_size(2 * 1024 * 1024);
+    let policy = DeletionPolicy {
+        method: DeletionMethod::LegacyThreePass,
+        write_check: WriteCheck::Off,
+    };
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+    let progress = Arc::new(RecordingProgress::default());
+    let shredder =
+        PolicyFileShredder::new(policy, Arc::clone(&progress) as Arc<dyn ProgressReporter>);
+
+    let result = run_full(
+        ExecuteRootsRequest {
+            roots: vec![root_request("legacy", &root, TargetKind::File)],
+        },
+        policy,
+        &io,
+        &shredder,
+        &journal,
+        progress.as_ref(),
+        &CancellationToken::new(),
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+    assert_eq!(result.roots[0].bytes_shredded, 3 * 2 * 1024 * 1024);
+    // Every pass event carries the full 3-pass total (M5).
+    assert_eq!(
+        *progress.pass_starts.lock().unwrap(),
+        vec![(1, 3), (2, 3), (3, 3)]
+    );
+    assert_eq!(
+        *progress.pass_completes.lock().unwrap(),
+        vec![(1, 3), (2, 3), (3, 3)]
+    );
+    // Pass-local progress: every event is within [0, file_size] — a
+    // frontend percent computed from pass + pass-local bytes can never
+    // exceed 100%.
+    let events = progress.progress_events.lock().unwrap();
+    assert!(!events.is_empty(), "2 MiB must produce progress events");
+    for &(bytes, total) in events.iter() {
+        assert!(bytes <= total, "progress {bytes} exceeds total {total}");
+        assert_eq!(
+            total,
+            2 * 1024 * 1024,
+            "pass-local total must equal the file size"
+        );
+    }
+    // The completion event carries the policy pass total, never 0 (D8).
+    let completes = progress.file_completes.lock().unwrap();
+    assert_eq!(completes.len(), 1);
+    assert_eq!(completes[0].0, root);
+    assert_eq!(completes[0].1, 6 * 1024 * 1024);
+    assert_eq!(completes[0].2, 3);
+    assert_eq!(completes[0].3, 3);
+}
+
+#[test]
+fn automatic_progress_within_bounds() {
+    let parent = home_child("task25-automatic-progress");
+    let root = parent.join("file");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2))
+        .regular_file_size(2 * 1024 * 1024);
+    let policy = DeletionPolicy {
+        method: DeletionMethod::Automatic,
+        write_check: WriteCheck::Off,
+    };
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+    let progress = Arc::new(RecordingProgress::default());
+    let shredder =
+        PolicyFileShredder::new(policy, Arc::clone(&progress) as Arc<dyn ProgressReporter>);
+
+    let result = run_full(
+        ExecuteRootsRequest {
+            roots: vec![root_request("automatic", &root, TargetKind::File)],
+        },
+        policy,
+        &io,
+        &shredder,
+        &journal,
+        progress.as_ref(),
+        &CancellationToken::new(),
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+    assert_eq!(*progress.pass_starts.lock().unwrap(), vec![(1, 1)]);
+    assert_eq!(*progress.pass_completes.lock().unwrap(), vec![(1, 1)]);
+    let events = progress.progress_events.lock().unwrap();
+    assert!(!events.is_empty(), "2 MiB must produce progress events");
+    for &(bytes, total) in events.iter() {
+        assert!(bytes <= total, "progress {bytes} exceeds total {total}");
+        assert_eq!(total, 2 * 1024 * 1024);
+    }
+    let completes = progress.file_completes.lock().unwrap();
+    assert_eq!(completes[0].3, 1, "completion total_passes must be 1");
 }
