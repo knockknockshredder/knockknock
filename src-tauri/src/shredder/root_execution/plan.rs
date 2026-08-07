@@ -269,18 +269,34 @@ pub(crate) fn execute_roots(
             plan.node,
             policy,
         );
-        if let Err(mut error) = result.execute(io, file_shredder, journal, progress, cancel) {
-            if result.partial_destruction || result.bytes_shredded > 0 {
-                error.message = format!(
-                    "{}; previous overwrites are irreversible partial destruction",
-                    error.message
-                );
-                error.actionable = "Previous overwrites are irreversible; preserve the containing directory and investigate before retrying".to_string();
+        match result.execute(io, file_shredder, journal, progress, cancel) {
+            Ok(()) => {}
+            Err(ExecuteError::Cancelled) => {
+                // Stop-after-current-file (D7): the current file completed its
+                // destructive lifecycle; counters are preserved, no error is
+                // pushed, and no "irreversible partial destruction"
+                // augmentation applies (Failed-only). Real per-file issues
+                // take precedence over cancellation.
+                result.status = if result.errors.is_empty() {
+                    RootStatus::Cancelled
+                } else {
+                    RootStatus::Failed
+                };
+                execution_stopped = true;
             }
-            result.errors.push(error);
-            result.root_removed = false;
-            result.status = RootStatus::Failed;
-            execution_stopped = true;
+            Err(ExecuteError::Failed(mut error)) => {
+                if result.partial_destruction || result.bytes_shredded > 0 {
+                    error.message = format!(
+                        "{}; previous overwrites are irreversible partial destruction",
+                        error.message
+                    );
+                    error.actionable = "Previous overwrites are irreversible; preserve the containing directory and investigate before retrying".to_string();
+                }
+                result.errors.push(error);
+                result.root_removed = false;
+                result.status = RootStatus::Failed;
+                execution_stopped = true;
+            }
         }
         results.push(result.finish(request));
     }
@@ -661,6 +677,17 @@ fn validate_child_name(name: &OsStr) -> Result<(), ShredError> {
     }
 }
 
+/// Failure mode of one root's execution walk (D7).
+enum ExecuteError {
+    /// Stop-after-current-file cancellation observed at a node boundary.
+    /// The current file's destructive lifecycle already completed; remaining
+    /// nodes and roots are not started. No error is reported.
+    Cancelled,
+    /// Hard node-level failure (journal/rename/unlink/sync) that aborts this
+    /// file's cleanup and stops the walk (M2 rule 4).
+    Failed(ChildErrorDto),
+}
+
 struct RootExecution {
     handle: DirHandle,
     node: PlannedNode,
@@ -710,7 +737,7 @@ impl RootExecution {
         journal: &JournalStore,
         progress: &dyn ProgressReporter,
         cancel: &CancellationToken,
-    ) -> Result<(), ChildErrorDto> {
+    ) -> Result<(), ExecuteError> {
         let root = std::mem::replace(
             &mut self.node,
             PlannedNode {
@@ -740,13 +767,12 @@ impl RootExecution {
         journal: &JournalStore,
         progress: &dyn ProgressReporter,
         cancel: &CancellationToken,
-    ) -> Result<bool, ChildErrorDto> {
+    ) -> Result<bool, ExecuteError> {
+        // Stop-after-current-file (D7): cancellation is only observed at node
+        // boundaries. The previous file completed its destructive lifecycle;
+        // this node and everything after it is not started.
         if cancel.is_cancelled() {
-            return Err(child_error(
-                &node.diagnostic_path,
-                ExecutionStage::Preflight,
-                ShredError::ValidationFailed("execution cancelled".to_string()),
-            ));
+            return Err(ExecuteError::Cancelled);
         }
 
         match node.kind {
@@ -762,25 +788,29 @@ impl RootExecution {
                 }
                 io.remove_empty_dir(&node.parent, &node.handle)
                     .map_err(|error| {
-                        child_error(
+                        ExecuteError::Failed(child_error(
                             &node.diagnostic_path,
                             ExecutionStage::DirectoryRemove,
                             error,
-                        )
+                        ))
                     })?;
                 io.sync_parent(&node.parent).map_err(|error| {
-                    child_error(&node.diagnostic_path, ExecutionStage::Sync, error)
+                    ExecuteError::Failed(child_error(
+                        &node.diagnostic_path,
+                        ExecutionStage::Sync,
+                        error,
+                    ))
                 })?;
                 self.directories_removed += 1;
                 Ok(true)
             }
-            NodeKind::Special => Err(child_error(
+            NodeKind::Special => Err(ExecuteError::Failed(child_error(
                 &node.diagnostic_path,
                 ExecutionStage::Preflight,
                 ShredError::ValidationFailed(
                     "special files are not safe execution targets".to_string(),
                 ),
-            )),
+            ))),
         }
     }
 
@@ -797,9 +827,13 @@ impl RootExecution {
         file_shredder: &dyn OpenFileShredder,
         journal: &JournalStore,
         _progress: &dyn ProgressReporter,
-    ) -> Result<bool, ChildErrorDto> {
+    ) -> Result<bool, ExecuteError> {
         let file = io.open_regular_for_shred(&node.handle).map_err(|error| {
-            child_error(&node.diagnostic_path, ExecutionStage::Overwrite, error)
+            ExecuteError::Failed(child_error(
+                &node.diagnostic_path,
+                ExecutionStage::Overwrite,
+                error,
+            ))
         })?;
         let request = FileShredRequest::new(node.diagnostic_path.clone(), self.policy);
         let shred_result = match file_shredder.shred_open_file(file, node.identity, &request) {
@@ -895,9 +929,13 @@ impl RootExecution {
         let new_name = OsString::from(format!(".knockknock-{:032x}", node.identity.id()));
         let parent_path = &node.trusted_parent_path;
         let parent = node.parent;
-        let parent_identity = io
-            .identity(&parent.as_node())
-            .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Journal, error))?;
+        let parent_identity = io.identity(&parent.as_node()).map_err(|error| {
+            ExecuteError::Failed(child_error(
+                &node.diagnostic_path,
+                ExecutionStage::Journal,
+                error,
+            ))
+        })?;
         let entry = JournalEntry::for_root_rename(
             parent_path,
             parent_identity,
@@ -905,43 +943,54 @@ impl RootExecution {
             node.identity,
             node.kind,
         )
-        .map_err(|error| journal_child_error(&node.diagnostic_path, error))?;
-        journal
-            .append(entry.clone())
-            .map_err(|error| journal_child_error(&node.diagnostic_path, error))?;
+        .map_err(|error| ExecuteError::Failed(journal_child_error(&node.diagnostic_path, error)))?;
+        journal.append(entry.clone()).map_err(|error| {
+            ExecuteError::Failed(journal_child_error(&node.diagnostic_path, error))
+        })?;
 
         io.rename_noreplace(&parent, &node.handle, &new_name)
-            .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Rename, error))?;
+            .map_err(|error| {
+                ExecuteError::Failed(child_error(
+                    &node.diagnostic_path,
+                    ExecutionStage::Rename,
+                    error,
+                ))
+            })?;
 
         if let Err(error) = io.sync_parent(&parent) {
-            return Err(self.rollback_after_failure(
+            return Err(ExecuteError::Failed(self.rollback_after_failure(
                 node,
                 &parent,
                 io,
                 error,
                 ExecutionStage::Sync,
                 "rename durability sync failed",
-            ));
+            )));
         }
 
         if let Err(error) = io.unlink_leaf(&parent, &node.handle) {
-            return Err(self.rollback_after_failure(
+            return Err(ExecuteError::Failed(self.rollback_after_failure(
                 node,
                 &parent,
                 io,
                 error,
                 ExecutionStage::Delete,
                 "deletion failed",
-            ));
+            )));
         }
         self.files_destroyed += 1;
 
-        io.sync_parent(&parent)
-            .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Sync, error))?;
+        io.sync_parent(&parent).map_err(|error| {
+            ExecuteError::Failed(child_error(
+                &node.diagnostic_path,
+                ExecutionStage::Sync,
+                error,
+            ))
+        })?;
 
-        journal
-            .clear(&entry)
-            .map_err(|error| journal_child_error(&node.diagnostic_path, error))?;
+        journal.clear(&entry).map_err(|error| {
+            ExecuteError::Failed(journal_child_error(&node.diagnostic_path, error))
+        })?;
         Ok(true)
     }
 
@@ -970,11 +1019,22 @@ impl RootExecution {
         &mut self,
         node: &PlannedNode,
         io: &dyn SecureTreeIo,
-    ) -> Result<bool, ChildErrorDto> {
+    ) -> Result<bool, ExecuteError> {
         io.unlink_leaf(&node.parent, &node.handle)
-            .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Delete, error))?;
-        io.sync_parent(&node.parent)
-            .map_err(|error| child_error(&node.diagnostic_path, ExecutionStage::Sync, error))?;
+            .map_err(|error| {
+                ExecuteError::Failed(child_error(
+                    &node.diagnostic_path,
+                    ExecutionStage::Delete,
+                    error,
+                ))
+            })?;
+        io.sync_parent(&node.parent).map_err(|error| {
+            ExecuteError::Failed(child_error(
+                &node.diagnostic_path,
+                ExecutionStage::Sync,
+                error,
+            ))
+        })?;
         self.files_destroyed += 1;
         Ok(true)
     }

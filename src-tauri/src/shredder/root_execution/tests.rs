@@ -46,6 +46,8 @@ struct FakeIo {
     fail_rollback: bool,
     fail_unlink: bool,
     fail_sync: bool,
+    cancel_token: Option<CancellationToken>,
+    cancel_on_nth_event: Option<(String, usize)>,
     events: Arc<Mutex<FakeEvents>>,
 }
 
@@ -60,8 +62,19 @@ impl FakeIo {
             fail_rollback: false,
             fail_unlink: false,
             fail_sync: false,
+            cancel_token: None,
+            cancel_on_nth_event: None,
             events: Arc::new(Mutex::new(FakeEvents::default())),
         }
+    }
+
+    /// Cancel the operation when the `nth` occurrence of `event` is recorded
+    /// (counted from 1, after the current call's bookkeeping starts). Used to
+    /// inject stop-after-current-file cancellations at precise walk points.
+    fn cancel_on_nth(mut self, event: &str, nth: usize, token: CancellationToken) -> Self {
+        self.cancel_token = Some(token);
+        self.cancel_on_nth_event = Some((event.to_string(), nth));
+        self
     }
 
     fn root(mut self, path: PathBuf, handle: u64, node: FakeNode) -> Self {
@@ -107,7 +120,17 @@ impl FakeIo {
     }
 
     fn record(&self, event: &str) {
-        self.events.lock().unwrap().calls.push(event.to_string());
+        let mut events = self.events.lock().unwrap();
+        if let Some((target, nth)) = &self.cancel_on_nth_event {
+            if target == event
+                && events.calls.iter().filter(|call| *call == event).count() + 1 == *nth
+            {
+                if let Some(token) = &self.cancel_token {
+                    token.cancel();
+                }
+            }
+        }
+        events.calls.push(event.to_string());
     }
 
     fn get_node(&self, handle: &NodeHandle) -> Result<&FakeNode, ShredError> {
@@ -1570,4 +1593,119 @@ fn sibling_hard_link_unchanged_after_block() {
         "sibling name must be untouched"
     );
     assert!(shredder.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn stop_during_file_a_completes_a_skips_b_c() {
+    let root = home_child("task24-stop-during-a");
+    let io = FakeIo::new()
+        .root(
+            root.clone(),
+            1,
+            directory(1, vec![(2, "a"), (3, "b"), (4, "c")]),
+        )
+        .add_node(2, regular(2))
+        .add_node(3, regular(3))
+        .add_node(4, regular(4));
+    let cancel = CancellationToken::new();
+    // Cancel as A is opened: A still completes its destructive lifecycle,
+    // then the walk stops at the next node boundary.
+    let io = io.cancel_on_nth("open_regular", 1, cancel.clone());
+    let shredder = FakeShredder::new();
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+
+    let result = run_full(
+        ExecuteRootsRequest {
+            roots: vec![root_request("stop", &root, TargetKind::Directory)],
+        },
+        DeletionPolicy::default(),
+        &io,
+        &shredder,
+        &journal,
+        &NoopProgressReporter,
+        &cancel,
+    );
+
+    // Stop-after-current-file (D7): A completed its full cleanup, B and C
+    // were never opened, the root is Cancelled with A's counters preserved,
+    // and no error or partial-destruction augmentation is reported.
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Cancelled);
+    assert!(!root_result.root_removed);
+    assert_eq!(root_result.files_destroyed, 1);
+    assert_eq!(root_result.bytes_shredded, 7);
+    assert!(root_result.errors.is_empty());
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert_eq!(
+        events.calls.iter().filter(|call| *call == "rename").count(),
+        1
+    );
+    assert_eq!(
+        events.calls.iter().filter(|call| *call == "unlink").count(),
+        1
+    );
+    assert_eq!(
+        events
+            .calls
+            .iter()
+            .filter(|call| *call == "open_regular")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn stop_between_roots_marks_remaining_cancelled() {
+    let first_parent = home_child("task24-between-parent-a");
+    let first = first_parent.join("file");
+    let second_parent = home_child("task24-between-parent-b");
+    let second = second_parent.join("file");
+    let io = FakeIo::new()
+        .root(first_parent.clone(), 1, directory(1, vec![]))
+        .root(first.clone(), 2, regular(2))
+        .root(second_parent.clone(), 3, directory(3, vec![]))
+        .root(second.clone(), 4, regular(4));
+    let cancel = CancellationToken::new();
+    // A file root's lifecycle records two sync events: after the rename and
+    // after the unlink. Cancelling on the second lets A finish completely
+    // before the batch boundary check.
+    let io = io.cancel_on_nth("sync", 2, cancel.clone());
+    let shredder = FakeShredder::new();
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+
+    let result = run_full(
+        ExecuteRootsRequest {
+            roots: vec![
+                root_request("first", &first, TargetKind::File),
+                root_request("second", &second, TargetKind::File),
+            ],
+        },
+        DeletionPolicy::default(),
+        &io,
+        &shredder,
+        &journal,
+        &NoopProgressReporter,
+        &cancel,
+    );
+
+    // Root A completed its full lifecycle before the cancel fired and is
+    // Destroyed; root B was never started and reports Cancelled.
+    assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+    assert!(result.roots[0].root_removed);
+    assert_eq!(result.roots[1].status, RootStatus::Cancelled);
+    assert!(!result.roots[1].root_removed);
+    assert_eq!(result.roots[1].bytes_shredded, 0);
+    assert_eq!(
+        io.events()
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .filter(|call| *call == "open_regular")
+            .count(),
+        1
+    );
 }
