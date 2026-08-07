@@ -407,6 +407,48 @@ impl SecureTreeIo for UnixSecureTreeIo {
         Ok(identity)
     }
 
+    fn link_count(&self, node: &NodeHandle) -> Result<u64, ShredError> {
+        let table = self.lock_table()?;
+        let entry = table.entries.get(&node.id()).ok_or_else(|| {
+            ShredError::ValidationFailed("unknown secure node handle".to_string())
+        })?;
+        let stat = if let Some(fd) = entry.fd.as_ref() {
+            let stat =
+                rustix::fs::fstat(fd).map_err(|error| io_error("inspect node handle", error))?;
+            if identity_from_stat(&stat) != entry.identity {
+                return Err(ShredError::ValidationFailed(
+                    "node handle identity changed".to_string(),
+                ));
+            }
+            stat
+        } else {
+            // Link entry without an open descriptor: query through the
+            // retained containing directory, mirroring `identity`.
+            let parent_id = entry.parent_id.ok_or_else(|| {
+                ShredError::ValidationFailed("link handle has no containing directory".to_string())
+            })?;
+            let parent = table.entries.get(&parent_id).ok_or_else(|| {
+                ShredError::ValidationFailed(
+                    "link containing directory handle is missing".to_string(),
+                )
+            })?;
+            let parent_fd = parent.fd.as_ref().ok_or_else(|| {
+                ShredError::ValidationFailed(
+                    "link containing directory has no descriptor".to_string(),
+                )
+            })?;
+            let stat = rustix::fs::statat(parent_fd, &entry.name, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|error| io_error("inspect link handle", error))?;
+            if identity_from_stat(&stat) != entry.identity {
+                return Err(ShredError::ValidationFailed(
+                    "link handle identity changed".to_string(),
+                ));
+            }
+            stat
+        };
+        Ok(stat.st_nlink as u64)
+    }
+
     fn open_regular_for_shred(&self, node: &NodeHandle) -> Result<File, ShredError> {
         let table = self.lock_table()?;
         let entry = table.entries.get(&node.id()).ok_or_else(|| {

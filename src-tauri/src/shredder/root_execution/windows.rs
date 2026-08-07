@@ -347,6 +347,18 @@ impl SecureTreeIo for WindowsSecureTreeIo {
         verify_entry_identity(entry, handle.as_raw_handle())
     }
 
+    fn link_count(&self, node: &NodeHandle) -> Result<u64, ShredError> {
+        let table = self.lock_table()?;
+        let entry = table.entries.get(&node.id()).ok_or_else(|| {
+            ShredError::ValidationFailed("unknown secure Windows node handle".to_string())
+        })?;
+        let handle = entry.handle.as_ref().ok_or_else(|| {
+            ShredError::ValidationFailed("secure Windows node handle is closed".to_string())
+        })?;
+        verify_entry_identity(entry, handle.as_raw_handle())?;
+        query_link_count(handle.as_raw_handle())
+    }
+
     fn open_regular_for_shred(&self, node: &NodeHandle) -> Result<File, ShredError> {
         let table = self.lock_table()?;
         let entry = table.entries.get(&node.id()).ok_or_else(|| {
@@ -779,6 +791,24 @@ fn file_name_offset() -> usize {
         FileName: [0; 1],
     };
     (&instance.FileName as *const u16 as usize) - (&instance as *const _ as usize)
+}
+
+/// Hard-link count of an already-open handle (M6 preflight and execution-time
+/// recheck). Never opens by path.
+fn query_link_count(handle: RawHandle) -> Result<u64, ShredError> {
+    let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+    // SAFETY: `information` is writable storage for the documented structure
+    // and `handle` is owned by the caller.
+    if unsafe { GetFileInformationByHandle(handle as HANDLE, information.as_mut_ptr()) } == 0 {
+        return Err(io_error(
+            "inspect Windows link count",
+            std::io::Error::last_os_error(),
+        ));
+    }
+    // SAFETY: GetFileInformationByHandle returned success and initialized the
+    // complete BY_HANDLE_FILE_INFORMATION structure.
+    let information = unsafe { information.assume_init() };
+    Ok(information.nNumberOfLinks as u64)
 }
 
 fn query_identity(handle: RawHandle) -> Result<NodeIdentity, ShredError> {

@@ -40,6 +40,7 @@ struct FakeEvents {
 struct FakeIo {
     roots: HashMap<PathBuf, u64>,
     nodes: HashMap<u64, FakeNode>,
+    link_counts: HashMap<u64, u64>,
     fail_enumerate: HashSet<u64>,
     fail_rename: bool,
     fail_rollback: bool,
@@ -53,6 +54,7 @@ impl FakeIo {
         Self {
             roots: HashMap::new(),
             nodes: HashMap::new(),
+            link_counts: HashMap::new(),
             fail_enumerate: HashSet::new(),
             fail_rename: false,
             fail_rollback: false,
@@ -70,6 +72,12 @@ impl FakeIo {
 
     fn add_node(mut self, handle: u64, node: FakeNode) -> Self {
         self.nodes.insert(handle, node);
+        self
+    }
+
+    /// Hard-link count for a node handle (default 1).
+    fn link_count(mut self, handle: u64, count: u64) -> Self {
+        self.link_counts.insert(handle, count);
         self
     }
 
@@ -162,6 +170,11 @@ impl SecureTreeIo for FakeIo {
     fn identity(&self, node: &NodeHandle) -> Result<NodeIdentity, ShredError> {
         self.record("identity");
         Ok(self.get_node(node)?.identity)
+    }
+
+    fn link_count(&self, node: &NodeHandle) -> Result<u64, ShredError> {
+        self.record("link_count");
+        Ok(self.link_counts.get(&node.id()).copied().unwrap_or(1))
     }
 
     fn open_regular_for_shred(&self, node: &NodeHandle) -> Result<File, ShredError> {
@@ -1385,4 +1398,176 @@ fn root_result_aggregates_write_check() {
     assert_eq!(result.roots[1].status, RootStatus::Destroyed);
     assert_eq!(result.roots[2].write_check, WriteCheckOutcome::NotRun);
     assert_eq!(result.roots[2].status, RootStatus::Destroyed);
+}
+
+#[test]
+fn hard_linked_file_root_blocked_before_overwrite() {
+    let parent = home_child("task23-hardlink-root");
+    let root = parent.join("file");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2))
+        .link_count(2, 2);
+    let shredder = FakeShredder::new();
+
+    let result = run(
+        ExecuteRootsRequest {
+            roots: vec![root_request("hard-link", &root, TargetKind::File)],
+        },
+        &io,
+        &shredder,
+    );
+
+    // M6 preflight: the hard-linked file root is blocked before the file is
+    // ever opened or renamed.
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Failed);
+    assert!(!root_result.root_removed);
+    assert!(root_result.errors.iter().any(|error| {
+        error.stage == ExecutionStage::Preflight && error.error_type == "hard_link_blocked"
+    }));
+    assert!(shredder.calls.lock().unwrap().is_empty());
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert!(!events.calls.iter().any(|call| call == "open_regular"));
+    assert!(!events.calls.iter().any(|call| call == "rename"));
+}
+
+#[test]
+fn hard_linked_file_inside_directory_root_blocks_before_mutation() {
+    let root = home_child("task23-hardlink-inside");
+    let io = FakeIo::new()
+        .root(
+            root.clone(),
+            1,
+            directory(1, vec![(2, "linked"), (3, "clean")]),
+        )
+        .add_node(2, regular(2))
+        .add_node(3, regular(3))
+        .link_count(2, 2);
+    let shredder = FakeShredder::new();
+
+    let result = run(
+        ExecuteRootsRequest {
+            roots: vec![root_request("dir", &root, TargetKind::Directory)],
+        },
+        &io,
+        &shredder,
+    );
+
+    // Any hard-linked regular file inside a directory root fails the WHOLE
+    // batch preflight before any mutation (M6).
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Failed);
+    assert!(!root_result.root_removed);
+    assert!(root_result.errors.iter().any(|error| {
+        error.stage == ExecutionStage::Preflight && error.error_type == "hard_link_blocked"
+    }));
+    assert!(shredder.calls.lock().unwrap().is_empty());
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert!(!events.calls.iter().any(|call| call == "open_regular"));
+    assert!(!events
+        .calls
+        .iter()
+        .any(|call| call == "rename" || call == "unlink" || call == "remove_dir"));
+}
+
+/// Real-filesystem proof (unix): a file root with a sibling hard link is
+/// blocked in preflight, and BOTH names keep their bytes — the selected file
+/// is never overwritten. Skips cleanly where hard links are unsupported.
+#[cfg(unix)]
+#[test]
+fn sibling_hard_link_unchanged_after_block() {
+    use crate::shredder::root_execution::unix::UnixSecureTreeIo;
+
+    let fixture = TempHomeDir::new("hardlink-unix");
+    let selected = fixture.path().join("selected.txt");
+    std::fs::write(&selected, b"sensitive payload").expect("write fixture");
+    let sibling = fixture.path().join("sibling.txt");
+    if let Err(error) = std::fs::hard_link(&selected, &sibling) {
+        // Filesystems without hard-link support skip cleanly.
+        eprintln!("skipping hard-link fixture: {error}");
+        return;
+    }
+
+    let adapter = UnixSecureTreeIo::new();
+    let shredder = FakeShredder::new();
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request("hard-link", &selected, TargetKind::File)],
+        },
+        &adapter,
+        &shredder,
+        &journal,
+    );
+
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Failed);
+    assert!(!root_result.root_removed);
+    assert!(root_result.errors.iter().any(|error| {
+        error.stage == ExecutionStage::Preflight && error.error_type == "hard_link_blocked"
+    }));
+    assert_eq!(
+        std::fs::read(&selected).expect("selected readable"),
+        b"sensitive payload",
+        "selected name must be untouched"
+    );
+    assert_eq!(
+        std::fs::read(&sibling).expect("sibling readable"),
+        b"sensitive payload",
+        "sibling name must be untouched"
+    );
+    assert!(shredder.calls.lock().unwrap().is_empty());
+}
+
+/// Real-filesystem proof (windows): same invariant as the unix-gated test,
+/// with a runtime skip when hard-link creation fails (e.g. non-NTFS volume).
+#[cfg(windows)]
+#[test]
+fn sibling_hard_link_unchanged_after_block() {
+    use crate::shredder::root_execution::windows::WindowsSecureTreeIo;
+
+    let fixture = TempHomeDir::new("hardlink-win");
+    let selected = fixture.path().join("selected.txt");
+    std::fs::write(&selected, b"sensitive payload").expect("write fixture");
+    let sibling = fixture.path().join("sibling.txt");
+    if let Err(error) = std::fs::hard_link(&selected, &sibling) {
+        // Non-NTFS volumes without hard-link support skip cleanly.
+        eprintln!("skipping hard-link fixture: {error}");
+        return;
+    }
+
+    let adapter = WindowsSecureTreeIo::new();
+    let shredder = FakeShredder::new();
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+    let result = run_with_journal(
+        ExecuteRootsRequest {
+            roots: vec![root_request("hard-link", &selected, TargetKind::File)],
+        },
+        &adapter,
+        &shredder,
+        &journal,
+    );
+
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Failed);
+    assert!(!root_result.root_removed);
+    assert!(root_result.errors.iter().any(|error| {
+        error.stage == ExecutionStage::Preflight && error.error_type == "hard_link_blocked"
+    }));
+    assert_eq!(
+        std::fs::read(&selected).expect("selected readable"),
+        b"sensitive payload",
+        "selected name must be untouched"
+    );
+    assert_eq!(
+        std::fs::read(&sibling).expect("sibling readable"),
+        b"sensitive payload",
+        "sibling name must be untouched"
+    );
+    assert!(shredder.calls.lock().unwrap().is_empty());
 }

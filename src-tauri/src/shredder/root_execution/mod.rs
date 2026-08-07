@@ -28,6 +28,9 @@ pub(crate) trait SecureTreeIo: Send + Sync {
         name: &std::ffi::OsStr,
     ) -> Result<NodeHandle, crate::shredder::ShredError>;
     fn identity(&self, node: &NodeHandle) -> Result<NodeIdentity, crate::shredder::ShredError>;
+    /// Hard-link count of the node behind the retained handle (M6 preflight).
+    /// Only regular files are queried; a query error fails closed.
+    fn link_count(&self, node: &NodeHandle) -> Result<u64, crate::shredder::ShredError>;
     fn open_regular_for_shred(
         &self,
         node: &NodeHandle,

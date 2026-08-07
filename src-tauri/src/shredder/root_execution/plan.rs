@@ -352,6 +352,35 @@ fn preflight_root(
         });
     }
 
+    // M6 preflight: a regular-file root with more than one hard link is
+    // blocked before any mutation — shredding one name would silently leave
+    // the data reachable through the sibling. Query errors fail closed.
+    let kind = identity.kind();
+    if kind == NodeKind::RegularFile {
+        let count = match io.link_count(&node_handle) {
+            Ok(count) => count,
+            Err(error) => {
+                return PreflightOutcome::Failed(RootFailure {
+                    error: child_error(&path, ExecutionStage::Preflight, error),
+                    request,
+                })
+            }
+        };
+        if count > 1 {
+            return PreflightOutcome::Failed(RootFailure {
+                error: child_error(
+                    &path,
+                    ExecutionStage::Preflight,
+                    ShredError::HardLinkBlocked {
+                        path: path.clone(),
+                        count,
+                    },
+                ),
+                request,
+            });
+        }
+    }
+
     let kind = identity.kind();
     let root_name = match path.file_name().map(OsStr::to_os_string) {
         Some(name) => name,
@@ -494,6 +523,19 @@ fn inspect_directory(
 
         let child_path = diagnostic_path.join(child_name.as_os_str());
         let kind = identity.kind();
+        // M6 preflight: a hard-linked regular file inside a directory root
+        // blocks the WHOLE batch before any mutation. Query errors fail
+        // closed. Hard links elsewhere in the tree are not an issue — only
+        // the data-bearing files are enumerated targets.
+        if kind == NodeKind::RegularFile {
+            let count = io.link_count(&node)?;
+            if count > 1 {
+                return Err(ShredError::HardLinkBlocked {
+                    path: child_path.clone(),
+                    count,
+                });
+            }
+        }
         let nested = if kind == NodeKind::Directory {
             let child_dir = node.as_dir();
             inspect_directory(
