@@ -37,8 +37,8 @@
       "icons/icon.ico"
     ],
     "category": "Utility",
-    "shortDescription": "Emergency file shredder with browser profile cleanup",
-    "longDescription": "KnockKnock securely deletes files, folders, and browser data using NIST 800-88 compliant single-pass random overwrite. Designed for speed and reliability when you need data gone now.",
+    "shortDescription": "Open-source local data deletion utility",
+    "longDescription": "KnockKnock is an open-source local data deletion utility for Windows, macOS, and Linux. It overwrites and deletes user-selected files, folders, and supported local browser data using configurable overwrite and read-back verification modes, with storage-aware handling for HDDs and SSDs.",
     "copyright": "Copyright (c) 2026 KnockKnock Contributors",
     "windows": {
       "webviewInstallMode": {
