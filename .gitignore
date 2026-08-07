@@ -57,6 +57,7 @@ docs/
 .scripts/
 .superpowers/
 .codegraph/
+.ignore
 *.pyc
 __pycache__/
 opencode.json
