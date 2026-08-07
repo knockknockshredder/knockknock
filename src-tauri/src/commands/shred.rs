@@ -836,6 +836,14 @@ mod tests {
     }
 
     #[test]
+    /// A real file root destroyed through the real platform adapter.
+    ///
+    /// Incident note (ORACLE-2 SHOULD-FIX 2, deviation 6): a transient
+    /// NTSTATUS 0xC0000056 (STATUS_DELETE_PENDING) was observed ONCE on the
+    /// randomized rename in a parallel (non-gate) run of this test; it has
+    /// never reproduced serially or since, and is suspected to be antivirus
+    /// interference with the short-lived renamed file. If it reappears,
+    /// treat it as environmental rather than a lifecycle regression.
     fn execute_roots_core_destroys_a_file_root_on_the_real_adapter() {
         let home = temp_home();
         let file = home.inner().join("secret.txt");

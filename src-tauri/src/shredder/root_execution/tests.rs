@@ -43,6 +43,7 @@ struct FakeIo {
     link_counts: HashMap<u64, u64>,
     regular_file_size: Option<u64>,
     fail_enumerate: HashSet<u64>,
+    fail_open: HashSet<u64>,
     fail_rename: bool,
     fail_rollback: bool,
     fail_unlink: bool,
@@ -60,6 +61,7 @@ impl FakeIo {
             link_counts: HashMap::new(),
             regular_file_size: None,
             fail_enumerate: HashSet::new(),
+            fail_open: HashSet::new(),
             fail_rename: false,
             fail_rollback: false,
             fail_unlink: false,
@@ -105,6 +107,14 @@ impl FakeIo {
 
     fn fail_directory(mut self, handle: u64) -> Self {
         self.fail_enumerate.insert(handle);
+        self
+    }
+
+    /// `open_regular_for_shred` returns Err for the given node handle only,
+    /// so a single run can prove that one file's open failure does not stop
+    /// later files.
+    fn fail_open(mut self, handle: u64) -> Self {
+        self.fail_open.insert(handle);
         self
     }
 
@@ -211,6 +221,13 @@ impl SecureTreeIo for FakeIo {
 
     fn open_regular_for_shred(&self, node: &NodeHandle) -> Result<File, ShredError> {
         self.record("open_regular");
+        if self.fail_open.contains(&node.id()) {
+            return Err(ShredError::IoError {
+                path: PathBuf::from("fake"),
+                kind: "injected".to_string(),
+                message: "injected open failure".to_string(),
+            });
+        }
         if self.get_node(node)?.kind != NodeKind::RegularFile {
             return Err(ShredError::ValidationFailed(
                 "fake adapter opened a non-regular node".to_string(),
@@ -1412,6 +1429,71 @@ fn not_started_failure_leaves_target_intact() {
     assert!(!events.calls.iter().any(|call| call == "rename"));
     assert!(!events.calls.iter().any(|call| call == "unlink"));
     assert!(journal.read().expect("journal read").is_empty());
+}
+
+#[test]
+fn open_failure_is_per_file_issue_and_batch_continues() {
+    let first_parent = home_child("task30-open-failure-parent");
+    let first = first_parent.join("file");
+    let second_parent = home_child("task30-open-later-parent");
+    let second = second_parent.join("file");
+    let io = FakeIo::new()
+        .root(first_parent.clone(), 1, directory(1, vec![]))
+        .root(first.clone(), 2, regular(2))
+        .root(second_parent.clone(), 3, directory(3, vec![]))
+        .root(second.clone(), 4, regular(4))
+        .fail_open(2);
+    let shredder = FakeShredder::new();
+
+    let result = run(
+        ExecuteRootsRequest {
+            roots: vec![
+                root_request("open-failure", &first, TargetKind::File),
+                root_request("later", &second, TargetKind::File),
+            ],
+        },
+        &io,
+        &shredder,
+    );
+
+    // An open failure is a per-file issue (ORACLE-2 SHOULD-FIX 1), not a
+    // batch abort: file A could not be opened before any byte was written —
+    // the Overwrite-stage issue is reported, A is not removed, the walk
+    // continues, and file B is still processed. The root finish() downgrades
+    // to Failed because the issue is visible.
+    let first_result = &result.roots[0];
+    assert_eq!(first_result.status, RootStatus::Failed);
+    assert!(!first_result.root_removed);
+    assert_eq!(first_result.files_destroyed, 0);
+    assert!(first_result.errors.iter().any(|error| {
+        error.stage == ExecutionStage::Overwrite && error.message.contains("injected open failure")
+    }));
+    assert_eq!(result.roots[1].status, RootStatus::Destroyed);
+    assert!(result.roots[1].root_removed);
+    assert_eq!(result.roots[1].files_destroyed, 1);
+    let events = io.events();
+    let events = events.lock().unwrap();
+    // Both files were opened; only B went through the cleanup lifecycle.
+    assert_eq!(
+        events
+            .calls
+            .iter()
+            .filter(|call| *call == "open_regular")
+            .count(),
+        2
+    );
+    assert_eq!(
+        events.calls.iter().filter(|call| *call == "rename").count(),
+        1
+    );
+    assert_eq!(
+        events.calls.iter().filter(|call| *call == "unlink").count(),
+        1
+    );
+    // The shredder only ever saw B: A never produced an open handle.
+    let calls = shredder.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].diagnostic_path(), second);
 }
 
 #[test]

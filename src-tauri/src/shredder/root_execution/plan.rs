@@ -828,13 +828,23 @@ impl RootExecution {
         journal: &JournalStore,
         _progress: &dyn ProgressReporter,
     ) -> Result<bool, ExecuteError> {
-        let file = io.open_regular_for_shred(&node.handle).map_err(|error| {
-            ExecuteError::Failed(child_error(
-                &node.diagnostic_path,
-                ExecutionStage::Overwrite,
-                error,
-            ))
-        })?;
+        let file = match io.open_regular_for_shred(&node.handle) {
+            Ok(file) => file,
+            Err(error) => {
+                // Open failure is a PER-FILE issue, not a batch abort
+                // (ORACLE-2 SHOULD-FIX 1): the target could not be opened
+                // before any byte was written — it is intact and must not be
+                // journaled, renamed, or unlinked. Report the Overwrite-stage
+                // issue and continue the walk (same mechanism as the
+                // shredder-Err NotStarted arm below).
+                self.errors.push(child_error(
+                    &node.diagnostic_path,
+                    ExecutionStage::Overwrite,
+                    error,
+                ));
+                return Ok(false);
+            }
+        };
         let request = FileShredRequest::new(node.diagnostic_path.clone(), self.policy);
         let shred_result = match file_shredder.shred_open_file(file, node.identity, &request) {
             Ok(result) => result,
