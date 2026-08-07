@@ -169,10 +169,19 @@ impl JournalIo for FsJournalIo {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // On Unix the journal is created owner-only (0o600) AT CREATION so the
+        // rename below carries the mode to the final journal without a
+        // world-readable window; `create_new` is already set, so there is no
+        // symlink-follow risk. On Windows the KnockKnock data directory ACLs
+        // restrict access to the owning user (documented in Phase 5).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
         file.write_all(contents)?;
         file.flush()?;
         Ok(temporary)
@@ -786,6 +795,32 @@ mod tests {
 
         let entries = store.read().expect("journal read");
         assert_eq!(entries, vec![expected]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_files_are_created_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let journal_path = directory.path().join(".journal.json");
+        let store = JournalStore::at(&journal_path);
+
+        store.append(entry()).expect("journal append");
+
+        let mode = std::fs::metadata(&journal_path)
+            .expect("journal metadata")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "journal must not be group- or world-accessible"
+        );
+        assert!(
+            !journal_path.with_extension("tmp").exists(),
+            "temporary journal must not remain after the write"
+        );
     }
 
     #[test]
