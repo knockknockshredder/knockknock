@@ -45,7 +45,7 @@ sweep.timestamp
 desktop.ini
 
 # Developer docs (not app code)
-AGENTS.md
+AGENTS.local.md
 docs/
 *.md
 !README.md
