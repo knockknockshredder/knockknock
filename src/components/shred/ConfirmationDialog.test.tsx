@@ -38,21 +38,21 @@ describe("ConfirmationDialog counts", () => {
   it("states files and folders together", () => {
     renderDialog({ fileCount: 2, folderCount: 1 });
     expect(descriptionText()).toBe(
-      "This will overwrite and delete 2 files and 1 folder. KnockKnock has no Undo. File and folder targets will be processed using the currently selected overwrite and verification settings."
+      "This will overwrite and delete 2 files and 1 folder. KnockKnock has no Undo. File and folder targets will be processed using the currently selected deletion method and write-check settings."
     );
   });
 
   it("states files, folders, and browser profiles together", () => {
     renderDialog({ fileCount: 2, folderCount: 1, profileCount: 3 });
     expect(descriptionText()).toBe(
-      "This will overwrite and delete 2 files and 1 folder and selected local data from 3 browser profiles. KnockKnock has no Undo. File and folder targets will be processed using the currently selected overwrite and verification settings."
+      "This will overwrite and delete 2 files and 1 folder and selected local data from 3 browser profiles. KnockKnock has no Undo. File and folder targets will be processed using the currently selected deletion method and write-check settings."
     );
   });
 
   it("states a folder-only selection", () => {
     renderDialog({ folderCount: 1 });
     expect(descriptionText()).toBe(
-      "This will overwrite and delete 1 folder. KnockKnock has no Undo. File and folder targets will be processed using the currently selected overwrite and verification settings."
+      "This will overwrite and delete 1 folder. KnockKnock has no Undo. File and folder targets will be processed using the currently selected deletion method and write-check settings."
     );
   });
 

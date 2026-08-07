@@ -474,6 +474,38 @@ describe("authoritative vault writer", () => {
   });
 });
 
+describe("deletion policy state", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(false);
+      return Promise.resolve(undefined);
+    });
+  });
+
+  it("defaults to the automatic method with a spot write check", async () => {
+    renderContext();
+    expect(latest.deletionMethod).toBe("automatic");
+    expect(latest.writeCheck).toBe("spot");
+  });
+
+  it("updates the deletion method and write check via setters", async () => {
+    renderContext();
+    await act(async () => {
+      latest.setDeletionMethod("legacy_three_pass");
+      latest.setWriteCheck("full");
+    });
+    expect(latest.deletionMethod).toBe("legacy_three_pass");
+    expect(latest.writeCheck).toBe("full");
+    await act(async () => {
+      latest.setDeletionMethod("automatic");
+      latest.setWriteCheck("off");
+    });
+    expect(latest.deletionMethod).toBe("automatic");
+    expect(latest.writeCheck).toBe("off");
+  });
+});
+
 describe("typed execution results", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -503,7 +535,8 @@ describe("typed execution results", () => {
     path: string,
     status: RootStatus,
     rootRemoved: boolean,
-    errors: ChildErrorDto[] = []
+    errors: ChildErrorDto[] = [],
+    writeCheck: RootResultDto["write_check"] = "not_run"
   ): RootResultDto {
     const file = files.find((candidate) => candidate.path === path);
     expect(file).toBeDefined();
@@ -516,6 +549,7 @@ describe("typed execution results", () => {
       files_destroyed: 0,
       directories_removed: 0,
       bytes_shredded: 0,
+      write_check: writeCheck,
       errors,
     };
   }
@@ -595,8 +629,8 @@ describe("typed execution results", () => {
     const childError: ChildErrorDto = {
       path: "C:\\c.txt",
       stage: "verify",
-      error_type: "verification_failed",
-      message: "verification did not pass",
+      error_type: "write_check_failed",
+      message: "write check did not pass",
       actionable: "Inspect the target before retrying",
     };
     const files = latest.files;
@@ -604,7 +638,7 @@ describe("typed execution results", () => {
       await latest.applyRootResults([
         resultFor(files, "C:\\a.txt", "destroyed", true),
         resultFor(files, "C:\\b.txt", "destroyed", false),
-        resultFor(files, "C:\\c.txt", "failed", false, [childError]),
+        resultFor(files, "C:\\c.txt", "failed", false, [childError], "failed"),
         resultFor(files, "C:\\d.txt", "cancelled", false),
         resultFor(files, "C:\\e.txt", "skipped", false),
       ]);
@@ -623,9 +657,10 @@ describe("typed execution results", () => {
     const c = latest.files.find((file) => file.path === "C:\\c.txt")!;
     expect(c.status).toBe("error");
     expect(c.root_status).toBe("failed");
+    expect(c.write_check).toBe("failed");
     expect(c.child_errors).toEqual([childError]);
     expect(c.error).toContain("verify");
-    expect(c.error).toContain("verification did not pass");
+    expect(c.error).toContain("write check did not pass");
     expect(
       latest.files.find((file) => file.path === "C:\\d.txt")?.root_status
     ).toBe("cancelled");

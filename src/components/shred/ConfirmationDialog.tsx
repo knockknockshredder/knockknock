@@ -81,7 +81,7 @@ export function ConfirmationDialog({
           <> and selected local data from {profilePart}</>
         ) : null}
         . KnockKnock has no Undo. File and folder targets will be processed
-        using the currently selected overwrite and verification settings.
+        using the currently selected deletion method and write-check settings.
       </>
     );
   } else if (hasProfiles) {

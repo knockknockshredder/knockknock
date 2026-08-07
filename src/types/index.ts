@@ -14,6 +14,8 @@ export interface ShredFile {
   shortcut_target: string | null;
   /** Per-root status from the last typed execution result (retained targets only). */
   root_status?: RootStatus;
+  /** Aggregate write-check outcome from the last typed execution result (retained targets only). */
+  write_check?: WriteCheckOutcome;
   /** Structured child errors from the last typed execution result (retained targets only). */
   child_errors?: ChildErrorDto[];
 }
@@ -45,15 +47,30 @@ export interface LogEntry {
   message: string;
 }
 
-export interface AlgorithmOption {
-  index: number;
-  name: string;
-  description: string;
-  default_passes: number;
-  max_passes: number;
-  accepted_patterns: string[];
-  has_fixed_pattern_sequence: boolean;
-}
+/**
+ * Deletion method (v2 policy). Mirrors backend `DeletionMethod` snake_case
+ * serialization in `src-tauri/src/shredder/types.rs`.
+ */
+export type DeletionMethod = "automatic" | "legacy_three_pass";
+
+/**
+ * Final-state write check mode (v2 policy). Mirrors backend `WriteCheck`
+ * snake_case serialization in `src-tauri/src/shredder/types.rs`.
+ */
+export type WriteCheck = "off" | "spot" | "full";
+
+/**
+ * Outcome of the final-state write check. Mirrors backend
+ * `WriteCheckOutcome` snake_case serialization.
+ */
+export type WriteCheckOutcome = "not_run" | "passed" | "failed";
+
+/**
+ * Per-file overwrite state. Mirrors backend `OverwriteState` snake_case
+ * serialization (engine-internal; surfaced on the frontend only through
+ * child error stages).
+ */
+export type OverwriteStatus = "not_started" | "partial" | "completed";
 
 export interface DetectedBrowser {
   id: string;
@@ -74,11 +91,8 @@ export interface BrowserProfile {
 /** Matches backend ShredStatus tagged enum serialization */
 export type ShredStatus =
   | { type: "Shredding" }
-  | { type: "Verifying" }
-  | { type: "Renaming" }
-  | { type: "Truncating" }
-  | { type: "Deleting" }
   | { type: "Complete" }
+  | { type: "Warning"; message: string }
   | { type: "Error"; message: string };
 
 export interface ProgressEvent {
@@ -193,6 +207,8 @@ export interface RootResultDto {
   files_destroyed: number;
   directories_removed: number;
   bytes_shredded: number;
+  /** Aggregate final-state write check across the root's files. */
+  write_check: WriteCheckOutcome;
   errors: ChildErrorDto[];
 }
 

@@ -3,8 +3,6 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ShredButton } from "@/components/shred/ShredButton";
-import { AlgorithmSelector } from "@/components/shred/AlgorithmSelector";
-import { ShredOptions } from "@/components/shred/ShredOptions";
 import { ConfirmationDialog } from "@/components/shred/ConfirmationDialog";
 import { useShred } from "@/contexts/ShredContext";
 import { useBrowser } from "@/contexts/BrowserContext";
@@ -15,7 +13,6 @@ import type {
   ProgressEvent,
   ShredReport,
   ShredStatus,
-  AlgorithmOption,
 } from "@/types";
 
 function statusToString(status: ShredStatus): string {
@@ -25,14 +22,13 @@ function statusToString(status: ShredStatus): string {
 export function ShredSection() {
   const {
     files,
-    algorithmIndex,
+    deletionMethod,
+    writeCheck,
     isShredding,
     setIsShredding,
     addLogEntry,
     clearLog,
     updateFileStatus,
-    setAlgorithms,
-    algorithms,
     progress,
     setProgress,
     vaultPin,
@@ -46,9 +42,6 @@ export function ShredSection() {
   const { logObfuscation, autoClearLog } = useSettings();
 
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [passes, setPasses] = useState(1);
-  const [pattern, setPattern] = useState<"random" | "zeros" | "ones">("random");
-  const [verificationLevel, setVerificationLevel] = useState<"none" | "sample" | "full">("sample");
   const unlistenRef = useRef<(() => void) | null>(null);
   const isExecutingRef = useRef(false); // guards against StrictMode double-fire
   const completedCountRef = useRef(0);
@@ -74,17 +67,15 @@ export function ShredSection() {
     (f) => f.kind === "directory"
   ).length;
   const selectedProfileCount = getSelectedCount();
-  const currentAlgorithm = algorithms[algorithmIndex];
   const runningBrowsers = browsers.filter((b) => b.isRunning).map((b) => b.name);
 
-  // Load algorithms on mount and sync default from settings
-  useEffect(() => {
-    invoke<AlgorithmOption[]>("get_algorithms")
-      .then((algorithms) => {
-        setAlgorithms(algorithms);
-      })
-      .catch((err) => addLogEntry("error", `Failed to load algorithms: ${err}`));
-  }, [setAlgorithms, addLogEntry]);
+  // Transitional IPC shim (removed when the v2 contract lands): map the
+  // policy state to the legacy execute_roots argument surface. The engine
+  // derives its pass plan from the policy, so `passes`/`pattern` are
+  // placeholders that are validated for bounds and otherwise ignored.
+  const algorithmIndex = deletionMethod === "legacy_three_pass" ? 1 : 0;
+  const verificationLevel =
+    writeCheck === "off" ? "none" : writeCheck === "full" ? "full" : "sample";
 
   // Handle tray menu "Quick Shred" — triggers the same PIN→confirmation
   // flow as clicking the Shred button, using the existing executeShred
@@ -189,8 +180,8 @@ export function ShredSection() {
       const report: BatchRootResult = await invoke<BatchRootResult>("execute_roots", {
         request,
         algorithmIndex,
-        passes,
-        pattern,
+        passes: 1,
+        pattern: "random",
         verificationLevel,
         logObfuscation,
       });
@@ -245,8 +236,8 @@ export function ShredSection() {
                 profile_path: profile.profile_path,
                 data_types: profile.data_types,
                 algorithm_index: algorithmIndex,
-                passes: passes,
-                pattern: pattern,
+                passes: 1,
+                pattern: "random",
                 verification_level: verificationLevel,
                 explicit_consent: true,
               },
@@ -305,19 +296,6 @@ export function ShredSection() {
   Local Data Deletion
 </h1>
       <div className="flex flex-col gap-4 w-full max-w-lg mx-auto">
-        <AlgorithmSelector />
-        {currentAlgorithm && (
-          <ShredOptions
-            passes={passes}
-            onPassesChange={setPasses}
-            pattern={pattern}
-            onPatternChange={setPattern}
-            verificationLevel={verificationLevel}
-            onVerificationLevelChange={setVerificationLevel}
-            maxPasses={currentAlgorithm.max_passes}
-            currentAlgorithm={currentAlgorithm}
-          />
-        )}
         <ShredButton
           fileCount={pendingFileCount}
           folderCount={pendingFolderCount}

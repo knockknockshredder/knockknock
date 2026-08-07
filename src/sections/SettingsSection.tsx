@@ -233,7 +233,7 @@ export function SettingsSection() {
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Open-source local data deletion utility for Windows, macOS, and
-            Linux. Supports configurable overwrite modes, read-back verification,
+            Linux. Supports storage-aware deletion methods, write-check options,
             browser cleanup, and encrypted persistence of the selected target
             list.
           </p>
