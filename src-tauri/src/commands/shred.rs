@@ -115,6 +115,11 @@ pub(crate) fn execute_roots_core(
 ) -> BatchRootResult {
     let adapter = platform_adapter();
     let file_shredder = PolicyFileShredder::new(policy, Arc::clone(&progress));
+    // M7 classifier: plain media detection per path. Per-distinct-volume
+    // memoization lives in plan.rs's preflight (mount_id cache); the closure
+    // itself is the raw detect so the cache key stays authoritative.
+    let platform_io = crate::shredder::platform::create_platform_io();
+    let classify = move |path: &std::path::Path| platform_io.detect_media_type(path);
     run_roots(
         request,
         policy,
@@ -123,6 +128,7 @@ pub(crate) fn execute_roots_core(
         journal,
         progress.as_ref(),
         cancel,
+        &classify,
     )
 }
 

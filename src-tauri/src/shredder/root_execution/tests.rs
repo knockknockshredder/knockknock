@@ -14,13 +14,14 @@ use crate::shredder::progress::NoopProgressReporter;
 use crate::shredder::traits::ProgressReporter;
 use crate::shredder::types::{
     BatchRootResult, DeletionMethod, DeletionPolicy, ExecuteRootRequest, ExecuteRootsRequest,
-    ExecutionStage, RootStatus, ShredResult, TargetKind, WriteCheck, WriteCheckOutcome,
+    ExecutionStage, MediaType, RootStatus, ShredResult, TargetKind, WriteCheck, WriteCheckOutcome,
 };
 use crate::shredder::PolicyFileShredder;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -48,6 +49,9 @@ struct FakeIo {
     fail_rollback: bool,
     fail_unlink: bool,
     fail_sync: bool,
+    media_by_path: HashMap<PathBuf, MediaType>,
+    classify_error: bool,
+    classify_calls: Arc<AtomicUsize>,
     cancel_token: Option<CancellationToken>,
     cancel_on_nth_event: Option<(String, usize)>,
     events: Arc<Mutex<FakeEvents>>,
@@ -66,6 +70,9 @@ impl FakeIo {
             fail_rollback: false,
             fail_unlink: false,
             fail_sync: false,
+            media_by_path: HashMap::new(),
+            classify_error: false,
+            classify_calls: Arc::new(AtomicUsize::new(0)),
             cancel_token: None,
             cancel_on_nth_event: None,
             events: Arc::new(Mutex::new(FakeEvents::default())),
@@ -103,6 +110,40 @@ impl FakeIo {
     fn regular_file_size(mut self, size: u64) -> Self {
         self.regular_file_size = Some(size);
         self
+    }
+
+    /// Media type the fake classifier reports for a path (default Unknown).
+    fn media(mut self, path: PathBuf, media: MediaType) -> Self {
+        self.media_by_path.insert(path, media);
+        self
+    }
+
+    /// The fake classifier returns Err for every path (fail-closed tests).
+    fn classify_error(mut self) -> Self {
+        self.classify_error = true;
+        self
+    }
+
+    /// Classifier matching this FakeIo's media map; increments a shared
+    /// counter so tests can assert per-distinct-volume call counts (M7).
+    fn classifier(&self) -> impl Fn(&Path) -> Result<MediaType, ShredError> {
+        let classify_calls = Arc::clone(&self.classify_calls);
+        let media = self.media_by_path.clone();
+        let classify_error = self.classify_error;
+        move |path: &Path| {
+            classify_calls.fetch_add(1, Ordering::SeqCst);
+            if classify_error {
+                return Err(ShredError::ValidationFailed(format!(
+                    "injected classifier failure at {}",
+                    path.display()
+                )));
+            }
+            Ok(media.get(path).copied().unwrap_or(MediaType::Unknown))
+        }
+    }
+
+    fn classify_calls(&self) -> usize {
+        self.classify_calls.load(Ordering::SeqCst)
     }
 
     fn fail_directory(mut self, handle: u64) -> Self {
@@ -432,9 +473,30 @@ fn regular(identity: u128) -> FakeNode {
     }
 }
 
+/// Regular file on an explicit mount id, for multi-volume fixtures (M7).
+fn regular_on(identity: u128, mount_id: u64) -> FakeNode {
+    FakeNode {
+        identity: NodeIdentity::regular(identity, mount_id),
+        kind: NodeKind::RegularFile,
+        children: Vec::new(),
+    }
+}
+
 fn directory(identity: u128, children: Vec<(u64, &str)>) -> FakeNode {
     FakeNode {
         identity: NodeIdentity::directory(identity, 1),
+        kind: NodeKind::Directory,
+        children: children
+            .into_iter()
+            .map(|(handle, name)| (OsString::from(name), handle))
+            .collect(),
+    }
+}
+
+/// Directory on an explicit mount id, for multi-volume fixtures (M7).
+fn directory_on(identity: u128, mount_id: u64, children: Vec<(u64, &str)>) -> FakeNode {
+    FakeNode {
+        identity: NodeIdentity::directory(identity, mount_id),
         kind: NodeKind::Directory,
         children: children
             .into_iter()
@@ -451,6 +513,8 @@ fn run(
     let progress = NoopProgressReporter;
     let directory = tempfile::tempdir().expect("temporary directory");
     let journal = JournalStore::at(directory.path().join("journal.json"));
+    // Default policy is Automatic, which never classifies (M7).
+    let classify = |_path: &Path| -> Result<MediaType, ShredError> { Ok(MediaType::Unknown) };
     run_full(
         request,
         DeletionPolicy::default(),
@@ -459,6 +523,33 @@ fn run(
         &journal,
         &progress,
         &CancellationToken::new(),
+        &classify,
+    )
+}
+
+/// Run a batch with the Legacy 3-pass policy (HDD-only, M7) and the given
+/// classifier.
+fn run_legacy(
+    request: ExecuteRootsRequest,
+    io: &dyn SecureTreeIo,
+    shredder: &dyn OpenFileShredder,
+    classify: &dyn Fn(&Path) -> Result<MediaType, ShredError>,
+) -> BatchRootResult {
+    let progress = NoopProgressReporter;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+    run_full(
+        request,
+        DeletionPolicy {
+            method: DeletionMethod::LegacyThreePass,
+            write_check: WriteCheck::Off,
+        },
+        io,
+        shredder,
+        &journal,
+        &progress,
+        &CancellationToken::new(),
+        classify,
     )
 }
 
@@ -978,6 +1069,8 @@ fn run_with_journal(
     journal: &JournalStore,
 ) -> BatchRootResult {
     let progress = NoopProgressReporter;
+    // Default policy is Automatic, which never classifies (M7).
+    let classify = |_path: &Path| -> Result<MediaType, ShredError> { Ok(MediaType::Unknown) };
     run_full(
         request,
         DeletionPolicy::default(),
@@ -986,7 +1079,14 @@ fn run_with_journal(
         journal,
         &progress,
         &CancellationToken::new(),
+        &classify,
     )
+}
+
+/// Classifier for Automatic-policy tests: never invoked (M7 — Automatic
+/// performs zero media classification).
+fn automatic_classifier() -> impl Fn(&Path) -> Result<MediaType, ShredError> {
+    |_path: &Path| Ok(MediaType::Unknown)
 }
 
 fn run_full(
@@ -997,8 +1097,11 @@ fn run_full(
     journal: &JournalStore,
     progress: &dyn ProgressReporter,
     cancel: &CancellationToken,
+    classify: &dyn Fn(&Path) -> Result<MediaType, ShredError>,
 ) -> BatchRootResult {
-    execute_roots(request, policy, io, shredder, journal, progress, cancel)
+    execute_roots(
+        request, policy, io, shredder, journal, progress, cancel, classify,
+    )
 }
 
 #[test]
@@ -1840,6 +1943,7 @@ fn stop_during_file_a_completes_a_skips_b_c() {
         &journal,
         &NoopProgressReporter,
         &cancel,
+        &automatic_classifier(),
     );
 
     // Stop-after-current-file (D7): A completed its full cleanup, B and C
@@ -1904,6 +2008,7 @@ fn stop_between_roots_marks_remaining_cancelled() {
         &journal,
         &NoopProgressReporter,
         &cancel,
+        &automatic_classifier(),
     );
 
     // Root A completed its full lifecycle before the cancel fired and is
@@ -1954,6 +2059,7 @@ fn zero_length_file_root_removed_and_journaled() {
         &journal,
         progress.as_ref(),
         &CancellationToken::new(),
+        &automatic_classifier(),
     );
 
     // M4 zero-length lifecycle: journal → rename → unlink → sync → clear,
@@ -2011,6 +2117,7 @@ fn zero_length_emits_no_pass_events_and_valid_completion() {
         &journal,
         progress.as_ref(),
         &CancellationToken::new(),
+        &automatic_classifier(),
     );
 
     assert_eq!(result.roots[0].status, RootStatus::Destroyed);
@@ -2036,7 +2143,8 @@ fn legacy_progress_never_exceeds_100_percent() {
     let io = FakeIo::new()
         .root(parent.clone(), 1, directory(1, vec![]))
         .root(root.clone(), 2, regular(2))
-        .regular_file_size(2 * 1024 * 1024);
+        .regular_file_size(2 * 1024 * 1024)
+        .media(root.clone(), MediaType::Hdd);
     let policy = DeletionPolicy {
         method: DeletionMethod::LegacyThreePass,
         write_check: WriteCheck::Off,
@@ -2046,6 +2154,7 @@ fn legacy_progress_never_exceeds_100_percent() {
     let progress = Arc::new(RecordingProgress::default());
     let shredder =
         PolicyFileShredder::new(policy, Arc::clone(&progress) as Arc<dyn ProgressReporter>);
+    let classify = io.classifier();
 
     let result = run_full(
         ExecuteRootsRequest {
@@ -2057,6 +2166,7 @@ fn legacy_progress_never_exceeds_100_percent() {
         &journal,
         progress.as_ref(),
         &CancellationToken::new(),
+        &classify,
     );
 
     assert_eq!(result.roots[0].status, RootStatus::Destroyed);
@@ -2120,6 +2230,7 @@ fn automatic_progress_within_bounds() {
         &journal,
         progress.as_ref(),
         &CancellationToken::new(),
+        &automatic_classifier(),
     );
 
     assert_eq!(result.roots[0].status, RootStatus::Destroyed);
@@ -2133,4 +2244,267 @@ fn automatic_progress_within_bounds() {
     }
     let completes = progress.file_completes.lock().unwrap();
     assert_eq!(completes[0].3, 1, "completion total_passes must be 1");
+}
+
+#[test]
+fn legacy_rejected_on_ssd_root_before_mutation() {
+    let parent = home_child("task31-ssd-root-parent");
+    let root = parent.join("file");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2))
+        .media(root.clone(), MediaType::Ssd);
+    let shredder = FakeShredder::new();
+    let classify = io.classifier();
+
+    let result = run_legacy(
+        ExecuteRootsRequest {
+            roots: vec![root_request("ssd", &root, TargetKind::File)],
+        },
+        &io,
+        &shredder,
+        &classify,
+    );
+
+    // M7: Legacy 3-pass on a confirmed SSD volume fails preflight with the
+    // structured storage error before any mutation, and the target is intact.
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Failed);
+    assert!(!root_result.root_removed);
+    assert_eq!(root_result.files_destroyed, 0);
+    assert!(root_result.errors.iter().any(|error| {
+        error.stage == ExecutionStage::Preflight
+            && error.error_type == "unsupported_storage_for_method"
+    }));
+    assert!(shredder.calls.lock().unwrap().is_empty());
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert!(!events.calls.iter().any(|call| call == "open_regular"));
+    assert!(!events
+        .calls
+        .iter()
+        .any(|call| call == "rename" || call == "unlink" || call == "remove_dir"));
+    assert_eq!(io.classify_calls(), 1);
+}
+
+#[test]
+fn legacy_allowed_on_hdd_root() {
+    let parent = home_child("task31-hdd-root-parent");
+    let root = parent.join("file");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2))
+        .media(root.clone(), MediaType::Hdd);
+    let shredder = FakeShredder::new();
+    let classify = io.classifier();
+
+    let result = run_legacy(
+        ExecuteRootsRequest {
+            roots: vec![root_request("hdd", &root, TargetKind::File)],
+        },
+        &io,
+        &shredder,
+        &classify,
+    );
+
+    // M7: Legacy 3-pass proceeds to destruction on a confirmed HDD volume.
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Destroyed);
+    assert!(root_result.root_removed);
+    assert_eq!(root_result.files_destroyed, 1);
+    assert!(root_result.errors.is_empty());
+    assert_eq!(io.classify_calls(), 1);
+}
+
+#[test]
+fn legacy_rejected_when_classifier_errors() {
+    let parent = home_child("task31-classify-error-parent");
+    let root = parent.join("file");
+    let io = FakeIo::new()
+        .root(parent.clone(), 1, directory(1, vec![]))
+        .root(root.clone(), 2, regular(2))
+        .classify_error();
+    let shredder = FakeShredder::new();
+    let classify = io.classifier();
+
+    let result = run_legacy(
+        ExecuteRootsRequest {
+            roots: vec![root_request("classify-error", &root, TargetKind::File)],
+        },
+        &io,
+        &shredder,
+        &classify,
+    );
+
+    // M7 fail closed: a classifier error blocks the root in preflight even
+    // though the media type is unknown — nothing is opened or mutated.
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Failed);
+    assert!(!root_result.root_removed);
+    assert!(root_result.errors.iter().any(|error| {
+        error.stage == ExecutionStage::Preflight
+            && error.message.contains("injected classifier failure")
+    }));
+    assert!(shredder.calls.lock().unwrap().is_empty());
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert!(!events.calls.iter().any(|call| call == "open_regular"));
+    assert!(!events
+        .calls
+        .iter()
+        .any(|call| call == "rename" || call == "unlink" || call == "remove_dir"));
+    assert_eq!(io.classify_calls(), 1);
+}
+
+#[test]
+fn mixed_roots_ssd_aborts_whole_batch() {
+    let ssd_parent = home_child("task31-mixed-ssd-parent");
+    let ssd_root = ssd_parent.join("file");
+    let hdd_parent = home_child("task31-mixed-hdd-parent");
+    let hdd_root = hdd_parent.join("file");
+    let io = FakeIo::new()
+        .root(ssd_parent.clone(), 1, directory_on(1, 1, vec![]))
+        .root(ssd_root.clone(), 2, regular_on(2, 1))
+        .media(ssd_root.clone(), MediaType::Ssd)
+        .root(hdd_parent.clone(), 3, directory_on(3, 2, vec![]))
+        .root(hdd_root.clone(), 4, regular_on(4, 2))
+        .media(hdd_root.clone(), MediaType::Hdd);
+    let shredder = FakeShredder::new();
+    let classify = io.classifier();
+
+    let result = run_legacy(
+        ExecuteRootsRequest {
+            roots: vec![
+                root_request("ssd", &ssd_root, TargetKind::File),
+                root_request("hdd", &hdd_root, TargetKind::File),
+            ],
+        },
+        &io,
+        &shredder,
+        &classify,
+    );
+
+    // M7: any non-HDD volume fails the WHOLE batch preflight — the HDD root
+    // is skipped, and no mutation event exists for either root.
+    assert_eq!(result.roots[0].status, RootStatus::Failed);
+    assert!(result.roots[0].errors.iter().any(|error| {
+        error.stage == ExecutionStage::Preflight
+            && error.error_type == "unsupported_storage_for_method"
+    }));
+    assert_eq!(result.roots[1].status, RootStatus::Skipped);
+    assert!(result.roots[1].errors.is_empty());
+    assert!(shredder.calls.lock().unwrap().is_empty());
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert!(!events.calls.iter().any(|call| call == "open_regular"));
+    assert!(!events
+        .calls
+        .iter()
+        .any(|call| call == "rename" || call == "unlink" || call == "remove_dir"));
+    // One classification per distinct volume.
+    assert_eq!(io.classify_calls(), 2);
+}
+
+#[test]
+fn automatic_runs_without_classification() {
+    let first_parent = home_child("task31-auto-parent-a");
+    let first = first_parent.join("file");
+    let second_parent = home_child("task31-auto-parent-b");
+    let second = second_parent.join("file");
+    let io = FakeIo::new()
+        .root(first_parent.clone(), 1, directory_on(1, 1, vec![]))
+        .root(first.clone(), 2, regular_on(2, 1))
+        .root(second_parent.clone(), 3, directory_on(3, 2, vec![]))
+        .root(second.clone(), 4, regular_on(4, 2));
+    let shredder = FakeShredder::new();
+    let classify = io.classifier();
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+    let result = run_full(
+        ExecuteRootsRequest {
+            roots: vec![
+                root_request("auto-a", &first, TargetKind::File),
+                root_request("auto-b", &second, TargetKind::File),
+            ],
+        },
+        DeletionPolicy::default(),
+        &io,
+        &shredder,
+        &journal,
+        &NoopProgressReporter,
+        &CancellationToken::new(),
+        &classify,
+    );
+
+    // M7: Automatic performs zero media classification across multiple
+    // roots, and both roots still destroy normally.
+    assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+    assert_eq!(result.roots[1].status, RootStatus::Destroyed);
+    assert_eq!(io.classify_calls(), 0);
+}
+
+#[test]
+fn classification_cached_per_distinct_mount_id() {
+    // Two roots on the SAME volume: one classification for the batch.
+    let first_parent = home_child("task31-cache-same-parent-a");
+    let first = first_parent.join("file");
+    let second_parent = home_child("task31-cache-same-parent-b");
+    let second = second_parent.join("file");
+    let io = FakeIo::new()
+        .root(first_parent.clone(), 1, directory_on(1, 1, vec![]))
+        .root(first.clone(), 2, regular_on(2, 1))
+        .media(first.clone(), MediaType::Hdd)
+        .root(second_parent.clone(), 3, directory_on(3, 1, vec![]))
+        .root(second.clone(), 4, regular_on(4, 1))
+        .media(second.clone(), MediaType::Hdd);
+    let shredder = FakeShredder::new();
+    let classify = io.classifier();
+
+    let result = run_legacy(
+        ExecuteRootsRequest {
+            roots: vec![
+                root_request("same-a", &first, TargetKind::File),
+                root_request("same-b", &second, TargetKind::File),
+            ],
+        },
+        &io,
+        &shredder,
+        &classify,
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+    assert_eq!(result.roots[1].status, RootStatus::Destroyed);
+    assert_eq!(io.classify_calls(), 1, "one call per distinct mount id");
+
+    // Two roots on DIFFERENT volumes: one classification per volume.
+    let third_parent = home_child("task31-cache-diff-parent-a");
+    let third = third_parent.join("file");
+    let fourth_parent = home_child("task31-cache-diff-parent-b");
+    let fourth = fourth_parent.join("file");
+    let io = FakeIo::new()
+        .root(third_parent.clone(), 1, directory_on(1, 1, vec![]))
+        .root(third.clone(), 2, regular_on(2, 1))
+        .media(third.clone(), MediaType::Hdd)
+        .root(fourth_parent.clone(), 3, directory_on(3, 2, vec![]))
+        .root(fourth.clone(), 4, regular_on(4, 2))
+        .media(fourth.clone(), MediaType::Hdd);
+    let shredder = FakeShredder::new();
+    let classify = io.classifier();
+
+    let result = run_legacy(
+        ExecuteRootsRequest {
+            roots: vec![
+                root_request("diff-a", &third, TargetKind::File),
+                root_request("diff-b", &fourth, TargetKind::File),
+            ],
+        },
+        &io,
+        &shredder,
+        &classify,
+    );
+
+    assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+    assert_eq!(result.roots[1].status, RootStatus::Destroyed);
+    assert_eq!(io.classify_calls(), 2, "one call per distinct mount id");
 }

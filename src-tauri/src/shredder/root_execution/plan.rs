@@ -5,10 +5,11 @@ use crate::shredder::errors::{JournalError, ShredError};
 use crate::shredder::journal::{JournalEntry, JournalStore};
 use crate::shredder::traits::ProgressReporter;
 use crate::shredder::types::{
-    BatchRootResult, ChildErrorDto, DeletionPolicy, ExecuteRootRequest, ExecuteRootsRequest,
-    ExecutionStage, RootResultDto, RootStatus, TargetKind, WriteCheckOutcome,
+    validate_storage_for_method, BatchRootResult, ChildErrorDto, DeletionPolicy,
+    ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage, MediaType, RootResultDto, RootStatus,
+    TargetKind, WriteCheckOutcome,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
@@ -217,13 +218,27 @@ pub(crate) fn execute_roots(
     journal: &JournalStore,
     progress: &dyn ProgressReporter,
     cancel: &CancellationToken,
+    classify_media: &dyn Fn(&Path) -> Result<MediaType, ShredError>,
 ) -> BatchRootResult {
     let mut identities = HashSet::new();
     let mut requested_paths = Vec::with_capacity(request.roots.len());
     let mut outcomes = Vec::with_capacity(request.roots.len());
+    // M7: one classification per distinct volume, cached for the batch by
+    // mount identity. Each root is single-volume (inspect_directory rejects
+    // intra-root mount crossings); bind mounts share the device id, so one
+    // representative path (the first root path) per mount_id covers them.
+    let mut media_cache: HashMap<u64, (PathBuf, MediaType)> = HashMap::new();
     for root in request.roots.iter().cloned() {
         let path = PathBuf::from(&root.path);
-        outcomes.push(preflight_root(root, io, &mut identities, &requested_paths));
+        outcomes.push(preflight_root(
+            root,
+            io,
+            &mut identities,
+            &requested_paths,
+            policy,
+            &mut media_cache,
+            classify_media,
+        ));
         requested_paths.push(path);
     }
 
@@ -309,6 +324,9 @@ fn preflight_root(
     io: &dyn SecureTreeIo,
     identities: &mut HashSet<NodeIdentity>,
     requested_paths: &[PathBuf],
+    policy: DeletionPolicy,
+    media_cache: &mut HashMap<u64, (PathBuf, MediaType)>,
+    classify_media: &dyn Fn(&Path) -> Result<MediaType, ShredError>,
 ) -> PreflightOutcome {
     let path = PathBuf::from(&request.path);
     if let Err(error) = validate_root_path(&path) {
@@ -366,6 +384,50 @@ fn preflight_root(
             ),
             request,
         });
+    }
+
+    // M7: the Legacy 3-pass method is only permitted on confirmed magnetic
+    // HDD storage. One representative path per distinct volume (the first
+    // root path on that mount) is classified once per batch; any volume not
+    // confirmed Hdd — or any classifier error — fails this root's preflight
+    // (fail closed), which aborts the whole batch before mutation via the
+    // existing any-preflight-failure semantics. Automatic never classifies.
+    if policy.requires_hdd() {
+        let mount_id = identity.mount_id();
+        let media = match media_cache.get(&mount_id) {
+            Some((_, media)) => *media,
+            None => {
+                let media = match classify_media(&path) {
+                    Ok(media) => media,
+                    Err(error) => {
+                        return PreflightOutcome::Failed(RootFailure {
+                            error: child_error(&path, ExecutionStage::Preflight, error),
+                            request,
+                        })
+                    }
+                };
+                media_cache.insert(mount_id, (path.clone(), media));
+                media
+            }
+        };
+        // The pure rule reports an empty path; re-raise it with the root
+        // path so the structured error points at the real target (M11).
+        if let Err(ShredError::UnsupportedStorageForMethod { method, media, .. }) =
+            validate_storage_for_method(policy.method, media)
+        {
+            return PreflightOutcome::Failed(RootFailure {
+                error: child_error(
+                    &path,
+                    ExecutionStage::Preflight,
+                    ShredError::UnsupportedStorageForMethod {
+                        path: path.clone(),
+                        method,
+                        media,
+                    },
+                ),
+                request,
+            });
+        }
     }
 
     // M6 preflight: a regular-file root with more than one hard link is
