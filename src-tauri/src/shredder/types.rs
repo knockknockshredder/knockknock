@@ -2,6 +2,7 @@
 
 use crate::shredder::errors::ShredError;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 pub use crate::shredder::root_execution::types::{
     BatchRootResult, ChildErrorDto, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage,
@@ -108,6 +109,98 @@ pub enum VerificationLevel {
     Full,
 }
 
+// ---------------------------------------------------------------------------
+// v2 policy model (Phase 1, additive). The legacy VerificationLevel /
+// PatternType / ShredResult types above stay live until the Phase 4 cutover.
+// ---------------------------------------------------------------------------
+
+/// Deletion method (v2): how many logical overwrite passes a file receives
+/// before removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeletionMethod {
+    /// Storage-aware local deletion: one logical random overwrite pass.
+    Automatic,
+    /// Legacy fixed zeros -> ones -> random sequence. Only permitted on
+    /// confirmed magnetic HDD storage (see `validate_storage_for_method`).
+    LegacyThreePass,
+}
+
+/// Final-state write check mode (v2): read-back verification performed once,
+/// after the last overwrite pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteCheck {
+    /// No read-back after the overwrite.
+    Off,
+    /// Deterministic distributed read-back (small files checked in full).
+    Spot,
+    /// Read-back of the entire final logical file range.
+    Full,
+}
+
+/// Outcome of the final-state write check (v2 engine + later DTOs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteCheckOutcome {
+    NotRun,
+    Passed,
+    Failed,
+}
+
+/// Policy-driven deletion configuration (v2). Replaces the legacy
+/// algorithm/passes/pattern/verification-level combination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeletionPolicy {
+    pub method: DeletionMethod,
+    pub write_check: WriteCheck,
+}
+
+impl Default for DeletionPolicy {
+    fn default() -> Self {
+        Self {
+            method: DeletionMethod::Automatic,
+            write_check: WriteCheck::Spot,
+        }
+    }
+}
+
+impl DeletionPolicy {
+    /// Number of overwrite passes the method performs: Automatic -> 1,
+    /// LegacyThreePass -> 3.
+    pub fn total_passes(&self) -> u32 {
+        match self.method {
+            DeletionMethod::Automatic => 1,
+            DeletionMethod::LegacyThreePass => 3,
+        }
+    }
+
+    /// LegacyThreePass is only supported on confirmed magnetic HDD storage.
+    pub fn requires_hdd(&self) -> bool {
+        self.method == DeletionMethod::LegacyThreePass
+    }
+}
+
+/// Storage validation rule (v2 preflight, M7): the legacy 3-pass method is
+/// only permitted on confirmed HDD media; Automatic has no media restriction.
+/// Pure rule — callers (root execution) enforce it before any mutation.
+/// Consumed by the root-execution preflight in Phase 3 (Task 3.1); tests
+/// exercise it from Phase 1.
+#[allow(dead_code)]
+pub(crate) fn validate_storage_for_method(
+    method: DeletionMethod,
+    media: MediaType,
+) -> Result<(), ShredError> {
+    if method == DeletionMethod::LegacyThreePass && media != MediaType::Hdd {
+        return Err(ShredError::UnsupportedStorageForMethod {
+            path: PathBuf::new(),
+            method,
+            media,
+        });
+    }
+    Ok(())
+}
+
 /// Metadata returned to the frontend for each path discovered during
 /// `validate_paths`.
 ///
@@ -126,4 +219,111 @@ pub struct FileMetadata {
     pub kind: TargetKind,
     pub is_shortcut: bool,
     pub shortcut_target: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shredder::types::{
+        DeletionMethod, DeletionPolicy, MediaType, WriteCheck, WriteCheckOutcome,
+    };
+
+    fn assert_snake_case_round_trip<T>(value: T, expected: &str)
+    where
+        T: Serialize + for<'de> Deserialize<'de> + PartialEq + std::fmt::Debug,
+    {
+        let json = serde_json::to_string(&value).unwrap();
+        assert_eq!(json, format!("\"{expected}\""));
+        let back: T = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, value);
+    }
+
+    #[test]
+    fn deletion_method_serializes_snake_case_and_round_trips() {
+        assert_snake_case_round_trip(DeletionMethod::Automatic, "automatic");
+        assert_snake_case_round_trip(DeletionMethod::LegacyThreePass, "legacy_three_pass");
+    }
+
+    #[test]
+    fn write_check_serializes_snake_case_and_round_trips() {
+        assert_snake_case_round_trip(WriteCheck::Off, "off");
+        assert_snake_case_round_trip(WriteCheck::Spot, "spot");
+        assert_snake_case_round_trip(WriteCheck::Full, "full");
+    }
+
+    #[test]
+    fn write_check_outcome_serializes_snake_case_and_round_trips() {
+        assert_snake_case_round_trip(WriteCheckOutcome::NotRun, "not_run");
+        assert_snake_case_round_trip(WriteCheckOutcome::Passed, "passed");
+        assert_snake_case_round_trip(WriteCheckOutcome::Failed, "failed");
+    }
+
+    #[test]
+    fn deletion_policy_round_trips_with_serde() {
+        let policy = DeletionPolicy {
+            method: DeletionMethod::LegacyThreePass,
+            write_check: WriteCheck::Full,
+        };
+        let json = serde_json::to_string(&policy).unwrap();
+        let back: DeletionPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, policy);
+    }
+
+    #[test]
+    fn default_policy_is_automatic_with_spot_check() {
+        let default = DeletionPolicy::default();
+        assert_eq!(
+            default,
+            DeletionPolicy {
+                method: DeletionMethod::Automatic,
+                write_check: WriteCheck::Spot,
+            }
+        );
+    }
+
+    #[test]
+    fn total_passes_matches_method() {
+        let automatic = DeletionPolicy {
+            method: DeletionMethod::Automatic,
+            write_check: WriteCheck::Off,
+        };
+        let legacy = DeletionPolicy {
+            method: DeletionMethod::LegacyThreePass,
+            write_check: WriteCheck::Off,
+        };
+        assert_eq!(automatic.total_passes(), 1);
+        assert_eq!(legacy.total_passes(), 3);
+        assert!(!automatic.requires_hdd());
+        assert!(legacy.requires_hdd());
+    }
+
+    #[test]
+    fn validate_storage_for_method_allows_legacy_only_on_hdd() {
+        // LegacyThreePass: Hdd allowed.
+        assert!(
+            validate_storage_for_method(DeletionMethod::LegacyThreePass, MediaType::Hdd).is_ok()
+        );
+
+        // LegacyThreePass: every other media type rejected with the
+        // structured variant carrying method + media (M7 fail closed).
+        for media in [MediaType::Ssd, MediaType::Unknown] {
+            match validate_storage_for_method(DeletionMethod::LegacyThreePass, media) {
+                Err(ShredError::UnsupportedStorageForMethod {
+                    path,
+                    method,
+                    media: got,
+                }) => {
+                    assert!(path.as_os_str().is_empty());
+                    assert_eq!(method, DeletionMethod::LegacyThreePass);
+                    assert_eq!(got, media);
+                }
+                other => panic!("expected UnsupportedStorageForMethod, got {other:?}"),
+            }
+        }
+
+        // Automatic: no media restriction.
+        for media in [MediaType::Ssd, MediaType::Hdd, MediaType::Unknown] {
+            assert!(validate_storage_for_method(DeletionMethod::Automatic, media).is_ok());
+        }
+    }
 }

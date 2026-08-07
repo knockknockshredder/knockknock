@@ -1,5 +1,6 @@
 // src-tauri/src/shredder/errors.rs
 
+use crate::shredder::types::{DeletionMethod, MediaType};
 use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
@@ -25,6 +26,25 @@ pub enum ShredError {
 
     #[error("Verification failed at pass {pass}: {path}")]
     VerificationFailed { path: PathBuf, pass: u32 },
+    // --- v2 variants (Phase 1, additive). Technical Display only, no UI
+    // prose (M11) — presentation copy belongs to the frontend. ---
+    // `HardLinkBlocked` is constructed by root-execution preflight (Phase 2);
+    // `UnsupportedStorageForMethod` by storage preflight (Phase 3). Both are
+    // deliberately forward-declared so Task 1.1 compiles standalone.
+    #[allow(dead_code)]
+    #[error("hard link blocked at {path}: link count {count}")]
+    HardLinkBlocked { path: PathBuf, count: u64 },
+
+    #[allow(dead_code)]
+    #[error("unsupported storage for method {method:?} at {path}: media type {media:?}")]
+    UnsupportedStorageForMethod {
+        path: PathBuf,
+        method: DeletionMethod,
+        media: MediaType,
+    },
+
+    #[error("write check failed at {path}")]
+    WriteCheckFailed { path: PathBuf },
 
     #[error("Network drive not supported: {0}")]
     NetworkDrive(PathBuf),

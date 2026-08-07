@@ -88,6 +88,20 @@ fn extract_path_and_action(err: &ShredError) -> (Option<String>, String) {
             Some(path.to_string_lossy().into_owned()),
             "Overwrite verification failed. Retry the operation; if it persists, the disk may be failing.".to_string(),
         ),
+        ShredError::HardLinkBlocked { path, count } => (
+            Some(path.to_string_lossy().into_owned()),
+            format!(
+                "The file has {count} hard links. Shredding it would not destroy the data at the other links, so the operation was blocked. Remove the additional links and retry."
+            ),
+        ),
+        ShredError::UnsupportedStorageForMethod { path, .. } => (
+            Some(path.to_string_lossy().into_owned()),
+            "The selected deletion method is only supported on confirmed magnetic HDD storage. Choose the automatic method or select a different target.".to_string(),
+        ),
+        ShredError::WriteCheckFailed { path } => (
+            Some(path.to_string_lossy().into_owned()),
+            "The requested write check did not pass after the overwrite. Review the result before assuming the overwrite verified.".to_string(),
+        ),
         ShredError::NetworkDrive(p) => (
             Some(p.to_string_lossy().into_owned()),
             "Copy the file to a local drive and retry. Network drives cannot be reliably shredded.".to_string(),
@@ -129,6 +143,9 @@ fn error_type_name(err: &ShredError) -> String {
         ShredError::FileLocked { .. } => "FileLocked",
         ShredError::IoError { .. } => "IoError",
         ShredError::VerificationFailed { .. } => "VerificationFailed",
+        ShredError::HardLinkBlocked { .. } => "HardLinkBlocked",
+        ShredError::UnsupportedStorageForMethod { .. } => "UnsupportedStorageForMethod",
+        ShredError::WriteCheckFailed { .. } => "WriteCheckFailed",
         ShredError::NetworkDrive(_) => "NetworkDrive",
         ShredError::SystemFile(_) => "SystemFile",
         ShredError::ShortcutDetected { .. } => "ShortcutDetected",
@@ -190,6 +207,18 @@ mod tests {
             ShredError::VerificationFailed {
                 path: PathBuf::from("a"),
                 pass: 1,
+            },
+            ShredError::HardLinkBlocked {
+                path: PathBuf::from("a"),
+                count: 2,
+            },
+            ShredError::UnsupportedStorageForMethod {
+                path: PathBuf::from("a"),
+                method: crate::shredder::types::DeletionMethod::LegacyThreePass,
+                media: crate::shredder::types::MediaType::Ssd,
+            },
+            ShredError::WriteCheckFailed {
+                path: PathBuf::from("a"),
             },
             ShredError::NetworkDrive(PathBuf::from("a")),
             ShredError::SystemFile(PathBuf::from("a")),
