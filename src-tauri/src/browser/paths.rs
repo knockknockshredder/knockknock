@@ -2,6 +2,27 @@
 
 use std::path::PathBuf;
 
+/// Whether `symlink_metadata` describes a filesystem link that destructive
+/// traversal must never follow (M9): Unix symlinks, and Windows symlinks or
+/// reparse-point directories (junctions). On Windows, `file_type().is_symlink()`
+/// already reflects `FILE_ATTRIBUTE_REPARSE_POINT`, but the attribute is
+/// checked explicitly so junction detection does not depend on that mapping.
+pub(crate) fn is_link_metadata(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 pub struct BrowserPath {
     pub name: &'static str,
     pub windows_paths: &'static [&'static str],
@@ -168,10 +189,18 @@ pub fn get_browser_base_paths(browser: &BrowserPath) -> Vec<PathBuf> {
 }
 
 /// Find all profile directories for a browser
+///
+/// Discovery is non-destructive, so inspection failures here degrade to an
+/// empty candidate set; the destructive collectors (commands/browser.rs) are
+/// the fail-loud boundary. Profile entries that are symlinks or Windows
+/// reparse points are never accepted as profiles (M9).
 pub fn find_browser_profiles(base_path: &PathBuf, profile_glob: &str) -> Vec<PathBuf> {
     let mut profiles = Vec::new();
 
-    if !base_path.exists() {
+    let Ok(base_metadata) = std::fs::symlink_metadata(base_path) else {
+        return profiles;
+    };
+    if !base_metadata.is_dir() || is_link_metadata(&base_metadata) {
         return profiles;
     }
 
@@ -179,15 +208,19 @@ pub fn find_browser_profiles(base_path: &PathBuf, profile_glob: &str) -> Vec<Pat
     if let Ok(entries) = std::fs::read_dir(base_path) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                // Check if matches profile pattern
-                if name == "Default"
-                    || name.starts_with("Profile ")
-                    || (profile_glob.contains('*') && name.contains("default"))
-                {
-                    profiles.push(path);
-                }
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !metadata.is_dir() || is_link_metadata(&metadata) {
+                continue;
+            }
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            // Check if matches profile pattern
+            if name == "Default"
+                || name.starts_with("Profile ")
+                || (profile_glob.contains('*') && name.contains("default"))
+            {
+                profiles.push(path);
             }
         }
     }
