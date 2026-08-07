@@ -27,8 +27,7 @@ pnpm-debug.log*
 *.pub
 
 # IDE
-.vscode/*
-!.vscode/extensions.json
+.vscode/
 .idea/
 *.suo
 *.ntvs*
@@ -56,6 +55,8 @@ docs/
 
 # AI agent artifacts
 .scripts/
+.superpowers/
+.codegraph/
 *.pyc
 __pycache__/
 opencode.json
