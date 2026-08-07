@@ -1,206 +1,390 @@
 # KnockKnock
+
 [![Release](https://img.shields.io/github/v/release/knockknockshredder/knockknock)](https://github.com/knockknockshredder/knockknock/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#install)
 
-**Emergency file shredder with browser profile cleanup.**
+**Open-source local data deletion utility for files, folders, and selected browser data.**
 
-> One button. Gone forever. Greet your guests.
+> Prepare sensitive local data for deliberate, controlled deletion.
 
-## What It Does
+KnockKnock is a cross-platform desktop application for overwriting and deleting user-selected local data. It supports configurable overwrite patterns, read-back verification, persistent encrypted target lists, browser profile cleanup, and storage-aware handling for HDDs and SSDs.
 
-KnockKnock securely destroys files, folders, and browser data. Choose from multiple algorithms and verification levels — from a fast single random pass to the full DoD 5220.22-M 3-pass sequence with byte-level read-back verification.
+---
 
-### Features
+## Table of Contents
 
-- **Multiple algorithms** — NIST 800-88 Clear, DoD 5220.22-M, or Random Only
-- **Multiple patterns** — Random (cryptographically secure), Zeros, or Ones
-- **Verification** — None, Sample (start/middle/end), or Full (every byte)
-- **Browser cleanup** — Detects 9+ browsers, shreds profiles/cache/cookies/history/passwords/extensions
-- **Cross-platform** — Windows, macOS, Linux
-- **SSD-aware** — Detects drive type, applies TRIM after overwrite (with wear-leveling warnings)
-- **Encrypted vault** — Persists your shred list encrypted with AES-256-GCM, unlocked by your PIN
-- **PIN protection** — bcrypt-hashed PIN with 3-attempt lockout (5 min), survives app restart
-- **System tray** — Minimize to tray for quick access, clipboard shredding
-- **Cancel safely** — Mid-shred cancellation still renames, truncates, and deletes
-- **Orphan recovery** — Journal-based crash recovery for interrupted shreds
-- **Hard link detection** — Warns before shredding files with multiple hard links
-- **Log obfuscation** — Hide file paths in logs (numbered or partial mask modes)
-- **Real-time progress** — Speed and ETA per file via live progress events
-- **Administrator elevation** — UAC elevation on Windows for locked files
+- [Important Limitations](#important-limitations)
+- [Features](#features)
+- [Supported Browsers](#supported-browsers)
+- [Overwrite Modes](#overwrite-modes)
+- [Verification Levels](#verification-levels)
+- [Install](#install)
+- [Usage](#usage)
+- [PIN Protection](#pin-protection)
+- [Encrypted Target List](#encrypted-target-list)
+- [System Tray](#system-tray)
+- [How Deletion Works](#how-deletion-works)
+- [Cancellation Behavior](#cancellation-behavior)
+- [SSD Limitations](#ssd-limitations)
+- [Journaling Filesystems](#journaling-filesystems)
+- [Safety Design](#safety-design)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Development](#development)
+- [Architecture](#architecture)
+- [Responsible Use](#responsible-use)
+- [Data Loss Warning](#data-loss-warning)
+- [Security](#security)
+- [Support](#support)
+- [Contributing](#contributing)
+- [License](#license)
 
-### Supported Browsers
+---
 
-Chrome (incl. Beta, Canary), Firefox, Edge (incl. Beta), Brave (incl. Beta), Opera (incl. Next), Vivaldi, Safari, Tor Browser, Chromium, Internet Explorer — auto-detected per platform, with lock-file detection for running browsers.
+## Important Limitations
 
-### Supported Algorithms
+KnockKnock performs **file-level deletion**, not whole-device sanitization.
 
-| Algorithm | Default passes | Max passes | Pattern | Description |
-|-----------|---------------|------------|---------|-------------|
-| **NIST 800-88 Clear** | 1 | 35 | Random, Zeros, Ones | NIST SP 800-88 Clear standard. Single-pass overwrite with any pattern. |
-| **DoD 5220.22-M** | 3 | 7 | Fixed sequence | US DoD 5220.22-M. Fixed 3-pass: zeros, ones, random. Passes > 3 repeat. |
-| **Random Only** | 1 | 35 | Random | Fastest. Cryptographically secure random data only (ChaCha20). |
+This distinction matters:
 
-### Verification Levels
+- **SSDs use wear leveling and block remapping.** Software operating at the filesystem level cannot reliably overwrite every physical flash cell that may previously have contained a file.
+- **Filesystem journals may retain metadata.** Filesystems such as NTFS, APFS, and ext4 may preserve metadata outside the file data directly controlled by KnockKnock.
+- **TRIM/deallocation is not a physical-erasure guarantee.** On supported SSD workflows, KnockKnock can request storage deallocation after overwrite, but the drive controller ultimately manages the underlying flash.
+- **KnockKnock has no Undo.** Once processing begins, already processed targets are not restored by cancelling the operation.
 
-- **None** — No read-back verification (fastest)
-- **Sample** — Checks start, middle, end blocks (recommended default)
-- **Full** — Every byte verified (slowest, maximum assurance)
+> **Recommended:** for sensitive data stored on modern SSDs, full-disk encryption such as BitLocker, FileVault, or LUKS provides substantially stronger protection than relying on file-level overwrite alone — particularly when encryption was enabled before the sensitive data was written.
+
+---
+
+## Features
+
+- **Files and folders** — add individual files or directory targets for deletion.
+- **Multiple overwrite modes** — NIST 800-88 Clear, DoD 5220.22-M, and Random Only modes.
+- **Configurable patterns** — random, zeros, or ones where supported by the selected mode.
+- **Read-back verification** — none, sample, or full verification.
+- **Browser cleanup** — detects supported browser profiles and allows selected local browser data to be included.
+- **Cross-platform** — Windows, macOS, and Linux.
+- **Storage-aware behavior** — detects SSD/HDD media type and applies different handling where supported.
+- **Encrypted target list** — persists pending targets encrypted with AES-256-GCM when PIN protection is enabled.
+- **PIN protection** — locally stored bcrypt-hashed PIN with a persistent 3-attempt / 5-minute lockout.
+- **System tray** — quick access to application actions without keeping the main window open.
+- **Cancellation handling** — stops further overwrite work while preserving destructive cleanup semantics for already processed targets.
+- **Crash recovery** — journal-based recovery for interrupted deletion operations.
+- **Hard-link detection** — warns when a file has multiple hard links.
+- **Log path masking** — optional numbered or partially masked file paths in operation logs.
+- **Real-time progress** — per-file progress, speed, and ETA.
+- **Administrator elevation** — can request elevated privileges on Windows when an operation fails because of insufficient permissions.
+
+---
+
+## Supported Browsers
+
+KnockKnock can detect supported installations and profiles for:
+
+- Chrome, including Beta and Canary
+- Firefox
+- Edge, including Beta
+- Brave, including Beta
+- Opera, including Next
+- Vivaldi
+- Safari
+- Tor Browser
+- Chromium
+- Internet Explorer
+
+Browser cleanup can target selected local data types such as cache, cookies, history, passwords, and extensions.
+
+> KnockKnock checks for browser lock files and warns when a browser appears to be running before destructive cleanup proceeds.
+
+---
+
+## Overwrite Modes
+
+The modes below describe the overwrite behavior implemented by KnockKnock. They should not be interpreted as certification of whole-device sanitization or as a guarantee of physical-media erasure.
+
+| Mode                  | Default passes | Max passes | Pattern             | Behavior                                                                                               |
+| --------------------- | -------------: | ---------: | ------------------- | ------------------------------------------------------------------------------------------------------ |
+| **NIST 800-88 Clear** |              1 |         35 | Random, Zeros, Ones | Single-pass overwrite by default using the selected pattern.                                           |
+| **DoD 5220.22-M**     |              3 |          7 | Fixed sequence      | Three-pass sequence of zeros, ones, and random data. Additional configured passes repeat the sequence. |
+| **Random Only**       |              1 |         35 | Random              | Writes cryptographically generated random data using ChaCha20.                                         |
+
+### About Multiple Passes
+
+Additional overwrite passes increase the amount of data written and the time required to process a target.
+
+They do **not** solve SSD wear-leveling or block-remapping limitations. Multi-pass overwrite is primarily meaningful for storage where repeated writes are known to address the same physical location.
+
+---
+
+## Verification Levels
+
+Verification checks whether data written through KnockKnock can be read back from the same logical file range.
+
+- **None** — no read-back verification.
+- **Sample** — checks blocks near the beginning, middle, and end of the overwritten range.
+- **Full** — reads back the entire overwritten logical range.
+
+> Verification confirms the overwrite operation visible through the filesystem/storage interface. It does not prove that inaccessible physical blocks, filesystem metadata, or other copies of the data no longer exist.
+
+---
 
 ## Install
 
 ### Download Prebuilt Binaries
 
-KnockKnock is a **portable app** — no installer required. Download the latest release for your platform from the [Releases page](https://github.com/knockknockshredder/knockknock/releases/latest):
+Download the latest release from the [Releases page](https://github.com/knockknockshredder/knockknock/releases/latest).
 
-| Platform | File | Run |
-|----------|------|-----|
-| **Windows** | `KnockKnock-windows-x64.exe` | Place in any writable folder, double-click |
-| **macOS (Apple Silicon)** | `KnockKnock-macos-arm64.dmg` | Open `.dmg`, drag `KnockKnock.app` to any writable folder, right-click → Open |
-| **Linux (any distro)** | `KnockKnock-linux-x64.AppImage` | `chmod +x` and run |
+| Platform                | Release file                    | Run                                                         |
+| ----------------------- | ------------------------------- | ----------------------------------------------------------- |
+| **Windows x64**         | `KnockKnock-windows-x64.exe`    | Place in a writable folder and run                          |
+| **macOS Apple Silicon** | `KnockKnock-macos-arm64.dmg`    | Open the DMG and drag `KnockKnock.app` to a writable folder |
+| **Linux x64**           | `KnockKnock-linux-x64.AppImage` | Make executable and run                                     |
 
-All app data is stored in a `KnockKnock-data/` folder next to the app. Delete the folder to remove all traces.
+> **Note:** current Windows and macOS builds are unsigned, so the operating system may display a security warning.
 
-### Windows
+#### Windows
 
-Run the `.exe` directly — no installation needed. Windows SmartScreen may show a warning; click **More info** → **Run anyway** (the app is unsigned for now).
+Run the `.exe` directly. No installer is required.
 
-### macOS
+Windows SmartScreen may warn about the current unsigned build.
 
-1. Open the `.dmg` file
-2. Drag `KnockKnock.app` to any writable folder (Desktop, Downloads, Applications — all work)
-3. On first launch, right-click → Open (macOS Gatekeeper warning for unsigned apps)
+#### macOS
 
-### Linux
+1. Open the `.dmg`.
+2. Drag `KnockKnock.app` to a writable folder.
+3. On first launch, macOS Gatekeeper may display a warning because the current build is unsigned.
+
+#### Linux
 
 ```bash
 chmod +x KnockKnock-linux-x64.AppImage
 ./KnockKnock-linux-x64.AppImage
 ```
 
+---
+
 ## Usage
 
-1. **Launch KnockKnock** — the main window appears with a file drop zone
-2. **Add files** — drag and drop files/folders, or click to browse (symlinks are rejected for safety)
-3. **Select algorithm** — NIST 800-88 Clear (default), DoD 5220.22-M, or Random Only
-4. **Configure** — Choose pattern, passes, and verification level
-5. **Confirm** — Review the file list, then click **Shred**
-6. **Done** — Files are overwritten, verified, renamed, truncated, and deleted
+### Files and Folders
+
+1. **Launch KnockKnock.**
+2. **Add targets** by dragging files or folders into the application or using the file/folder picker.
+3. **Review the target list.**
+4. **Choose an overwrite mode.**
+5. **Configure the pattern, pass count, and verification level where applicable.**
+6. **Confirm the destructive operation.**
+7. KnockKnock processes each target and reports success or failure.
+
+> Symlinks are rejected as a safety measure.
 
 ### Browser Cleanup
 
-1. KnockKnock auto-detects installed browsers
-2. Select which browser profiles and data types (cache, cookies, history, passwords, extensions) to clean
-3. Click **Shred** — data is securely wiped with the same shredding algorithm
-4. **Lock file detection** — warns if a browser is running and requires explicit confirmation
+1. KnockKnock detects supported installed browsers and profiles.
+2. Select the browser profile and local data types you want to process.
+3. Review the selection before confirming.
+4. KnockKnock warns if a browser appears to be running.
+5. Selected browser data is processed using the same local deletion pipeline as other targets.
 
-### PIN Protection
+> Browser cleanup is destructive. Review selected profiles and data types carefully before confirming.
 
-Enable PIN protection in **Settings**. The PIN is hashed with bcrypt and stored locally. After 3 failed attempts, PIN entry is locked for 5 minutes (persists across app restarts — relaunching doesn't reset the counter).
+---
 
-### Encrypted Vault (PIN Feature)
+## PIN Protection
 
-When PIN protection is enabled, your pending shred list is encrypted with AES-256-GCM (PBKDF2-SHA256 key derivation, 1M iterations) and saved to disk. Unlock with your PIN on next launch to restore your session.
+PIN protection can be enabled in **Settings**.
 
-### System Tray
+The PIN is hashed with bcrypt and stored locally. After three failed attempts, PIN entry is locked for five minutes. The lockout state persists across application restarts.
 
-Minimize to system tray for quick access. Right-click the tray icon for options, including quick-shred from clipboard.
+> The application lockout is intended to slow interactive guessing through KnockKnock. It should not be treated as a substitute for operating-system or full-disk encryption.
 
-## How It Works
+---
 
-Every shred operation follows this exact pipeline:
+## Encrypted Target List
 
-1. **Validate** — Confirms path exists, rejects system files, network drives, symlinks, empty paths
-2. **Hard link check** — Warns if file has multiple hard links
-3. **Detect media** — SSD vs HDD (different strategies)
-4. **Overwrite** — Algorithm-driven passes with selected pattern
-5. **Verify** — Read-back confirmation (none / sample / full)
-6. **Rename** — Random filename to obliterate directory entry
-7. **Truncate** — Sets file size to 0
-8. **TRIM (SSDs)** — Issues ATA TRIM before deletion
-9. **Delete** — Removes file entry
-10. **Journal** — Records orphaned files for crash recovery
-11. **Report** — Returns success/failure with per-file details
+When PIN protection is enabled, KnockKnock can persist the pending target list between application sessions.
 
-### Cancellation Safety
+The target list is encrypted using:
 
-Cancelling mid-shred still runs the cleanup pipeline (rename → truncate → delete). A partially overwritten file never remains under its original name on disk.
+- AES-256-GCM
+- PBKDF2-SHA256 key derivation
+- 1,000,000 PBKDF2 iterations
 
-### SSD Limitations
+After unlocking KnockKnock with the configured PIN, persisted targets can be restored.
 
-SSDs use wear leveling — the drive controller maps logical blocks to different physical cells. Multi-pass shredding is largely ineffective because old data may persist in cells you can't reach. KnockKnock performs single-pass + TRIM on SSDs, but **full-disk encryption (BitLocker/FileVault/LUKS) is the only reliable SSD protection.**
+> The encrypted vault protects **KnockKnock's persisted target information**. It does not move the target files into an encrypted container or encrypt the contents of those files.
 
-### Journaling Filesystems
+---
 
-NTFS, APFS, and ext4 journals may retain traces of file metadata. KnockKnock shreds file data in-place but cannot erase filesystem journals from user space. For maximum security, use full-disk encryption.
+## System Tray
+
+KnockKnock can remain available from the system tray for quick access to supported actions without keeping the main window open.
+
+Tray functionality includes quick access to pending deletion operations and clipboard-related actions.
+
+---
+
+## How Deletion Works
+
+A successful local file deletion generally follows this logical pipeline:
+
+1. **Validate** — confirm the target exists and apply path-safety checks.
+2. **Check hard links** — warn if a file has multiple hard links.
+3. **Detect media** — determine whether the target is on an SSD or HDD where supported.
+4. **Overwrite** — write the configured overwrite pattern and number of passes.
+5. **Verify** — optionally perform Sample or Full read-back verification.
+6. **Rename** — replace the original filename with a randomized name.
+7. **Truncate** — set the file size to zero.
+8. **Request SSD deallocation** — apply TRIM/deallocation handling where supported.
+9. **Delete** — remove the filesystem entry.
+10. **Journal** — track interrupted cleanup work where necessary.
+11. **Report** — return per-target success or failure information.
+
+> Exact low-level behavior varies by platform, storage device, target type, and failure condition.
+
+---
+
+## Cancellation Behavior
+
+Cancelling an active operation does **not** undo work that has already occurred.
+
+KnockKnock stops further overwrite processing as appropriate but continues the destructive cleanup path for targets that have already entered processing.
+
+This may include:
+
+- randomized rename;
+- truncation;
+- deletion.
+
+> Do not use cancellation as a recovery mechanism.
+
+---
+
+## SSD Limitations
+
+SSDs do not behave like magnetic hard drives.
+
+Their controllers use wear leveling and logical-to-physical block remapping. As a result, rewriting a logical file does not guarantee that every physical flash cell previously associated with that file has been overwritten.
+
+KnockKnock therefore treats SSDs differently and can combine a limited overwrite operation with a TRIM/deallocation request where supported.
+
+Neither overwrite nor TRIM provides a universal physical-erasure guarantee on SSD hardware.
+
+> For stronger protection of sensitive data on SSDs, use full-disk encryption such as BitLocker, FileVault, or LUKS.
+
+---
+
+## Journaling Filesystems
+
+Filesystems including NTFS, APFS, and ext4 may retain file metadata in journals or other filesystem structures outside the target file itself.
+
+KnockKnock operates on the selected file data and filesystem entry. It cannot erase every filesystem-maintained record from normal application space.
+
+---
+
+## Safety Design
+
+KnockKnock includes multiple safeguards around destructive filesystem operations:
+
+- Path validation before processing.
+- Protection for known critical system paths.
+- Protection for the application's own binary directory.
+- Rejection of symlinks.
+- Rejection of detected network drives.
+- Hard-link detection and warning.
+- Destructive cleanup handling after cancellation.
+- Journal-based recovery of interrupted cleanup operations.
+- Persistent PIN lockout state.
+- Authenticated AES-256-GCM encryption for persisted target data.
+- Explicit user confirmation before destructive operations.
+
+> These protections reduce the risk of unintended deletion but do not replace careful review of the selected targets.
+
+---
 
 ## Tech Stack
 
-- **Backend:** Rust (Tauri 2.x)
+- **Backend:** Rust + Tauri 2.x
 - **Frontend:** React 19 + TypeScript + Tailwind CSS 4
-- **Cryptography:** AES-256-GCM (aes-gcm), PBKDF2-SHA256 (pbkdf2 + sha2), ChaCha20 stream cipher (chacha20), bcrypt
-- **Shredding:** Platform-native I/O (Windows: `FILE_FLAG_WRITE_THROUGH`, macOS: `fcntl(F_NOCACHE)`, Linux: `O_DIRECT`)
-- **Binary size:** ~8–12 MB
+- **Vault encryption:** AES-256-GCM
+- **Key derivation:** PBKDF2-SHA256
+- **Random overwrite stream:** ChaCha20
+- **PIN hashing:** bcrypt
+- **File I/O:** platform-specific filesystem operations for Windows, macOS, and Linux
+
+---
 
 ## Project Structure
 
-```
+```text
 KnockKnock/
-├── src-tauri/               # Rust backend
+├── src-tauri/
 │   ├── src/
-│   │   ├── main.rs           # Thin passthrough → lib.rs
-│   │   ├── lib.rs            # Tauri app setup, plugin registration
-│   │   ├── shredder/         # File shredding engine
-│   │   │   ├── algorithms/   # Shredding algorithm implementations
-│   │   │   │   ├── nist_clear.rs    # NIST 800-88 Clear
-│   │   │   │   ├── dod_522022m.rs   # DoD 5220.22-M (3-pass)
-│   │   │   │   ├── random_only.rs   # Random Only (fastest)
-│   │   │   │   └── common.rs        # Shared write_pass buffer logic
-│   │   │   ├── platform/     # OS-specific I/O (Win/macOS/Linux)
-│   │   │   ├── verification.rs      # None / Sample / Full verification
-│   │   │   ├── validation.rs        # Path validation, system file protection
-│   │   │   ├── journal.rs           # Orphan crash recovery
-│   │   │   ├── cancel.rs            # Global cancellation token
-│   │   │   ├── progress.rs          # Tauri event-based progress reporting
-│   │   │   ├── logging.rs           # Log obfuscation (numbered/partial mask)
-│   │   │   └── errors.rs            # Typed shred errors
-│   │   ├── browser/          # Browser detection + cleanup
-│   │   │   ├── detection.rs  # Running process detection
-│   │   │   ├── paths.rs      # Browser path definitions per OS
-│   │   │   └── types.rs      # Browser, profile, data type types
-│   │   ├── drive/            # Drive type detection (SSD/HDD/Network/USB)
-│   │   ├── pin/              # PIN protection (bcrypt + lockout)
-│   │   ├── vault/            # Encrypted session persistence (AES-256-GCM)
-│   │   ├── tray/             # System tray
-│   │   └── commands/         # Tauri IPC command handlers
+│   │   ├── main.rs
+│   │   ├── lib.rs
+│   │   ├── shredder/
+│   │   │   ├── algorithms/
+│   │   │   │   ├── nist_clear.rs
+│   │   │   │   ├── dod_522022m.rs
+│   │   │   │   ├── random_only.rs
+│   │   │   │   └── common.rs
+│   │   │   ├── platform/
+│   │   │   ├── verification.rs
+│   │   │   ├── validation.rs
+│   │   │   ├── journal.rs
+│   │   │   ├── cancel.rs
+│   │   │   ├── progress.rs
+│   │   │   ├── logging.rs
+│   │   │   └── errors.rs
+│   │   ├── browser/
+│   │   ├── drive/
+│   │   ├── pin/
+│   │   ├── vault/
+│   │   ├── tray/
+│   │   └── commands/
 │   ├── Cargo.toml
 │   └── tauri.conf.json
-├── src/                     # React frontend
-│   ├── components/           # UI components
-│   │   ├── shred/            # Shred-specific: FileDropZone, AlgorithmSelector, etc.
-│   │   ├── browser/          # Browser cards, profile items, warnings
-│   │   ├── settings/         # PIN setup/verify, toggle settings, elevation
-│   │   ├── layout/           # AppShell, sidebars, title bar, operation log
-│   │   └── ui/               # shadcn/ui primitives
-│   ├── contexts/             # Shred, Browser, Settings, Navigation contexts
-│   ├── hooks/                # useBrowserDetection
-│   ├── sections/             # ShredSection, SettingsSection
-│   └── types/                # TypeScript type definitions
+├── src/
+│   ├── components/
+│   ├── contexts/
+│   ├── hooks/
+│   ├── sections/
+│   └── types/
 ├── package.json
 └── README.md
 ```
+
+---
 
 ## Development
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (v18+)
-- [pnpm](https://pnpm.io/) (`npm install -g pnpm`)
-- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
-- Platform-specific dependencies:
-  - **Windows:** [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload)
-  - **macOS:** Xcode Command Line Tools (`xcode-select --install`)
-  - **Linux:** `sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-4-dev`
+- [Node.js](https://nodejs.org/) v18+
+- [pnpm](https://pnpm.io/)
+- [Rust](https://www.rust-lang.org/tools/install) stable toolchain
+
+Platform-specific build dependencies are also required.
+
+#### Windows
+
+Visual Studio Build Tools with the C++ workload.
+
+#### macOS
+
+Xcode Command Line Tools:
+
+```bash
+xcode-select --install
+```
+
+#### Linux
+
+For Debian/Ubuntu-based development environments:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-4-dev
+```
 
 ### Setup
 
@@ -213,88 +397,116 @@ pnpm install
 ### Commands
 
 ```bash
-pnpm dev            # Start Vite dev server (frontend only)
-pnpm tauri dev      # Run desktop app in dev mode (frontend + Rust hot reload)
-pnpm build          # Build frontend only
-pnpm tauri build    # Build desktop app for distribution
-pnpm test           # Run Rust tests + Vitest
-pnpm lint           # ESLint + clippy
+pnpm dev
+pnpm tauri dev
+pnpm build
+pnpm tauri build
+pnpm test
+pnpm lint
 ```
+
+- `pnpm dev` — start the Vite frontend development server.
+- `pnpm tauri dev` — run the desktop application in development mode.
+- `pnpm build` — build the frontend.
+- `pnpm tauri build` — build the desktop application.
+- `pnpm test` — run the configured Rust and frontend test suites.
+- `pnpm lint` — run the configured static/type checks.
+
+---
 
 ## Architecture
 
-### Shredding Pipeline
+The application separates the React frontend from the Rust/Tauri backend.
 
-The shredding engine is algorithm-agnostic via the `ShredAlgorithm` trait. Each algorithm defines its passes, accepted patterns, and whether it uses a fixed pattern sequence (like DoD 5220.22-M). Verification is pluggable via `VerificationStrategy`. Platform I/O is abstracted behind `PlatformIo` — each OS implements `open_for_shred`, `sync_to_disk`, `rename_random`, `truncate_to_zero`, `delete`, `detect_media_type`, `issue_trim`, and `find_locking_processes`.
+The shredding engine provides configurable overwrite modes, verification strategies, platform-specific I/O, validation, journaling, cancellation handling, and progress reporting.
 
-### IPC Flow
+Frontend commands are sent to the Rust backend through Tauri IPC, while progress updates are emitted back to the UI as application events.
 
+```text
+React UI
+   │
+   │ Tauri invoke
+   ▼
+Rust command layer
+   │
+   ▼
+Shredding / browser / vault / drive modules
+   │
+   │ progress events
+   ▼
+React UI
 ```
-React (invoke) → Tauri command (async) → spawn_blocking → shred pipeline
-                                       → Tauri events (emit) → React (listen)
-```
 
-Progress events (`shred-progress`) are emitted per-file with speed and ETA, throttled to 100ms to avoid overwhelming the frontend.
+---
 
-### Safety Design
+## Responsible Use
 
-- System file paths are hardcoded and checked via canonical path matching
-- The app's own binary directory is protected
-- Symlinks are always rejected
-- Network drives (UNC paths + mapped drives on Windows, NFS/CIFS on Linux) are refused
-- Cancellation preserves the cleanup pipeline (rename → truncate → delete)
-- Orphan journal records renamed files before deletion so crashed shreds can be recovered
-- PIN lockout state is persisted to disk — relaunching the app does not reset it
-- Vault encryption uses AEAD (AES-256-GCM) — tampered or wrong-PIN decryption fails with an authentication error
+KnockKnock is intended for legitimate privacy, security, and authorized data-disposal purposes.
 
-## Support
+Examples include:
 
-If KnockKnock saved you time or protected your privacy, consider supporting the project:
+- disposing of personal files before transferring or retiring storage;
+- removing sensitive local data from shared workstations;
+- clearing selected local browser data;
+- supporting authorized organizational data-disposal workflows;
+- protecting sensitive personal or professional information.
 
-- **Star the repo** — free and helps with visibility
-- **Report bugs** — [open an issue](https://github.com/knockknockshredder/knockknock/issues)
-- **Contribute** — see [CONTRIBUTING.md](CONTRIBUTING.md)
+You are responsible for the targets you select and for complying with applicable law.
 
-## Legal Disclaimer
+Do not use KnockKnock to:
 
-### Intended Use
+- delete data you do not have authority to delete;
+- intentionally destroy evidence unlawfully;
+- obstruct justice;
+- perform any other unlawful activity.
 
-This software is designed for **legitimate privacy and security purposes only**, including:
+> The software does not itself establish compliance with GDPR, HIPAA, PCI DSS, or any other legal or industry framework.
 
-- Securely disposing of personal files before selling/donating computers
-- Removing sensitive data from shared workstations
-- Cleaning browser profiles for privacy protection
-- Corporate data disposal compliance (GDPR, HIPAA, PCI-DSS)
-- Journalist/activist source protection
+---
 
-### User Responsibility
+## Data Loss Warning
 
-**You are solely responsible for how you use this software.**
+> **KnockKnock performs destructive operations and has no Undo function.**
 
-- The authors are not responsible for any data loss, legal consequences, or damages resulting from use of this software
-- Ensure you have the legal right to delete the data you target
-- Do not use this software to obstruct justice, destroy evidence, or for any illegal purpose
-- Comply with all applicable local, state, national, and international laws
+Once a target has been processed, KnockKnock cannot restore it.
 
-### No Warranty
+File-level overwrite and deletion also do not constitute a guarantee that every physical remnant, filesystem record, or separate copy of the information has ceased to exist.
 
-This software is provided "AS IS" without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and noninfringement. See [LICENSE](LICENSE) for full terms.
+**Review every target carefully before confirming an operation.**
 
-### Data Loss Warning
-
-**Shredding is permanent and irreversible.** There is no undo. Once a file is shredded, it cannot be recovered by any means. Always double-check your selection before confirming.
-
-## Contributing
-
-Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## License
-
-[MIT License](LICENSE) — free forever for personal use.
+---
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+Security vulnerabilities should not be reported through public issues.
+
+See [SECURITY.md](SECURITY.md) for the project's vulnerability reporting policy and security design principles.
+
+---
+
+## Support
+
+If KnockKnock is useful to you:
+
+- **Star the repository** — helps others discover the project.
+- **Report bugs** — through [GitHub Issues](https://github.com/knockknockshredder/knockknock/issues).
+- **Contribute** — by following [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## Contributing
+
+Contributions are welcome.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, development conventions, testing guidance, and vulnerability-reporting rules.
+
+---
+
+## License
+
+KnockKnock is released under the [MIT License](LICENSE).
+
+The MIT License permits personal and commercial use, modification, distribution, and sublicensing subject to the terms of the license.
 
 ---
 
