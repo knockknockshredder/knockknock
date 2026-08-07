@@ -2,6 +2,7 @@
 
 pub mod algorithms;
 pub mod cancel;
+pub mod engine;
 pub mod errors;
 pub mod journal;
 pub mod logging;
