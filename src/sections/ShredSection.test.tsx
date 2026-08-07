@@ -77,6 +77,7 @@ describe("ShredSection executeShred", () => {
         return Promise.resolve([metadata("C:\\a.txt")]);
       }
       if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
   });
@@ -96,6 +97,7 @@ describe("ShredSection executeShred", () => {
         return Promise.resolve([metadata("C:\\a.txt")]);
       }
       if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
       if (command === "save_vault") {
         saveAttempts += 1;
         return Promise.reject(new Error("vault write failed"));

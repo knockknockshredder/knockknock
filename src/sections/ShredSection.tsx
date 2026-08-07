@@ -3,6 +3,8 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ShredButton } from "@/components/shred/ShredButton";
+import { DeletionMethodSelector } from "@/components/shred/DeletionMethodSelector";
+import { WriteCheckSelector } from "@/components/shred/WriteCheckSelector";
 import { ConfirmationDialog } from "@/components/shred/ConfirmationDialog";
 import { useShred } from "@/contexts/ShredContext";
 import { useBrowser } from "@/contexts/BrowserContext";
@@ -296,6 +298,8 @@ export function ShredSection() {
   Local Data Deletion
 </h1>
       <div className="flex flex-col gap-4 w-full max-w-lg mx-auto">
+        <DeletionMethodSelector />
+        <WriteCheckSelector />
         <ShredButton
           fileCount={pendingFileCount}
           folderCount={pendingFolderCount}
