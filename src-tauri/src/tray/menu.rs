@@ -10,30 +10,36 @@ use crate::tray::actions;
 /// Build the tray context menu with all items.
 ///
 /// Items:
-/// - Quick Shred: handled directly via tray action (file picker + shred)
-/// - Shred Clipboard: handled directly via tray action (clipboard clear)
-/// - Open/Hide Window: toggled directly here
+/// - Delete Selected Targets: handled directly via tray action (file picker + shred)
+/// - Clear Clipboard: handled directly via tray action (clipboard clear)
+/// - Show/Hide Window: toggled directly here
 /// - Settings: triggered from frontend
 /// - Quit: handled directly here
 ///
-/// Menu item handles for Quick Shred and Shred Clipboard are stored in
-/// `TrayState` so their enabled state can be toggled during shredding.
+/// Menu item handles for Delete Selected Targets and Clear Clipboard are
+/// stored in `TrayState` so their enabled state can be toggled during
+/// shredding.
 pub fn create_tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let quick_shred = MenuItemBuilder::with_id("quick_shred", "Quick Shred")
-        .enabled(true)
-        .build(app)?;
-    let shred_clipboard = MenuItemBuilder::with_id("shred_clipboard", "Shred Clipboard")
-        .enabled(true)
-        .build(app)?;
+    let quick_shred =
+        MenuItemBuilder::with_id("quick_shred", crate::native_ui_copy::TRAY_DELETE_SELECTED)
+            .enabled(true)
+            .build(app)?;
+    let shred_clipboard = MenuItemBuilder::with_id(
+        "shred_clipboard",
+        crate::native_ui_copy::TRAY_CLEAR_CLIPBOARD,
+    )
+    .enabled(true)
+    .build(app)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
-    let toggle_window = MenuItemBuilder::with_id("toggle_window", "Open/Hide Window")
-        .enabled(true)
-        .build(app)?;
-    let settings = MenuItemBuilder::with_id("settings", "Settings")
+    let toggle_window =
+        MenuItemBuilder::with_id("toggle_window", crate::native_ui_copy::TRAY_TOGGLE_WINDOW)
+            .enabled(true)
+            .build(app)?;
+    let settings = MenuItemBuilder::with_id("settings", crate::native_ui_copy::TRAY_SETTINGS)
         .enabled(true)
         .build(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItemBuilder::with_id("quit", "Quit")
+    let quit = MenuItemBuilder::with_id("quit", crate::native_ui_copy::TRAY_QUIT)
         .enabled(true)
         .build(app)?;
 
@@ -73,8 +79,8 @@ pub fn show_context_menu(_app: &AppHandle) {
 
 /// Handle a tray menu item click.
 ///
-/// - Quick Shred and Shred Clipboard are handled directly in Rust via
-///   tray actions (file shredding / clipboard clear).
+/// - Delete Selected Targets and Clear Clipboard are handled directly in
+///   Rust via tray actions (file shredding / clipboard clear).
 /// - Toggle Window and Quit affect window state / app lifecycle here.
 /// - Settings shows the window and emits `open-settings` for the
 ///   frontend to navigate to the Settings section.

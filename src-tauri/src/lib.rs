@@ -3,6 +3,7 @@
 mod browser;
 mod commands;
 mod drive;
+mod native_ui_copy;
 mod notifications;
 mod paths;
 mod pin;
@@ -118,11 +119,10 @@ pub fn run() {
 /// to the OS temp dir (which is always writable). Always exits.
 fn startup_fatal(msg: &str) -> ! {
     let _ = native_dialog::DialogBuilder::message()
-        .set_title("KnockKnock — Startup Error")
-        .set_text(&format!(
-            "{}\n\nTip: KnockKnock is portable — move the app to a\n\
-             writable folder (e.g. Desktop, Documents, or ~/Applications).",
-            msg
+        .set_title(native_ui_copy::STARTUP_ERROR_TITLE)
+        .set_text(format!(
+            "{msg}\n\n{}",
+            native_ui_copy::STARTUP_WRITABLE_LOCATION_GUIDANCE
         ))
         .set_level(native_dialog::MessageLevel::Error)
         .alert()

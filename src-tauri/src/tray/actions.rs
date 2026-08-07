@@ -25,7 +25,7 @@ impl TrayState {
     }
 }
 
-/// Handle "Quick Shred" tray action.
+/// Handle "Delete Selected Targets" tray action.
 ///
 /// Emits a `quick-shred-request` event to the frontend, which owns the
 /// file list, PIN verification, and confirmation dialog. The frontend
@@ -40,7 +40,11 @@ pub fn quick_shred(app: &AppHandle) {
     let is_shredding = state.is_shredding.lock().expect("TrayState mutex poisoned");
 
     if *is_shredding {
-        crate::notifications::send_notification(app, "KnockKnock", "Shred already in progress");
+        crate::notifications::send_notification(
+            app,
+            crate::native_ui_copy::NOTIFICATION_OPERATION_IN_PROGRESS_TITLE,
+            crate::native_ui_copy::NOTIFICATION_OPERATION_IN_PROGRESS_BODY,
+        );
         return;
     }
 
@@ -69,9 +73,9 @@ pub fn open_settings(app: &AppHandle) {
 
 /// Clear the system clipboard and send a notification.
 ///
-/// Clipboard wipe is a simple `clear()` call, not a multi-pass overwrite —
-/// the clipboard contents live in system-managed memory where secure deletion
-/// semantics do not apply.
+/// Clipboard clearing is a simple `clear()` call, not a multi-pass
+/// overwrite — the clipboard contents live in system-managed memory where
+/// secure deletion semantics do not apply.
 pub fn shred_clipboard(app: &AppHandle) {
     let app_handle = app.clone();
 
@@ -82,22 +86,23 @@ pub fn shred_clipboard(app: &AppHandle) {
             }
             crate::notifications::send_notification(
                 &app_handle,
-                "Clipboard Cleared",
-                "Clipboard contents have been wiped.",
+                crate::native_ui_copy::NOTIFICATION_CLIPBOARD_CLEARED_TITLE,
+                crate::native_ui_copy::NOTIFICATION_CLIPBOARD_CLEARED_BODY,
             );
         }
         Err(e) => {
             eprintln!("[KnockKnock] Failed to access clipboard: {e}");
             crate::notifications::send_notification(
                 &app_handle,
-                "Clipboard Error",
-                "Could not access the system clipboard.",
+                crate::native_ui_copy::NOTIFICATION_CLIPBOARD_ERROR_TITLE,
+                crate::native_ui_copy::NOTIFICATION_CLIPBOARD_ERROR_BODY,
             );
         }
     });
 }
 
-/// Enable or disable the Quick Shred and Shred Clipboard menu items.
+/// Enable or disable the Delete Selected Targets and Clear Clipboard
+/// menu items.
 pub fn update_menu_state(app: &AppHandle, enabled: bool) {
     let state = app.state::<TrayState>();
 
@@ -108,7 +113,7 @@ pub fn update_menu_state(app: &AppHandle, enabled: bool) {
             .expect("Failed to lock TrayState");
         if let Some(item) = guard.as_ref() {
             if let Err(e) = item.set_enabled(enabled) {
-                eprintln!("[KnockKnock] Failed to set Quick Shred enabled state: {e}");
+                eprintln!("[KnockKnock] Failed to set Delete Selected Targets enabled state: {e}");
             }
         }
     }
@@ -120,7 +125,7 @@ pub fn update_menu_state(app: &AppHandle, enabled: bool) {
             .expect("Failed to lock TrayState");
         if let Some(item) = guard.as_ref() {
             if let Err(e) = item.set_enabled(enabled) {
-                eprintln!("[KnockKnock] Failed to set Shred Clipboard enabled state: {e}");
+                eprintln!("[KnockKnock] Failed to set Clear Clipboard enabled state: {e}");
             }
         }
     }

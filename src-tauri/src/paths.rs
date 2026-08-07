@@ -5,7 +5,8 @@
 // OS-managed config/data directories.
 //
 // No fallback. If the exe directory is unwritable, the caller
-// receives an Err with a user-facing message.
+// receives an Err with a technical message. User-facing presentation
+// (startup guidance) lives in lib.rs via native_ui_copy.
 
 use std::path::PathBuf;
 
@@ -69,17 +70,17 @@ fn app_root_dir() -> Result<PathBuf, String> {
 /// Creates the directory on first call.
 ///
 /// # Errors
-/// Returns a user-facing message if the directory cannot be created
-/// (e.g. app placed in a read-only location).
+/// Returns a technical message if the directory cannot be created
+/// (e.g. app placed in a read-only location). User-facing guidance is
+/// added by lib.rs's startup_fatal, not here.
 pub fn portable_data_dir() -> Result<PathBuf, String> {
     let root = app_root_dir()?;
     let data_dir = root.join("KnockKnock-data");
 
     std::fs::create_dir_all(&data_dir).map_err(|e| {
         format!(
-            "KnockKnock is portable — it must be placed in a writable folder.\n\
-             Current location: {}\nError: {e}",
-            root.display()
+            "Failed to create application data directory: {}: {e}",
+            data_dir.display()
         )
     })?;
 
@@ -125,7 +126,7 @@ mod tests {
     fn portable_data_dir_ok_in_test_env() {
         // The real test environment is writable, so we test the error
         // formatting path indirectly: verify that the error message
-        // contains the expected portable guidance.
+        // is technical (user-facing guidance lives in lib.rs).
         // A true read-only test would require platform-specific
         // filesystem mocking (not worth the complexity).
         let result = portable_data_dir();
