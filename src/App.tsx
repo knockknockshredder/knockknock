@@ -40,7 +40,7 @@ function AppGate() {
       await loadVault(pin);
       setGatePassed(true);
     } catch {
-      addLogEntry("error", "Failed to unlock vault");
+      addLogEntry("error", "Failed to unlock saved target list");
     }
   };
 
@@ -57,7 +57,7 @@ function AppGate() {
     try {
       await loadVault(newPin);
     } catch {
-      addLogEntry("error", "Failed to initialize vault");
+      addLogEntry("error", "Failed to initialize saved target list");
       return;
     }
     setShowOnboarding(false);

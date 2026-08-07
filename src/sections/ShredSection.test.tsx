@@ -124,8 +124,8 @@ describe("ShredSection executeShred", () => {
     await waitFor(() => expect(latest.vaultState).toBe("error"));
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Shred Selected (2 files)" }));
-    await user.click(await screen.findByRole("button", { name: "DESTROY" }));
+    await user.click(screen.getByRole("button", { name: "Delete Selected (2 files)" }));
+    await user.click(await screen.findByRole("button", { name: "DELETE" }));
 
     await waitFor(() =>
       expect(

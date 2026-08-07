@@ -55,9 +55,10 @@ export function ElevationPrompt({
             Administrator privileges required
           </DialogTitle>
           <DialogDescription>
-            KnockKnock could not shred this file because it is in a
-            protected location or is locked by the system. Restarting with
-            administrator privileges usually fixes this.
+            KnockKnock could not access this target with the current permissions.
+            Restarting with administrator privileges may allow the operation to
+            continue. Elevation does not bypass files held open by another process or
+            other operating-system protections.
           </DialogDescription>
         </DialogHeader>
 
@@ -68,10 +69,9 @@ export function ElevationPrompt({
         )}
 
         <p className="text-xs text-muted-foreground">
-          The app will close and reopen as administrator. You may be
-          prompted by Windows to confirm. If you do not have administrator
-          access on this machine, you will need to ask your administrator
-          for help or remove the file from the list.
+          The app will close and reopen with administrator privileges. Windows may
+          ask you to confirm the elevation request. If the operation still fails,
+          close any application using the target or remove the target from the list.
         </p>
 
         {error && (

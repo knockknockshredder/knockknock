@@ -72,22 +72,28 @@ export function ConfirmationDialog({
   }
 
   let description: ReactNode;
+
   if (hasShredTargets) {
     description = (
       <>
-        This will permanently shred {shredPhrase}
-        {hasProfiles ? <> and {profilePart}</> : null}. This cannot be undone.
-        Data will be overwritten, verified, renamed, truncated, and deleted.
+        This will overwrite and delete {shredPhrase}
+        {hasProfiles ? (
+          <> and selected local data from {profilePart}</>
+        ) : null}
+        . KnockKnock has no Undo. File and folder targets will be processed
+        using the currently selected overwrite and verification settings.
       </>
     );
   } else if (hasProfiles) {
     description = (
       <>
-        This will permanently clean {profilePart}. This cannot be undone.
+        This will delete selected local data from {profilePart}. KnockKnock has
+        no Undo. Browser account data, synchronized copies, and copies stored on
+        other devices are not affected.
       </>
     );
   } else {
-    description = "Nothing to destroy.";
+    description = "Nothing selected.";
   }
 
   return (
@@ -95,12 +101,12 @@ export function ConfirmationDialog({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle className="font-mono">
-            Confirm Destruction
+            Confirm Deletion
           </AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
           {runningBrowsers.length > 0 && (
             <p className="mt-2 text-amber-500 font-mono text-xs">
-              {runningBrowsers.join(", ")} {runningBrowsers.length === 1 ? "is" : "are"} currently running. Close {runningBrowsers.length === 1 ? "it" : "them"} first or data may be corrupted.
+              {runningBrowsers.join(", ")} {runningBrowsers.length === 1 ? "is" : "are"} currently running. Close {runningBrowsers.length === 1 ? "it" : "them"} before continuing; otherwise cleanup may fail or the browser may recreate local data.
             </p>
           )}
         </AlertDialogHeader>
@@ -113,7 +119,7 @@ export function ConfirmationDialog({
             }}
             className="bg-red-600 text-white hover:bg-red-700"
           >
-            DESTROY
+            DELETE
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

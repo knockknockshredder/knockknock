@@ -56,12 +56,13 @@ const PURPOSE_COPY: Record<PinVerifyPurpose, { title: string; description: strin
     description: "Enter your PIN to unlock KnockKnock.",
   },
   shred: {
-    title: "Authorize shred",
-    description: "Enter your PIN to confirm the shred operation.",
+    title: "Authorize deletion",
+    description: "Enter your PIN to confirm the deletion operation.",
   },
   cancel: {
-    title: "Authorize cancel",
-    description: "Enter your PIN to cancel the shred in progress.",
+    title: "Authorize stop",
+    description:
+      "Enter your PIN to request stopping the operation. Already processed targets will not be restored.",
   },
   disable_pin: {
     title: "Authorize disable",
@@ -291,7 +292,7 @@ export function PinVerify({ open, onOpenChange, onVerified, onReset, purpose }: 
           <AlertDialogHeader>
             <AlertDialogTitle>Reset app protection?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes your PIN and permanently deletes KnockKnock&apos;s saved shred
+              This removes your PIN and deletes KnockKnock&apos;s saved target
               list. It will not delete files from your computer or reset other app settings.
             </AlertDialogDescription>
           </AlertDialogHeader>

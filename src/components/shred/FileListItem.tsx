@@ -25,19 +25,17 @@ function StatusIcon({ status }: { status: ShredFile["status"] }) {
 }
 
 /**
- * Detect whether a shred error looks like a permission/ACL denial that
- * could be resolved by re-launching the app as administrator. We match
- * either the structured PermissionDenied variant or the localized
- * "Access is denied" message that surfaces on Windows when the OS
- * refuses access to a protected path.
+ * Detect whether an execution error is a permission/ACL denial that may
+ * benefit from re-launching the app as administrator. File-lock errors are
+ * intentionally excluded: elevation does not release handles held by another
+ * process.
  */
 function isPermissionDeniedError(error: string | undefined): boolean {
   if (!error) return false;
   return (
     error.includes("Permission denied") ||
     error.includes("PermissionDenied") ||
-    error.includes("Access is denied") ||
-    error.includes("File locked")
+    error.includes("Access is denied")
   );
 }
 

@@ -147,7 +147,7 @@ describe("FileDropZone", () => {
       expect(openMock).toHaveBeenCalledWith({
         multiple: true,
         directory: true,
-        title: "Select folders to shred",
+        title: "Select folders to add",
       })
     );
     expect(invokeMock).not.toHaveBeenCalledWith("open_folders_windows");
@@ -169,7 +169,7 @@ describe("FileDropZone", () => {
       expect(openMock).toHaveBeenCalledWith({
         multiple: true,
         directory: false,
-        title: "Select files to shred",
+        title: "Select files to add",
       })
     );
     expect(invokeMock).not.toHaveBeenCalledWith("open_files_windows");
@@ -260,7 +260,7 @@ describe("FileDropZone", () => {
     expect(folderButton).toHaveTextContent("Add Folder");
     expect(
       screen.getByText(
-        "Items are added to the review list. Nothing is shredded until you confirm."
+        "Items are added to the review list. Nothing is deleted until you review and confirm the operation."
       )
     ).toBeInTheDocument();
   });

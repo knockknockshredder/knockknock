@@ -65,7 +65,7 @@ export function SettingsSection() {
         </h2>
         <ToggleSetting
           label="Auto-clear log"
-          description="Clear the operation log after each shredding session"
+          description="Clear the operation log after each deletion session"
           checked={autoClearLog}
           onCheckedChange={setAutoClearLog}
         />
@@ -78,7 +78,7 @@ export function SettingsSection() {
         <div className="flex flex-col gap-3">
           <ToggleSetting
             label="Enable PIN"
-            description="Require PIN to open app and shred files"
+            description="Require PIN to open the app and start deletion"
             checked={pinEnabled}
             onCheckedChange={(enabled) => {
               if (enabled) {
@@ -111,7 +111,7 @@ export function SettingsSection() {
           )}
           {!pinEnabled && !pinSet && (
             <p className="font-mono text-xs text-muted-foreground">
-              Note: when PIN protection is disabled, your shred list is not saved
+              Note: when PIN protection is disabled, your target list is not saved
               between sessions.
             </p>
           )}
@@ -174,8 +174,9 @@ export function SettingsSection() {
             <AlertDialogHeader>
               <AlertDialogTitle>Disable PIN Protection?</AlertDialogTitle>
               <AlertDialogDescription>
-                Disabling PIN protection will permanently delete your saved file
-                list (vault) and PIN configuration. This cannot be undone.
+                Disabling PIN protection will delete KnockKnock's saved target
+                list and PIN configuration. KnockKnock cannot restore them
+                afterward.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -228,15 +229,18 @@ export function SettingsSection() {
         </h2>
         <div className="border border-border bg-surface p-4">
           <p className="font-mono text-sm font-semibold text-foreground">
-            KnockKnock v0.4.1
+            KnockKnock
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Emergency file shredder for Windows, macOS, and Linux. Implements
-            NIST 800-88 Clear, DoD 5220.22-M, and random overwrite algorithms.
+            Open-source local data deletion utility for Windows, macOS, and
+            Linux. Supports configurable overwrite modes, read-back verification,
+            browser cleanup, and encrypted persistence of the selected target
+            list.
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
-            This tool is for legitimate privacy/security purposes only. The user
-            is responsible for how they use it.
+            Designed for legitimate privacy, security, and authorized
+            data-disposal purposes. You are responsible for the targets you
+            select and for complying with applicable law.
           </p>
         </div>
       </section>

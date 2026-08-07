@@ -11,7 +11,7 @@ export function RightSidebar() {
     <div className="flex flex-col h-full">
       <div className="px-3 py-2 border-b border-border flex items-center justify-between">
         <h2 className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-          Files
+          Targets
         </h2>
         {files.length > 0 && (
           <div className="flex items-center gap-2">
@@ -20,8 +20,8 @@ export function RightSidebar() {
               type="button"
               onClick={clearFiles}
               className="text-muted-foreground hover:text-destructive transition-colors"
-              title="Remove all files"
-              aria-label="Remove all files"
+              title="Remove all targets"
+              aria-label="Remove all targets"
             >
               <Trash size={14} />
             </button>

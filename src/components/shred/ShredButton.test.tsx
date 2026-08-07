@@ -25,7 +25,7 @@ describe("ShredButton counts", () => {
     renderButton({ fileCount: 2, folderCount: 1 });
     expect(
       screen.getByRole("button", {
-        name: "Shred Selected (2 files + 1 folder)",
+        name: "Delete Selected (2 files + 1 folder)",
       })
     ).toBeInTheDocument();
   });
@@ -33,10 +33,10 @@ describe("ShredButton counts", () => {
   it("labels a folder-only selection", () => {
     renderButton({ folderCount: 1 });
     expect(
-      screen.getByRole("button", { name: "Shred Selected (1 folder)" })
+      screen.getByRole("button", { name: "Delete Selected (1 folder)" })
     ).toBeInTheDocument();
     expect(
-      screen.getByText("this action is irreversible")
+      screen.getByText("KnockKnock has no Undo")
     ).toBeInTheDocument();
   });
 
@@ -44,7 +44,7 @@ describe("ShredButton counts", () => {
     renderButton({ folderCount: 1, profileCount: 3 });
     expect(
       screen.getByRole("button", {
-        name: "Shred Selected (1 folder + 3 profiles)",
+        name: "Delete Selected (1 folder + 3 profiles)",
       })
     ).toBeInTheDocument();
   });
@@ -53,7 +53,7 @@ describe("ShredButton counts", () => {
     renderButton({ fileCount: 2, folderCount: 1, profileCount: 3 });
     expect(
       screen.getByRole("button", {
-        name: "Shred Selected (2 files + 1 folder + 3 profiles)",
+        name: "Delete Selected (2 files + 1 folder + 3 profiles)",
       })
     ).toBeInTheDocument();
   });
@@ -62,7 +62,7 @@ describe("ShredButton counts", () => {
     renderButton({ fileCount: 2, profileCount: 3 });
     expect(
       screen.getByRole("button", {
-        name: "Shred Selected (2 files + 3 profiles)",
+        name: "Delete Selected (2 files + 3 profiles)",
       })
     ).toBeInTheDocument();
   });

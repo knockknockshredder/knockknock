@@ -38,45 +38,45 @@ describe("ConfirmationDialog counts", () => {
   it("states files and folders together", () => {
     renderDialog({ fileCount: 2, folderCount: 1 });
     expect(descriptionText()).toBe(
-      "This will permanently shred 2 files and 1 folder. This cannot be undone. Data will be overwritten, verified, renamed, truncated, and deleted."
+      "This will overwrite and delete 2 files and 1 folder. KnockKnock has no Undo. File and folder targets will be processed using the currently selected overwrite and verification settings."
     );
   });
 
   it("states files, folders, and browser profiles together", () => {
     renderDialog({ fileCount: 2, folderCount: 1, profileCount: 3 });
     expect(descriptionText()).toBe(
-      "This will permanently shred 2 files and 1 folder and 3 browser profiles. This cannot be undone. Data will be overwritten, verified, renamed, truncated, and deleted."
+      "This will overwrite and delete 2 files and 1 folder and selected local data from 3 browser profiles. KnockKnock has no Undo. File and folder targets will be processed using the currently selected overwrite and verification settings."
     );
   });
 
   it("states a folder-only selection", () => {
     renderDialog({ folderCount: 1 });
     expect(descriptionText()).toBe(
-      "This will permanently shred 1 folder. This cannot be undone. Data will be overwritten, verified, renamed, truncated, and deleted."
+      "This will overwrite and delete 1 folder. KnockKnock has no Undo. File and folder targets will be processed using the currently selected overwrite and verification settings."
     );
   });
 
   it("keeps the profiles-only wording", () => {
     renderDialog({ profileCount: 2 });
     expect(descriptionText()).toBe(
-      "This will permanently clean 2 browser profiles. This cannot be undone."
+      "This will delete selected local data from 2 browser profiles. KnockKnock has no Undo. Browser account data, synchronized copies, and copies stored on other devices are not affected."
     );
   });
 
-  it("falls back to Nothing to destroy when every count is zero", () => {
+  it("falls back to Nothing selected when every count is zero", () => {
     renderDialog();
-    expect(descriptionText()).toBe("Nothing to destroy.");
+    expect(descriptionText()).toBe("Nothing selected.");
   });
 
-  it("keeps the running-browser warning and DESTROY action", () => {
+  it("keeps the running-browser warning and DELETE action", () => {
     renderDialog({ fileCount: 1, runningBrowsers: ["Chrome"] });
     expect(
       screen.getByText(
-        "Chrome is currently running. Close it first or data may be corrupted."
+        "Chrome is currently running. Close it before continuing; otherwise cleanup may fail or the browser may recreate local data."
       )
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "DESTROY" })
+      screen.getByRole("button", { name: "DELETE" })
     ).toBeInTheDocument();
   });
 });

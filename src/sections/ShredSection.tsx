@@ -96,7 +96,7 @@ export function ShredSection() {
       if (pendingFiles.length === 0 && selectedProfileCount === 0) {
         invoke("send_notification", {
           title: "KnockKnock",
-          body: "No files in list to shred",
+          body: "No targets selected",
         }).catch(() => {});
         return;
       }
@@ -155,7 +155,7 @@ export function ShredSection() {
     const request = buildExecuteRootsRequest();
     addLogEntry(
       "command",
-      `shredding ${pendingFiles.length} file(s) and ${selectedProfileCount} browser profile(s)...`
+      `Processing ${pendingFileCount} file(s), ${pendingFolderCount} folder(s), and ${selectedProfileCount} browser profile(s)...`
     );
 
     // Reset completed count before listening
@@ -199,7 +199,7 @@ export function ShredSection() {
       // removed from the list, everything else is retained with error details.
       await applyRootResults(report.roots);
 
-      const destroyed = report.roots.filter(
+      const removed = report.roots.filter(
         (root) => root.status === "destroyed" && root.root_removed
       ).length;
       const failed = report.roots.filter((root) => root.status === "failed").length;
@@ -208,7 +208,7 @@ export function ShredSection() {
 
       addLogEntry(
         "success",
-        `Complete: ${destroyed} destroyed, ${failed} failed, ${cancelled} cancelled, ${skipped} skipped`
+        `Complete: ${removed} removed, ${failed} failed, ${cancelled} cancelled, ${skipped} skipped`
       );
 
       if (autoClearLog && failed === 0) {
@@ -217,8 +217,8 @@ export function ShredSection() {
 
       // Send system notification for the main shred result.
       invoke("send_notification", {
-        title: "Shred Complete",
-        body: `${destroyed} destroyed, ${failed} failed, ${cancelled} cancelled, ${skipped} skipped`,
+        title: "Deletion Complete",
+        body: `${removed} removed, ${failed} failed, ${cancelled} cancelled, ${skipped} skipped`,
       }).catch(() => {});
 
       // Shred browser profiles if any
@@ -237,7 +237,7 @@ export function ShredSection() {
           try {
             addLogEntry(
               "info",
-              `Shredding ${profile.browser_name} profile: ${profile.profile_path}`
+              `Deleting selected local data from ${profile.browser_name} profile: ${profile.profile_path}`
             );
             const browserReport: ShredReport = await invoke<ShredReport>("shred_browser_data", {
               request: {
@@ -253,28 +253,28 @@ export function ShredSection() {
             });
             addLogEntry(
               "success",
-              `${profile.browser_name}: ${browserReport.successful} files destroyed, ${browserReport.failed} failed`
+              `${profile.browser_name}: ${browserReport.successful} files processed, ${browserReport.failed} failed`
             );
           } catch (err) {
             addLogEntry(
               "error",
-              `Failed to shred ${profile.browser_name} profile: ${err}`
+              `Failed to clean ${profile.browser_name} profile: ${err}`
             );
             invoke("send_notification", {
-              title: "Browser Shred Failed",
+              title: "Browser Cleanup Failed",
               body: `${profile.browser_name}: ${err}`,
             }).catch(() => {});
           }
         }
       }
     } catch (err) {
-      addLogEntry("error", `Shred failed: ${err}`);
+      addLogEntry("error", `Deletion failed: ${err}`);
       // Mark all pending as error
       for (const file of pendingFiles) {
         updateFileStatus(file.id, "error", String(err));
       }
       invoke("send_notification", {
-        title: "Shred Failed",
+        title: "Deletion Failed",
         body: `${String(err).slice(0, 200)}`,
       }).catch(() => {});
     } finally {
@@ -293,15 +293,17 @@ export function ShredSection() {
     }
     try {
       await invoke<void>("cancel_shred");
-      addLogEntry("warning", "Cancellation requested...");
+      addLogEntry("warning", "Stop requested. Already processed targets will not be restored.");
     } catch (err) {
-      addLogEntry("error", `Cancel failed: ${err}`);
+      addLogEntry("error", `Stop request failed: ${err}`);
     }
   };
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="font-mono text-xl font-semibold tracking-tight">Someone's KnockKnock'ing...</h1>
+      <h1 className="font-mono text-xl font-semibold tracking-tight">
+  Local Data Deletion
+</h1>
       <div className="flex flex-col gap-4 w-full max-w-lg mx-auto">
         <AlgorithmSelector />
         {currentAlgorithm && (
@@ -352,7 +354,7 @@ export function ShredSection() {
           setVaultPin(pin);
           setCancelPinOpen(false);
           invoke<void>("cancel_shred").catch((err) =>
-            addLogEntry("error", `Failed to cancel shred: ${err}`)
+            addLogEntry("error", `Failed to stop operation: ${err}`)
           );
         }}
         purpose="cancel"

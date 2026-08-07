@@ -19,9 +19,9 @@ export function BrowserWarning({ browserName, onAcknowledge, acknowledged = fals
       <Warning size={20} className="mt-0.5 shrink-0 text-amber-500" />
       <div className="flex flex-col gap-2">
         <p className="text-sm text-foreground">
-          <strong>{browserName}</strong> is currently running. Shredding browser
-          data while the browser is open may cause errors. Close the browser
-          before continuing.
+          <strong>{browserName}</strong> is currently running. Deleting local
+          browser data while the browser is open may fail or the browser may
+          recreate some data. Close the browser before continuing.
         </p>
         <label className="flex items-center gap-2">
           <Checkbox
@@ -32,7 +32,7 @@ export function BrowserWarning({ browserName, onAcknowledge, acknowledged = fals
             }}
           />
           <span className="text-xs text-muted-foreground">
-            I understand the risk, continue anyway
+            Continue with the browser still open
           </span>
         </label>
       </div>

@@ -54,7 +54,7 @@ export function ShredOptions({
           <span className="font-mono text-xs text-muted-foreground">
             Pattern
           </span>
-          <HintTooltip text="Byte pattern used for each overwrite pass. Random is most secure. Zeros/Ones are deterministic patterns used by some standards." />
+          <HintTooltip text="Byte pattern written during each overwrite pass. Random, Zeros, and Ones define what is written to the selected logical file range; the pattern itself does not provide a universal physical-erasure guarantee." />
         </div>
         <div className="flex w-full">
           {(["random", "zeros", "ones"] as const).map((p) => (
@@ -92,7 +92,7 @@ export function ShredOptions({
           <span className="font-mono text-xs text-muted-foreground">
             Verification
           </span>
-          <HintTooltip text="How thoroughly to verify that data was actually overwritten. None skips verification. Sample checks random blocks. Full reads back every block." />
+          <HintTooltip text="Read-back check of the overwritten logical file range. None skips verification. Sample checks the beginning, middle, and end. Full reads back the entire logical range." />
         </div>
         <div className="flex w-full">
           {(["none", "sample", "full"] as const).map((v) => (
@@ -116,9 +116,9 @@ export function ShredOptions({
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-1.5">
           <span className="font-mono text-xs text-muted-foreground">
-            Pass Repeats
+            Passes / Repeats
           </span>
-          <HintTooltip text="Number of overwrite passes per file. Higher values are more thorough but slower. For DoD (3-pass), setting this to 2 means 3 × 2 = 6 total overwrites." />
+          <HintTooltip text="Controls how many overwrite passes are performed. Additional passes take longer and are mainly relevant to magnetic media; they do not overcome SSD wear-leveling or block remapping. For a fixed 3-pass mode, 2 repeats means 6 total overwrites." />
         </div>
         <input
           type="number"

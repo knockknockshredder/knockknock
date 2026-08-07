@@ -22,7 +22,7 @@ export function AlgorithmSelector() {
     <div className="flex flex-col gap-1.5 w-full">
       <div className="flex items-center gap-1.5">
         <span className="font-mono text-xs text-muted-foreground">
-          Algorithm
+          Overwrite Mode
         </span>
         <TooltipProvider>
           <Tooltip>
@@ -32,9 +32,10 @@ export function AlgorithmSelector() {
               <Question size={14} className="text-muted-foreground" />
             </TooltipTrigger>
             <TooltipContent>
-              The overwrite algorithm used to destroy file data. NIST 800-88
-              Clear is recommended for most use cases. DoD 5220.22-M uses
-              a fixed 3-pass pattern. RandomOnly overwrites with random bytes.
+              Controls how KnockKnock overwrites the selected logical file
+              range before deletion. Different modes use different pass and
+              pattern rules. Additional overwrite passes do not overcome SSD
+              wear-leveling or block-remapping limitations.
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>

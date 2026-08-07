@@ -178,7 +178,7 @@ describe("AppGate vault unlock", () => {
     await unlock(user);
 
     await waitFor(() =>
-      expect(shredContext.addLogEntry).toHaveBeenCalledWith("error", "Failed to unlock vault"),
+      expect(shredContext.addLogEntry).toHaveBeenCalledWith("error", "Failed to unlock saved target list"),
     );
     expect(screen.getByRole("heading", { name: "Enter PIN" })).toBeInTheDocument();
     expect(screen.queryByText("Target UI")).not.toBeInTheDocument();

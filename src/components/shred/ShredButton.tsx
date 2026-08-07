@@ -35,8 +35,11 @@ export function ShredButton({
           onClick={onCancel}
           className="w-full border-2 border-amber-500 px-6 py-3 font-mono text-sm font-semibold uppercase tracking-wider text-amber-500 hover:bg-amber-500 hover:text-background transition-colors"
         >
-          Cancel Shredding
+          Stop Processing
         </button>
+        <p className="font-mono text-xs text-muted-foreground">
+          Already processed targets will not be restored.
+        </p>
         {progress && (
           <div className="w-full bg-secondary rounded-full h-2">
             <div
@@ -47,7 +50,7 @@ export function ShredButton({
         )}
         {progress && (
           <p className="font-mono text-xs text-muted-foreground">
-            {progress.current}/{progress.total} files ({progress.percent}%)
+            {progress.current}/{progress.total} targets ({progress.percent}%)
           </p>
         )}
       </div>
@@ -67,7 +70,7 @@ export function ShredButton({
 
   let label: string;
   if (countParts.length > 0) {
-    const action = hasFiles || hasFolders ? "Shred Selected" : "Clean Selected";
+    const action = hasFiles || hasFolders ? "Delete Selected" : "Clean Selected Browser Data";
     label = `${action} (${countParts.join(" + ")})`;
   } else {
     label = "Nothing to shred";
@@ -90,7 +93,7 @@ export function ShredButton({
       </button>
       {(hasFiles || hasFolders || hasProfiles) && !isShredding && (
         <p className="font-mono text-xs text-muted-foreground">
-          this action is irreversible
+          KnockKnock has no Undo
         </p>
       )}
     </div>

@@ -109,7 +109,7 @@ export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }
             {requireOldPin
               ? "Enter your current PIN, then choose a new one."
               : `Choose a ${MIN_PIN_LEN} to ${MAX_PIN_LEN} digit PIN. You will be
-            asked for it to open the app and before each shred operation.`}
+            asked for it to open the app and before each deletion operation.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -177,7 +177,7 @@ export function PinSetup({ open, onOpenChange, onPinSet, requireOldPin = false }
 
           <p className="font-mono text-xs text-muted-foreground">
             Store your PIN safely. If you forget it, you can reset app protection
-            from the unlock screen. This permanently deletes the saved shred list,
+            from the unlock screen. This deletes the saved target list,
             but does not delete files from your computer or reset other app settings.
           </p>
 

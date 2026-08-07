@@ -28,7 +28,7 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
         );
         if (validFiles.length > 0) {
           addFiles(validFiles);
-          addLogEntry("info", `Added ${validFiles.length} file(s)`);
+          addLogEntry("info", `Added ${validFiles.length} target(s)`);
         }
         for (const err of validationErrors) {
           addLogEntry("warning", err);
@@ -36,7 +36,7 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
         if (validFiles.length < paths.length) {
           addLogEntry(
             "warning",
-            `${paths.length - validFiles.length} file(s) rejected (system file, network drive, or invalid path)`
+            `${paths.length - validFiles.length} target(s) rejected (protected path, network drive, or invalid path)`
           );
         }
       } catch (err) {
@@ -79,7 +79,7 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
         const selected = await open({
           multiple: true,
           directory: false,
-          title: "Select files to shred",
+          title: "Select files to add",
         });
         if (!selected) return;
         paths = Array.isArray(selected) ? selected : [selected];
@@ -108,7 +108,7 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
         const selected = await open({
           multiple: true,
           directory: true,
-          title: "Select folders to shred",
+          title: "Select folders to add",
         });
         if (!selected) return;
         paths = Array.isArray(selected) ? selected : [selected];
@@ -198,7 +198,7 @@ export function FileDropZone({ compact = false }: FileDropZoneProps) {
         </button>
       </div>
       <p className="text-sm text-muted-foreground">
-        Items are added to the review list. Nothing is shredded until you confirm.
+        Items are added to the review list. Nothing is deleted until you review and confirm the operation.
       </p>
     </div>
   );
