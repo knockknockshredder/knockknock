@@ -54,6 +54,7 @@ docs/
 !CONTRIBUTING.md
 !THREAT_MODEL.md
 !LIMITATIONS.md
+!ARCHITECTURE.md
 
 # AI agent artifacts
 .scripts/
