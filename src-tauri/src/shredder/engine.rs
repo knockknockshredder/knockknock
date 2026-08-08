@@ -7,7 +7,9 @@
 
 use crate::shredder::errors::ShredError;
 use crate::shredder::traits::ProgressReporter;
-use crate::shredder::types::{DeletionMethod, DeletionPolicy, PatternType, WriteCheckOutcome};
+use crate::shredder::types::{
+    DeletionMethod, DeletionPolicy, PatternType, WriteCheck, WriteCheckOutcome,
+};
 use crate::shredder::verification::{create_write_checker, PrngSeed};
 use chacha20::cipher::{StreamCipher, StreamCipherSeek};
 use chacha20::ChaCha20;
@@ -309,22 +311,25 @@ pub(crate) fn overwrite_file_with_seed(
     // Final-state write check against the last pass's stream. Both v2
     // methods end on Random, so the final pattern is the last plan entry.
     let final_pattern = *plan.last().unwrap();
-    let check = create_write_checker(policy.write_check).verify(
-        file,
-        &final_pattern,
-        file_size,
-        final_seed.as_ref(),
-        path,
-    );
-    let write_check = match check {
-        Ok(result) if result.passed => WriteCheckOutcome::Passed,
-        // Mismatch or read error: outcome stays Ok(Completed); the failure
-        // is surfaced via write_check + a structured issue (M2 rule 3).
-        Ok(_) | Err(_) => {
-            issues.push(ShredError::WriteCheckFailed {
-                path: path.to_path_buf(),
-            });
-            WriteCheckOutcome::Failed
+    let write_check = match policy.write_check {
+        // Off never constructs a verifier: `NotRun` is distinct from a
+        // read-backed verification that passed.
+        WriteCheck::Off => WriteCheckOutcome::NotRun,
+        mode @ (WriteCheck::Spot | WriteCheck::Full) => {
+            let check = create_write_checker(mode)
+                .expect("a read-backed write-check mode must provide a verifier")
+                .verify(file, &final_pattern, file_size, final_seed.as_ref(), path);
+            match check {
+                Ok(result) if result.passed => WriteCheckOutcome::Passed,
+                // Mismatch or read error: outcome stays Ok(Completed); the failure
+                // is surfaced via write_check + a structured issue (M2 rule 3).
+                Ok(_) | Err(_) => {
+                    issues.push(ShredError::WriteCheckFailed {
+                        path: path.to_path_buf(),
+                    });
+                    WriteCheckOutcome::Failed
+                }
+            }
         }
     };
 
@@ -600,6 +605,32 @@ mod tests {
             "expected a WriteCheckFailed issue, got {:?}",
             outcome.issues
         );
+    }
+
+    #[test]
+    fn write_check_off_returns_not_run_without_readback() {
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(&[0xAA; 4096]).unwrap();
+        temp.flush().unwrap();
+
+        // A write-only handle can complete the overwrite, but a read-backed
+        // checker would fail. Off must instead report NotRun without reading.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(temp.path())
+            .unwrap();
+        let outcome = overwrite_file(
+            &mut file,
+            4096,
+            automatic_policy(WriteCheck::Off),
+            &NoopProgressReporter,
+            temp.path(),
+        )
+        .unwrap();
+
+        assert_eq!(outcome.state, OverwriteState::Completed);
+        assert_eq!(outcome.write_check, WriteCheckOutcome::NotRun);
+        assert!(outcome.issues.is_empty());
     }
 
     #[test]

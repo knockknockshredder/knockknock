@@ -47,21 +47,6 @@ impl PrngSeed {
     }
 }
 
-pub struct NoVerification;
-
-impl VerificationStrategy for NoVerification {
-    fn verify(
-        &self,
-        _file: &mut File,
-        _pattern: &PatternType,
-        _size: u64,
-        _seed: Option<&PrngSeed>,
-        _path: &Path,
-    ) -> Result<VerificationResult, ShredError> {
-        Ok(VerificationResult { passed: true })
-    }
-}
-
 /// Compare `buffer[..n]` against the expected bytes at absolute file offset
 /// `pos`. For `Random` with a seed, regenerate via ChaCha20 with `try_seek`
 /// (O(1)) so the buffer length doesn't matter.
@@ -162,19 +147,15 @@ impl VerificationStrategy for FullVerification {
 
         while remaining > 0 {
             let to_read = std::cmp::min(remaining, buffer.len() as u64) as usize;
-            let n = file
-                .read(&mut buffer[..to_read])
+            file.read_exact(&mut buffer[..to_read])
                 .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
-            if n == 0 {
-                break;
-            }
 
-            if Self::check_block_mismatch(&mut buffer, n, pos, pattern, seed) {
+            if Self::check_block_mismatch(&mut buffer, to_read, pos, pattern, seed) {
                 mismatches += 1;
             }
 
-            pos += n as u64;
-            remaining -= n as u64;
+            pos += to_read as u64;
+            remaining -= to_read as u64;
         }
 
         Ok(VerificationResult {
@@ -268,14 +249,10 @@ impl VerificationStrategy for SpotVerification {
         for (pos, len) in spot_check_plan(size) {
             file.seek(SeekFrom::Start(pos))
                 .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
-            let n = file
-                .read(&mut buffer[..len as usize])
+            file.read_exact(&mut buffer[..len as usize])
                 .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
-            if n == 0 {
-                continue;
-            }
 
-            if !compare_block(&buffer, n, pos, pattern, seed) {
+            if !compare_block(&buffer, len as usize, pos, pattern, seed) {
                 mismatches += 1;
             }
         }
@@ -286,14 +263,16 @@ impl VerificationStrategy for SpotVerification {
     }
 }
 
-/// Build the v2 final-state write checker for a `WriteCheck` mode:
-/// `Off` → `NoVerification`, `Spot` → `SpotVerification`, `Full` →
-/// `FullVerification`.
-pub(crate) fn create_write_checker(write_check: WriteCheck) -> Box<dyn VerificationStrategy> {
+/// Build the v2 final-state read-back checker for a `WriteCheck` mode.
+/// `Off` returns no checker because it maps directly to `NotRun`; `Spot` and
+/// `Full` return their corresponding read-backed checker.
+pub(crate) fn create_write_checker(
+    write_check: WriteCheck,
+) -> Option<Box<dyn VerificationStrategy>> {
     match write_check {
-        WriteCheck::Off => Box::new(NoVerification),
-        WriteCheck::Spot => Box::new(SpotVerification::new()),
-        WriteCheck::Full => Box::new(FullVerification),
+        WriteCheck::Off => None,
+        WriteCheck::Spot => Some(Box::new(SpotVerification::new())),
+        WriteCheck::Full => Some(Box::new(FullVerification)),
     }
 }
 
@@ -302,8 +281,8 @@ mod tests {
     use super::*;
     use crate::shredder::types::{PatternType, WriteCheck};
     use crate::shredder::verification::{
-        create_write_checker, spot_check_plan, NoVerification, SpotVerification, SMALL_FILE_LIMIT,
-        SPOT_BLOCK, SPOT_INTERIOR,
+        create_write_checker, spot_check_plan, SpotVerification, SMALL_FILE_LIMIT, SPOT_BLOCK,
+        SPOT_INTERIOR,
     };
     use chacha20::cipher::{StreamCipher, StreamCipherSeek};
     use std::fs::OpenOptions;
@@ -478,6 +457,49 @@ mod tests {
     }
 
     #[test]
+    fn full_verification_fails_when_a_planned_range_hits_eof() {
+        let temp = NamedTempFile::new().unwrap();
+        let actual_size = 65536;
+        let planned_size = actual_size + 1;
+        temp.as_file().set_len(actual_size).unwrap();
+        let mut file = temp.reopen().unwrap();
+
+        let result = FullVerification.verify(
+            &mut file,
+            &PatternType::Zeros,
+            planned_size,
+            None,
+            temp.path(),
+        );
+
+        assert!(
+            matches!(result, Err(ShredError::IoError { .. })),
+            "a planned range that cannot be read in full must fail: {result:?}"
+        );
+    }
+
+    #[test]
+    fn spot_verification_fails_when_a_planned_range_hits_eof() {
+        let temp = NamedTempFile::new().unwrap();
+        let planned_size = 256 * 1024;
+        temp.as_file().set_len(SPOT_BLOCK).unwrap();
+        let mut file = temp.reopen().unwrap();
+
+        let result = SpotVerification::new().verify(
+            &mut file,
+            &PatternType::Zeros,
+            planned_size,
+            None,
+            temp.path(),
+        );
+
+        assert!(
+            matches!(result, Err(ShredError::IoError { .. })),
+            "a planned range that cannot be read in full must fail: {result:?}"
+        );
+    }
+
+    #[test]
     fn spot_verification_passes_on_empty_file() {
         let temp = NamedTempFile::new().unwrap();
         let mut file = OpenOptions::new()
@@ -493,38 +515,11 @@ mod tests {
     }
 
     #[test]
-    fn no_verification_verifies_true_on_write_only_handle() {
-        let mut temp = NamedTempFile::new().unwrap();
-        temp.write_all(&[0xAA; 4096]).unwrap();
-        temp.flush().unwrap();
-
-        // Write-only handle: any read would fail, so a passing result proves
-        // no read occurred.
-        let mut file = OpenOptions::new().write(true).open(temp.path()).unwrap();
-        let result = NoVerification
-            .verify(&mut file, &PatternType::Zeros, 4096, None, temp.path())
-            .unwrap();
-        assert!(result.passed);
-
-        // Sanity: the same write-only handle cannot actually be read back �
-        // proving the Off mode genuinely skipped reading.
-        let mut file = OpenOptions::new().write(true).open(temp.path()).unwrap();
-        let result =
-            SpotVerification::new().verify(&mut file, &PatternType::Zeros, 4096, None, temp.path());
-        assert!(result.is_err(), "write-only handle must not be readable");
-    }
-
-    #[test]
     fn create_write_checker_maps_modes() {
-        // Off: passes without reading (write-only handle).
-        let mut temp = NamedTempFile::new().unwrap();
-        temp.write_all(&[0xAA; 4096]).unwrap();
-        temp.flush().unwrap();
-        let mut file = OpenOptions::new().write(true).open(temp.path()).unwrap();
-        let result = create_write_checker(WriteCheck::Off)
-            .verify(&mut file, &PatternType::Zeros, 4096, None, temp.path())
-            .unwrap();
-        assert!(result.passed);
+        assert!(
+            create_write_checker(WriteCheck::Off).is_none(),
+            "Off must not create a verifier that could be reported as Passed"
+        );
 
         // Spot and Full: read-backed checkers that pass on a correct stream
         // and reject a corrupted one. The corrupted byte must sit inside a
@@ -532,7 +527,7 @@ mod tests {
         // (mid-range would be skipped by the distributed plan), any
         // mid-range offset for Full.
         for mode in [WriteCheck::Spot, WriteCheck::Full] {
-            let checker = create_write_checker(mode);
+            let checker = create_write_checker(mode).expect("read-backed checker");
             assert!(verify_zero_file(checker.as_ref(), 256 * 1024));
             let flip_pos = match mode {
                 WriteCheck::Spot => spot_check_plan(256 * 1024)[1].0,

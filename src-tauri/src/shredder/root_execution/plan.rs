@@ -835,6 +835,12 @@ impl RootExecution {
                         return Err(error);
                     }
                 }
+                // A stop may have been requested while the final child
+                // completed its full lifecycle. Directory removal is a later
+                // safe boundary and must not begin after that stop.
+                if cancel.is_cancelled() {
+                    return Err(ExecuteError::Cancelled);
+                }
                 io.remove_empty_dir(&node.parent, &node.handle)
                     .map_err(|error| {
                         ExecuteError::Failed(child_error(

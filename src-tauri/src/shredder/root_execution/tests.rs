@@ -2012,6 +2012,63 @@ fn stop_during_file_a_completes_a_skips_b_c() {
 }
 
 #[test]
+fn stop_after_sole_child_completes_prevents_parent_directory_removal() {
+    let root = home_child("task24-stop-after-sole-child");
+    let io = FakeIo::new()
+        .root(root.clone(), 1, directory(1, vec![(2, "only")]))
+        .add_node(2, regular(2));
+    let cancel = CancellationToken::new();
+    let io = io.cancel_on_nth("open_regular", 1, cancel.clone());
+    let shredder = FakeShredder::new();
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal = JournalStore::at(directory.path().join("journal.json"));
+
+    let result = run_full(
+        ExecuteRootsRequest {
+            roots: vec![root_request("stop", &root, TargetKind::Directory)],
+        },
+        DeletionPolicy::default(),
+        &io,
+        &shredder,
+        &journal,
+        &NoopProgressReporter,
+        &cancel,
+        &automatic_classifier(),
+    );
+
+    // The sole child completes its configured lifecycle, but cancellation at
+    // the following directory boundary prevents the parent from being removed.
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Cancelled);
+    assert!(!root_result.root_removed);
+    assert_eq!(root_result.files_destroyed, 1);
+    assert_eq!(root_result.directories_removed, 0);
+    assert!(root_result.errors.is_empty());
+    assert_eq!(shredder.calls.lock().unwrap().len(), 1);
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert_eq!(
+        events.calls.iter().filter(|call| *call == "rename").count(),
+        1,
+        "the active file must complete cleanup"
+    );
+    assert_eq!(
+        events.calls.iter().filter(|call| *call == "unlink").count(),
+        1,
+        "the active file must complete cleanup"
+    );
+    assert_eq!(
+        events
+            .calls
+            .iter()
+            .filter(|call| *call == "remove_dir")
+            .count(),
+        0,
+        "the parent directory must remain after stop"
+    );
+}
+
+#[test]
 fn stop_before_root_start_skips_all_destructive_processing() {
     let root = home_child("task24-stop-before-root");
     let io = FakeIo::new()
