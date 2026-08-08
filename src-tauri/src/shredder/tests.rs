@@ -106,6 +106,7 @@ mod tests {
 
     #[test]
     fn test_cancellation_global_reset() {
+        let _state = crate::shredder::cancel::global_state_test_guard();
         crate::shredder::cancel::reset_global();
         assert!(!crate::shredder::cancel::is_cancelled_global());
         crate::shredder::cancel::cancel_global();

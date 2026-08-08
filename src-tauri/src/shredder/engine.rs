@@ -655,27 +655,13 @@ mod tests {
         assert_eq!(read_all(&reopened), original, "file must be intact");
     }
 
-    /// Restores the process-wide global cancel flag on drop — including
-    /// panic unwinding — so a cancelled test can never leak the flag into
-    /// other tests running in the same process.
-    struct CancelFlagGuard;
-
-    impl Drop for CancelFlagGuard {
-        fn drop(&mut self) {
-            crate::shredder::cancel::reset_global();
-        }
-    }
-
     /// The global cancel flag is process-wide state, and `write_pass` checks
     /// it before every chunk. A test that fires it must therefore never run
-    /// concurrently with another engine test's `write_pass` — every
-    /// engine-running test takes this lock (cancellation tests hold it for
-    /// their whole body) so the module is deterministic under the default
+    /// concurrently with lifecycle tests. The shared guard also clears it on
+    /// every exit path so the module is deterministic under the default
     /// parallel test harness.
-    static ENGINE_LOCK: Mutex<()> = Mutex::new(());
-
-    fn engine_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        ENGINE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    fn engine_test_lock() -> crate::shredder::cancel::GlobalStateTestGuard {
+        crate::shredder::cancel::global_state_test_guard()
     }
 
     #[test]
@@ -684,7 +670,6 @@ mod tests {
         // The global flag is process-wide state: never assume a prior test
         // left it clean. The guard resets it on every exit path.
         crate::shredder::cancel::reset_global();
-        let _guard = CancelFlagGuard;
 
         let mut temp = NamedTempFile::new().unwrap();
         temp.write_all(&vec![0xAAu8; 3 * MIB as usize]).unwrap();
@@ -733,7 +718,6 @@ mod tests {
         let _serial = engine_test_lock();
         crate::shredder::cancel::reset_global();
         crate::shredder::cancel::cancel_global();
-        let _guard = CancelFlagGuard;
 
         let mut temp = NamedTempFile::new().unwrap();
         temp.write_all(&vec![0xAAu8; MIB as usize]).unwrap();

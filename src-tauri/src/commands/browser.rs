@@ -39,11 +39,14 @@ pub async fn shred_browser_data(
         request.browser_name, request.profile_path
     );
 
+    let cancel = crate::shredder::cancel::get_global_token().ok_or_else(|| {
+        "No active shred operation; call begin_shred_operation before shredding browser data."
+            .to_string()
+    })?;
+
     let progress: Arc<dyn ProgressReporter> =
         Arc::new(TauriProgressReporter::new(app, LogObfuscation::None));
     let journal = JournalStore::portable().map_err(|error| error.to_string())?;
-
-    let cancel = crate::shredder::cancel::get_global_token();
 
     tokio::task::spawn_blocking(move || shred_browser_core(request, progress, &cancel, &journal))
         .await

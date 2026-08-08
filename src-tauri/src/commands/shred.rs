@@ -24,6 +24,10 @@ pub async fn execute_roots(
     write_check: WriteCheck,
     log_obfuscation: String,
 ) -> Result<BatchRootResult, String> {
+    let cancel = crate::shredder::cancel::get_global_token().ok_or_else(|| {
+        "No active shred operation; call begin_shred_operation before executing roots.".to_string()
+    })?;
+
     let obfuscation = match log_obfuscation.as_str() {
         "numbered" => LogObfuscation::Numbered,
         "partial_mask" => LogObfuscation::PartialMask,
@@ -33,8 +37,6 @@ pub async fn execute_roots(
         method,
         write_check,
     };
-
-    let cancel = crate::shredder::cancel::get_global_token();
 
     let progress: Arc<dyn ProgressReporter> =
         Arc::new(TauriProgressReporter::new(app, obfuscation));
