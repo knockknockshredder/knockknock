@@ -1405,10 +1405,7 @@ fn rejects_special_files_mount_crossings_and_depth_overflow() {
 fn policy_file_shredder_rejects_directory_identity() {
     let adapter =
         PolicyFileShredder::new(DeletionPolicy::default(), Arc::new(NoopProgressReporter));
-    let request = FileShredRequest::new(
-        home_child("task7-directory-handle"),
-        DeletionPolicy::default(),
-    );
+    let request = FileShredRequest::new(home_child("task7-directory-handle"));
     let error = adapter
         .shred_open_file(
             tempfile::tempfile().unwrap(),
@@ -1438,7 +1435,7 @@ fn policy_file_shredder_rechecks_hard_links_on_open_handle() {
     let file = File::open(&target).expect("open target");
     let adapter =
         PolicyFileShredder::new(DeletionPolicy::default(), Arc::new(NoopProgressReporter));
-    let request = FileShredRequest::new(target.clone(), DeletionPolicy::default());
+    let request = FileShredRequest::new(target.clone());
     let error = adapter
         .shred_open_file(file, NodeIdentity::regular(1, 1), &request)
         .expect_err("hard-linked open handle must be blocked");

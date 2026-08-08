@@ -143,23 +143,15 @@ impl RenamedNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileShredRequest {
     diagnostic_path: PathBuf,
-    policy: DeletionPolicy,
 }
 
 impl FileShredRequest {
-    pub(crate) fn new(diagnostic_path: PathBuf, policy: DeletionPolicy) -> Self {
-        Self {
-            diagnostic_path,
-            policy,
-        }
+    pub(crate) fn new(diagnostic_path: PathBuf) -> Self {
+        Self { diagnostic_path }
     }
 
     pub(crate) fn diagnostic_path(&self) -> &Path {
         &self.diagnostic_path
-    }
-
-    pub(crate) fn policy(&self) -> DeletionPolicy {
-        self.policy
     }
 }
 
@@ -277,13 +269,8 @@ pub(crate) fn execute_roots(
         }
 
         let request = plan.request.clone();
-        let mut result = RootExecution::new(
-            plan.request,
-            plan.handle,
-            plan.trusted_parent,
-            plan.node,
-            policy,
-        );
+        let mut result =
+            RootExecution::new(plan.request, plan.handle, plan.trusted_parent, plan.node);
         match result.execute(io, file_shredder, journal, progress, cancel) {
             Ok(()) => {}
             Err(ExecuteError::Cancelled) => {
@@ -762,7 +749,6 @@ struct RootExecution {
     write_check_failed_any: bool,
     write_check_passed_any: bool,
     errors: Vec<ChildErrorDto>,
-    policy: DeletionPolicy,
 }
 
 impl RootExecution {
@@ -771,7 +757,6 @@ impl RootExecution {
         handle: DirHandle,
         trusted_parent: Option<DirHandle>,
         mut node: PlannedNode,
-        policy: DeletionPolicy,
     ) -> Self {
         if let Some(parent) = trusted_parent {
             node.parent = parent;
@@ -788,7 +773,6 @@ impl RootExecution {
             write_check_failed_any: false,
             write_check_passed_any: false,
             errors: Vec::new(),
-            policy,
         }
     }
 
@@ -907,7 +891,7 @@ impl RootExecution {
                 return Ok(false);
             }
         };
-        let request = FileShredRequest::new(node.diagnostic_path.clone(), self.policy);
+        let request = FileShredRequest::new(node.diagnostic_path.clone());
         let shred_result = match file_shredder.shred_open_file(file, node.identity, &request) {
             Ok(result) => result,
             Err(error) => {
@@ -1212,7 +1196,6 @@ fn error_type(error: &ShredError) -> &'static str {
         ShredError::PermissionDenied(_) => "permission_denied",
         ShredError::FileLocked { .. } => "file_locked",
         ShredError::IoError { .. } => "io_error",
-        ShredError::VerificationFailed { .. } => "verification_failed",
         ShredError::HardLinkBlocked { .. } => "hard_link_blocked",
         ShredError::UnsupportedStorageForMethod { .. } => "unsupported_storage_for_method",
         ShredError::WriteCheckFailed { .. } => "write_check_failed",
@@ -1232,7 +1215,7 @@ fn actionable(stage: ExecutionStage) -> &'static str {
         ExecutionStage::Overwrite | ExecutionStage::Verify => {
             "The target may be partially destroyed; inspect it before retrying"
         }
-        ExecutionStage::Rename | ExecutionStage::Truncate | ExecutionStage::Delete => {
+        ExecutionStage::Rename | ExecutionStage::Delete => {
             "The target may be partially destroyed; do not assume cleanup completed"
         }
         ExecutionStage::DirectoryRemove | ExecutionStage::Journal | ExecutionStage::Sync => {

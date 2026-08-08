@@ -1,22 +1,120 @@
 // src-tauri/src/shredder/engine.rs
 //
-// v2 policy-driven overwrite engine (Phase 1, additive). Reuses the legacy
-// `algorithms::common::write_pass` and `verification::PrngSeed` as-is (M1 —
-// they are not moved or copied out of their legacy modules until Phase 4).
+// v2 policy-driven overwrite engine (Phase 1, additive). Since Phase 4 the
+// engine is self-contained: `write_pass` / `fill_pattern_buffer` were moved
+// here from the deleted legacy `algorithms::common` (ora-2 amendment 4),
+// reusing `verification::PrngSeed` for the deterministic random streams.
 
-use crate::shredder::algorithms::common::write_pass;
 use crate::shredder::errors::ShredError;
 use crate::shredder::traits::ProgressReporter;
 use crate::shredder::types::{DeletionMethod, DeletionPolicy, PatternType, WriteCheckOutcome};
 use crate::shredder::verification::{create_write_checker, PrngSeed};
+use chacha20::cipher::{StreamCipher, StreamCipherSeek};
+use chacha20::ChaCha20;
 use std::fs::File;
-use std::io::Seek;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// 1 MiB overwrite buffer, matching the legacy algorithms' buffer size.
 /// Chunked inside `write_pass` — never allocate the file size in memory.
 /// The buffer is intentionally NOT zeroized after use (S1).
 const BUFFER_SIZE: usize = 1024 * 1024;
+
+/// Progress is reported at most once per 1 MiB of written bytes per pass
+/// (moved verbatim from the legacy `algorithms::common`).
+const PROGRESS_INTERVAL: u64 = 1024 * 1024;
+
+/// Write data to file with progress reporting.
+///
+/// For `PatternType::Random`, the buffer is filled from `ChaCha20(seed)` when a
+/// seed is supplied (deterministic, verifiable) or from the OS CSPRNG
+/// (`getrandom`) when no seed is available. For fixed patterns (Zeros, Ones)
+/// the buffer is used as-is.
+pub(crate) fn write_pass(
+    file: &mut File,
+    file_size: u64,
+    pattern: PatternType,
+    buffer: &mut [u8],
+    progress: &dyn ProgressReporter,
+    bytes_written_so_far: u64,
+    total_bytes: u64,
+    seed: Option<&PrngSeed>,
+    path: &std::path::Path,
+) -> Result<u64, ShredError> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
+
+    let mut written = 0u64;
+    let mut remaining = file_size;
+    let mut last_progress = 0u64;
+    let mut cipher = seed.map(|s| s.cipher());
+
+    while remaining > 0 {
+        // Check cancellation between chunks (chunk size = buffer.len or remaining)
+        if crate::shredder::cancel::is_cancelled_global() {
+            return Err(ShredError::IoError {
+                path: path.to_path_buf(),
+                kind: "Cancelled".to_string(),
+                message: "Shredding cancelled during write".to_string(),
+            });
+        }
+
+        let to_write = std::cmp::min(remaining, buffer.len() as u64) as usize;
+
+        // Fill buffer based on pattern at absolute file position `written`.
+        // For Random-with-seed this seeks the cipher to `written` (O(1)) and
+        // runs the keystream into the buffer.
+        fill_pattern_buffer(buffer, pattern, &mut cipher, written, path)?;
+
+        file.write_all(&buffer[..to_write])
+            .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
+        written += to_write as u64;
+        remaining -= to_write as u64;
+
+        if written - last_progress >= PROGRESS_INTERVAL {
+            progress.on_progress(bytes_written_so_far + written, total_bytes);
+            last_progress = written;
+        }
+    }
+
+    Ok(written)
+}
+
+/// Fill `buffer` with the configured pattern at keystream offset `pos`.
+///
+/// `pos` is the absolute byte offset within the file (and thus within the
+/// ChaCha20 keystream). For Random-with-seed we use `try_seek` to jump
+/// directly to that offset in O(1), avoiding skip buffers.
+fn fill_pattern_buffer(
+    buffer: &mut [u8],
+    pattern: PatternType,
+    cipher: &mut Option<ChaCha20>,
+    pos: u64,
+    path: &std::path::Path,
+) -> Result<(), ShredError> {
+    match pattern {
+        PatternType::Zeros => buffer.fill(0x00),
+        PatternType::Ones => buffer.fill(0xFF),
+        PatternType::Random => {
+            if let Some(cipher_ref) = cipher.as_mut() {
+                cipher_ref.try_seek(pos).map_err(|e| ShredError::IoError {
+                    path: path.to_path_buf(),
+                    kind: "CipherSeek".to_string(),
+                    message: e.to_string(),
+                })?;
+                buffer.fill(0u8); // Zero buffer before XOR-ing keystream
+                cipher_ref.apply_keystream(buffer);
+            } else {
+                getrandom::getrandom(buffer).map_err(|e| ShredError::IoError {
+                    path: path.to_path_buf(),
+                    kind: "RandomGeneration".to_string(),
+                    message: e.to_string(),
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
 
 /// v2 overwrite lifecycle state for one file (M2).
 ///
@@ -264,7 +362,6 @@ mod tests {
     use crate::shredder::progress::NoopProgressReporter;
     use crate::shredder::types::{DeletionMethod, DeletionPolicy, WriteCheck};
     use crate::shredder::verification::PrngSeed;
-    use chacha20::cipher::{StreamCipher, StreamCipherSeek};
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -427,9 +524,47 @@ mod tests {
         assert_eq!(read_all(&file), expected_stream(&seed, 256 * KIB as usize));
         // Intermediate pass states (pass 1 = zeros, pass 2 = ones) are not
         // observable without production test hooks (S2); they are covered by
-        // the exact pass_plan sequence above plus write_pass unit coverage in
-        // the legacy tests (zeros/ones semantics), with the final-stream
-        // assertion proving the full sequence ran in order.
+        // the exact pass_plan sequence above plus direct `write_pass` unit
+        // coverage (zeros/ones/seeded-random — see
+        // `write_pass_writes_fixed_patterns_and_seeded_random`), with the
+        // final-stream assertion proving the full sequence ran in order.
+    }
+
+    #[test]
+    fn write_pass_writes_fixed_patterns_and_seeded_random() {
+        let _serial = engine_test_lock();
+        let seed = PrngSeed {
+            key: [5u8; 32],
+            nonce: [6u8; 12],
+        };
+        let size = 64 * KIB;
+        for (pattern, expected) in [
+            (PatternType::Zeros, vec![0x00u8; size as usize]),
+            (PatternType::Ones, vec![0xFFu8; size as usize]),
+            (PatternType::Random, expected_stream(&seed, size as usize)),
+        ] {
+            let mut temp = NamedTempFile::new().unwrap();
+            temp.write_all(&vec![0xAAu8; size as usize]).unwrap();
+            temp.flush().unwrap();
+            let mut file = temp.reopen().unwrap();
+            let progress = NoopProgressReporter;
+            let mut buffer = vec![0u8; BUFFER_SIZE];
+            let seed_ref = (pattern == PatternType::Random).then_some(&seed);
+            let written = write_pass(
+                &mut file,
+                size,
+                pattern,
+                &mut buffer,
+                &progress,
+                0,
+                size,
+                seed_ref,
+                temp.path(),
+            )
+            .unwrap();
+            assert_eq!(written, size);
+            assert_eq!(read_all(&file), expected, "pattern {pattern:?}");
+        }
     }
 
     #[test]

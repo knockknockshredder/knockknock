@@ -2,7 +2,7 @@
 
 use crate::shredder::errors::ShredError;
 use crate::shredder::traits::VerificationStrategy;
-use crate::shredder::types::{PatternType, VerificationLevel, VerificationResult, WriteCheck};
+use crate::shredder::types::{PatternType, VerificationResult, WriteCheck};
 use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use chacha20::ChaCha20;
 use getrandom::getrandom;
@@ -66,9 +66,9 @@ impl VerificationStrategy for NoVerification {
 /// `pos`. For `Random` with a seed, regenerate via ChaCha20 with `try_seek`
 /// (O(1)) so the buffer length doesn't matter.
 ///
-/// Shared by `SampleVerification` (legacy) and `SpotVerification` (v2);
-/// extracted verbatim from the original `SampleVerification::compare` — no
-/// behavior change.
+/// Extracted verbatim from the original `SampleVerification::compare` (the
+/// legacy sample verifier, deleted in Phase 4) and shared by the v2 Spot and
+/// Full write checkers — no behavior change.
 fn compare_block(
     buffer: &[u8],
     n: usize,
@@ -96,54 +96,6 @@ fn compare_block(
                 !(slice.iter().all(|&b| b == 0) || slice.iter().all(|&b| b == 0xFF))
             }
         },
-    }
-}
-
-pub struct SampleVerification {
-    block_size: usize,
-}
-
-impl SampleVerification {
-    pub fn new() -> Self {
-        Self { block_size: 4096 }
-    }
-}
-
-impl VerificationStrategy for SampleVerification {
-    fn verify(
-        &self,
-        file: &mut File,
-        pattern: &PatternType,
-        size: u64,
-        seed: Option<&PrngSeed>,
-        path: &Path,
-    ) -> Result<VerificationResult, ShredError> {
-        if size == 0 {
-            return Ok(VerificationResult { passed: true });
-        }
-
-        let positions = [0u64, size / 2, size.saturating_sub(self.block_size as u64)];
-        let mut buffer = vec![0u8; self.block_size];
-        let mut mismatches = 0;
-
-        for pos in &positions {
-            file.seek(SeekFrom::Start(*pos))
-                .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
-            let n = file
-                .read(&mut buffer)
-                .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
-            if n == 0 {
-                continue;
-            }
-
-            if !compare_block(&buffer, n, *pos, pattern, seed) {
-                mismatches += 1;
-            }
-        }
-
-        Ok(VerificationResult {
-            passed: mismatches == 0,
-        })
     }
 }
 
@@ -231,18 +183,9 @@ impl VerificationStrategy for FullVerification {
     }
 }
 
-pub fn create_verifier(level: VerificationLevel) -> Box<dyn VerificationStrategy> {
-    match level {
-        VerificationLevel::None => Box::new(NoVerification),
-        VerificationLevel::Sample => Box::new(SampleVerification::new()),
-        VerificationLevel::Full => Box::new(FullVerification),
-    }
-}
-
 // ---------------------------------------------------------------------------
-// v2 final-state write check (Phase 1, additive). The legacy
-// `VerificationLevel` / `create_verifier` / `SampleVerification` stay live
-// until the Phase 4 cutover.
+// v2 final-state write check (Phase 1, additive). The legacy sample-verifier
+// machinery was deleted in Phase 4 along with the legacy pipeline.
 // ---------------------------------------------------------------------------
 
 /// Size in bytes of one spot-check read block.
@@ -345,8 +288,7 @@ impl VerificationStrategy for SpotVerification {
 
 /// Build the v2 final-state write checker for a `WriteCheck` mode:
 /// `Off` → `NoVerification`, `Spot` → `SpotVerification`, `Full` →
-/// `FullVerification`. (The legacy `create_verifier` remains for the legacy
-/// pipeline until Phase 4.)
+/// `FullVerification`.
 pub(crate) fn create_write_checker(write_check: WriteCheck) -> Box<dyn VerificationStrategy> {
     match write_check {
         WriteCheck::Off => Box::new(NoVerification),
@@ -603,5 +545,81 @@ mod tests {
                 flip_pos
             ));
         }
+    }
+
+    // --- ChaCha20 seeded PRNG tests (moved from shredder/tests.rs when the
+    // legacy pipeline was deleted in Phase 4) ---
+
+    #[test]
+    fn prng_seed_generate_is_unique() {
+        let s1 = PrngSeed::generate().unwrap();
+        let s2 = PrngSeed::generate().unwrap();
+        assert_ne!(s1.key, s2.key);
+        assert_ne!(s1.nonce, s2.nonce);
+    }
+
+    #[test]
+    fn prng_seed_cipher_is_deterministic() {
+        let seed = PrngSeed::generate().unwrap();
+        let mut buf_a = vec![0u8; 1024];
+        let mut buf_b = vec![0u8; 1024];
+
+        let mut c1 = seed.cipher();
+        c1.apply_keystream(&mut buf_a);
+        let mut c2 = seed.cipher();
+        c2.apply_keystream(&mut buf_b);
+        assert_eq!(buf_a, buf_b);
+    }
+
+    #[test]
+    fn prng_seed_cipher_try_seek_is_o1() {
+        // Verifies try_seek jumps to arbitrary offset and produces the same
+        // bytes as running the keystream forward from offset 0.
+        let seed = PrngSeed::generate().unwrap();
+
+        let mut full = vec![0u8; 100_000];
+        let mut full_cipher = seed.cipher();
+        full_cipher.apply_keystream(&mut full);
+
+        let mut jumped = vec![0u8; 4096];
+        let mut jumped_cipher = seed.cipher();
+        jumped_cipher.try_seek(50_000).unwrap();
+        jumped_cipher.apply_keystream(&mut jumped);
+
+        assert_eq!(&full[50_000..50_000 + 4096], &jumped[..]);
+    }
+
+    #[test]
+    fn full_verification_random_with_seed_detects_corruption() {
+        // Write ChaCha20(seed) data, corrupt one byte, then verify. With seed,
+        // FullVerification must catch the corruption (heuristic-only would
+        // miss it).
+        let mut temp = NamedTempFile::new().unwrap();
+        let seed = PrngSeed::generate().unwrap();
+        let mut expected = vec![0u8; 8192];
+        let mut cipher = seed.cipher();
+        cipher.apply_keystream(&mut expected);
+        // Inject a corruption: flip all bits of one byte. This guarantees
+        // the byte differs from the original (unlike setting to 0x00 which
+        // has a 1/256 chance of being the natural ChaCha20 output).
+        expected[4096] = !expected[4096];
+        temp.write_all(&expected).unwrap();
+        temp.flush().unwrap();
+
+        let verifier = FullVerification;
+        let mut file = temp.reopen().unwrap();
+        let result = verifier
+            .verify(
+                &mut file,
+                &PatternType::Random,
+                8192,
+                Some(&seed),
+                temp.path(),
+            )
+            .unwrap();
+        assert!(
+            !result.passed,
+            "expected seeded verifier to detect corruption"
+        );
     }
 }

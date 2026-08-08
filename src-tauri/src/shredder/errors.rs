@@ -23,21 +23,15 @@ pub enum ShredError {
         kind: String,
         message: String,
     },
-
-    #[error("Verification failed at pass {pass}: {path}")]
-    VerificationFailed { path: PathBuf, pass: u32 },
     // --- v2 variants (Phase 1, additive). Technical Display only, no UI
     // prose (M11) — presentation copy belongs to the frontend. ---
     // `HardLinkBlocked` is constructed by root-execution preflight (Phase 2);
-    // `UnsupportedStorageForMethod` by storage preflight (Phase 3). Both are
-    // deliberately forward-declared so Task 1.1 compiles standalone.
+    // `UnsupportedStorageForMethod` by storage preflight (Phase 3).
     // `BrowserCollectionFailed` is constructed by the browser collectors
-    // (Phase 3) and is forward-declared here for the same reason.
-    #[allow(dead_code)]
+    // (Phase 3).
     #[error("hard link blocked at {path}: link count {count}")]
     HardLinkBlocked { path: PathBuf, count: u64 },
 
-    #[allow(dead_code)]
     #[error("unsupported storage for method {method:?} at {path}: media type {media:?}")]
     UnsupportedStorageForMethod {
         path: PathBuf,
@@ -48,7 +42,6 @@ pub enum ShredError {
     #[error("write check failed at {path}")]
     WriteCheckFailed { path: PathBuf },
 
-    #[allow(dead_code)]
     #[error("browser data collection failed at {path}: {detail}")]
     BrowserCollectionFailed { path: PathBuf, detail: String },
 

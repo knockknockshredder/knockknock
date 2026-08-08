@@ -6,36 +6,6 @@ use crate::shredder::verification::PrngSeed;
 use std::fs::File;
 use std::path::Path;
 
-/// Trait that all shredding algorithms must implement
-pub trait ShredAlgorithm: Send + Sync {
-    fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    fn default_passes(&self) -> u32;
-    fn max_passes(&self) -> u32;
-    fn accepted_patterns(&self) -> &'static [PatternType];
-
-    fn has_fixed_pattern_sequence(&self) -> bool {
-        false
-    }
-
-    /// For fixed-sequence algorithms, return the pattern used in the final pass.
-    /// Default: returns the user-selected pattern.
-    fn final_pattern(&self, user_pattern: PatternType) -> PatternType {
-        user_pattern
-    }
-
-    fn shred(
-        &self,
-        file: &mut File,
-        file_size: u64,
-        passes: u32,
-        pattern: PatternType,
-        progress: &dyn ProgressReporter,
-        seed: Option<&PrngSeed>,
-        path: &Path,
-    ) -> Result<ShredResult, ShredError>;
-}
-
 /// Trait for verification strategies
 pub trait VerificationStrategy: Send + Sync {
     fn verify(

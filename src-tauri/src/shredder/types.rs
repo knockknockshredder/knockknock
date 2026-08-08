@@ -56,35 +56,11 @@ pub struct VerificationResult {
     pub passed: bool,
 }
 
-/// Information about a hard link
-#[derive(Debug)]
-pub struct HardLinkInfo {
-    pub link_count: u32,
-}
-
 /// Information about a process holding a file lock
 #[derive(Debug, Clone, Serialize)]
 pub struct ProcessInfo {
     pub pid: u32,
     pub name: String,
-}
-
-/// Summary report after batch shredding
-#[derive(Debug, Serialize)]
-pub struct ShredReport {
-    pub total_files: usize,
-    pub successful: usize,
-    pub failed: usize,
-    pub skipped: usize,
-    pub errors: Vec<ShredReportError>,
-    pub total_bytes_shredded: u64,
-    pub duration_secs: f64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ShredReportError {
-    pub path: String,
-    pub error: String,
 }
 
 /// Progress event sent to frontend
@@ -100,18 +76,9 @@ pub struct ProgressEvent {
     pub status: ShredStatus,
 }
 
-/// Verification levels (user-configurable)
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum VerificationLevel {
-    None,
-    Sample,
-    Full,
-}
-
 // ---------------------------------------------------------------------------
-// v2 policy model (Phase 1, additive). The legacy VerificationLevel /
-// PatternType / ShredResult types above stay live until the Phase 4 cutover.
+// v2 policy model (Phase 1, additive). The legacy PatternType / ShredResult
+// types above stay live for the progress/verification machinery (M8).
 // ---------------------------------------------------------------------------
 
 /// Deletion method (v2): how many logical overwrite passes a file receives
@@ -184,9 +151,6 @@ impl DeletionPolicy {
 /// Storage validation rule (v2 preflight, M7): the legacy 3-pass method is
 /// only permitted on confirmed HDD media; Automatic has no media restriction.
 /// Pure rule — callers (root execution) enforce it before any mutation.
-/// Consumed by the root-execution preflight in Phase 3 (Task 3.1); tests
-/// exercise it from Phase 1.
-#[allow(dead_code)]
 pub(crate) fn validate_storage_for_method(
     method: DeletionMethod,
     media: MediaType,

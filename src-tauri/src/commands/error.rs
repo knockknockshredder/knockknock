@@ -84,10 +84,6 @@ fn extract_path_and_action(err: &ShredError) -> (Option<String>, String) {
                 format!("Check disk health, free space, and file integrity. ({})", detail),
             )
         }
-        ShredError::VerificationFailed { path, .. } => (
-            Some(path.to_string_lossy().into_owned()),
-            "Overwrite verification failed. Retry the operation; if it persists, the disk may be failing.".to_string(),
-        ),
         ShredError::HardLinkBlocked { path, count } => (
             Some(path.to_string_lossy().into_owned()),
             format!(
@@ -102,6 +98,9 @@ fn extract_path_and_action(err: &ShredError) -> (Option<String>, String) {
             Some(path.to_string_lossy().into_owned()),
             "The requested write check did not pass after the overwrite. Review the result before assuming the overwrite verified.".to_string(),
         ),
+        // The browser collectors construct this variant (M9); it never reaches
+        // this mapper in production because browser commands cross IPC as
+        // `String`, but the arm is required for match exhaustiveness.
         ShredError::BrowserCollectionFailed { path, .. } => (
             Some(path.to_string_lossy().into_owned()),
             "Browser data collection failed during cleanup. Check that the profile directory is readable and retry.".to_string(),
@@ -146,7 +145,6 @@ fn error_type_name(err: &ShredError) -> String {
         ShredError::PermissionDenied(_) => "PermissionDenied",
         ShredError::FileLocked { .. } => "FileLocked",
         ShredError::IoError { .. } => "IoError",
-        ShredError::VerificationFailed { .. } => "VerificationFailed",
         ShredError::HardLinkBlocked { .. } => "HardLinkBlocked",
         ShredError::UnsupportedStorageForMethod { .. } => "UnsupportedStorageForMethod",
         ShredError::WriteCheckFailed { .. } => "WriteCheckFailed",
@@ -208,10 +206,6 @@ mod tests {
                 path: PathBuf::from("a"),
                 kind: "Other".into(),
                 message: "boom".into(),
-            },
-            ShredError::VerificationFailed {
-                path: PathBuf::from("a"),
-                pass: 1,
             },
             ShredError::HardLinkBlocked {
                 path: PathBuf::from("a"),
