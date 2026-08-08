@@ -80,7 +80,6 @@ pub fn run() {
             commands::shred::execute_roots,
             commands::shred::cancel_shred,
             commands::shred::cleanup_orphans,
-            commands::shred::get_algorithms,
             commands::shred::validate_paths,
             commands::shred::open_files_windows,
             commands::shred::open_folders_windows,

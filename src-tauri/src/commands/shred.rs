@@ -1,7 +1,6 @@
 // src-tauri/src/commands/shred.rs
 
 use crate::drive::{self, DriveInfo};
-use crate::shredder::algorithms::all_algorithms;
 use crate::shredder::cancel::CancellationToken;
 use crate::shredder::journal::JournalStore;
 use crate::shredder::logging::LogObfuscation;
@@ -13,7 +12,7 @@ use crate::shredder::types::*;
 use crate::shredder::validation::{
     classify_path, is_network_drive, validate_path, PathClassification,
 };
-use crate::shredder::{PolicyFileShredder, VerificationLevel};
+use crate::shredder::PolicyFileShredder;
 use std::sync::Arc;
 use tauri::AppHandle;
 
@@ -21,10 +20,8 @@ use tauri::AppHandle;
 pub async fn execute_roots(
     app: AppHandle,
     request: ExecuteRootsRequest,
-    algorithm_index: usize,
-    passes: u32,
-    pattern: PatternType,
-    verification_level: VerificationLevel,
+    method: DeletionMethod,
+    write_check: WriteCheck,
     log_obfuscation: String,
 ) -> Result<BatchRootResult, String> {
     let obfuscation = match log_obfuscation.as_str() {
@@ -32,20 +29,7 @@ pub async fn execute_roots(
         "partial_mask" => LogObfuscation::PartialMask,
         _ => LogObfuscation::None,
     };
-
-    // Transitional IPC shim (ORACLE-0 M4; removed in Phase 4): map the
-    // legacy argument surface to the v2 policy. `passes` is validated for
-    // bounds but otherwise ignored — the engine derives its pass plan from
-    // the policy. `pattern` is ignored entirely (the policy model has no
-    // selectable pattern).
-    let policy = policy_from_legacy_args(algorithm_index, verification_level)?;
-    if passes == 0 || passes > 3 {
-        return Err(format!(
-            "Passes {} is outside the supported range 1..=3",
-            passes
-        ));
-    }
-    let _ = pattern;
+    let policy = DeletionPolicy { method, write_check };
 
     // Reset cancellation token for fresh operation
     crate::shredder::cancel::reset_global();
@@ -60,28 +44,6 @@ pub async fn execute_roots(
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))
-}
-
-/// Map the legacy IPC argument surface to the v2 deletion policy
-/// (transitional shim, ORACLE-0 M4; removed in Phase 4). Legacy algorithm
-/// index 1 (DoD 5220.22-M) maps to the fixed 3-pass method; indexes 0
-/// (NIST 800-88 Clear) and 2 (Random Only) both map to Automatic (single
-/// random pass). Unknown indexes are rejected fail-closed.
-fn policy_from_legacy_args(
-    algorithm_index: usize,
-    verification_level: VerificationLevel,
-) -> Result<DeletionPolicy, String> {
-    let method = match algorithm_index {
-        0 | 2 => DeletionMethod::Automatic,
-        1 => DeletionMethod::LegacyThreePass,
-        _ => return Err(format!("Invalid algorithm index: {algorithm_index}")),
-    };
-    let write_check = match verification_level {
-        VerificationLevel::None => WriteCheck::Off,
-        VerificationLevel::Sample => WriteCheck::Spot,
-        VerificationLevel::Full => WriteCheck::Full,
-    };
-    Ok(DeletionPolicy { method, write_check })
 }
 
 /// Build the platform's secure tree adapter. Only Windows and Unix adapters
@@ -202,38 +164,6 @@ pub fn cleanup_orphans() -> Result<Vec<String>, String> {
         .iter()
         .map(|e| format!("Orphaned: {:?}", e.renamed_path))
         .collect())
-}
-
-#[derive(serde::Serialize)]
-pub struct AlgorithmInfo {
-    pub index: usize,
-    pub name: String,
-    pub description: String,
-    pub default_passes: u32,
-    pub max_passes: u32,
-    pub accepted_patterns: Vec<String>,
-    pub has_fixed_pattern_sequence: bool,
-}
-
-#[tauri::command]
-pub fn get_algorithms() -> Vec<AlgorithmInfo> {
-    all_algorithms()
-        .iter()
-        .enumerate()
-        .map(|(i, algo)| AlgorithmInfo {
-            index: i,
-            name: algo.name().to_string(),
-            description: algo.description().to_string(),
-            default_passes: algo.default_passes(),
-            max_passes: algo.max_passes(),
-            accepted_patterns: algo
-                .accepted_patterns()
-                .iter()
-                .map(|p| format!("{:?}", p))
-                .collect(),
-            has_fixed_pattern_sequence: algo.has_fixed_pattern_sequence(),
-        })
-        .collect()
 }
 
 /// Collect metadata for a single file path.
@@ -671,35 +601,9 @@ mod tests {
         BatchRootResult, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage, RootStatus,
         TargetAvailability, TargetKind, VaultTarget,
     };
-    use crate::shredder::types::{DeletionMethod, DeletionPolicy, VerificationLevel, WriteCheck};
+    use crate::shredder::types::{DeletionMethod, DeletionPolicy, WriteCheck};
     use std::path::PathBuf;
     use std::sync::Arc;
-
-    #[test]
-    fn legacy_command_args_map_to_policy() {
-        assert_eq!(
-            super::policy_from_legacy_args(0, VerificationLevel::None).unwrap(),
-            DeletionPolicy {
-                method: DeletionMethod::Automatic,
-                write_check: WriteCheck::Off,
-            }
-        );
-        assert_eq!(
-            super::policy_from_legacy_args(1, VerificationLevel::Sample).unwrap(),
-            DeletionPolicy {
-                method: DeletionMethod::LegacyThreePass,
-                write_check: WriteCheck::Spot,
-            }
-        );
-        assert_eq!(
-            super::policy_from_legacy_args(2, VerificationLevel::Full).unwrap(),
-            DeletionPolicy {
-                method: DeletionMethod::Automatic,
-                write_check: WriteCheck::Full,
-            }
-        );
-        assert!(super::policy_from_legacy_args(3, VerificationLevel::None).is_err());
-    }
 
     /// A real directory under the real home directory (root execution refuses
     /// roots outside the home directory), removed on drop.
