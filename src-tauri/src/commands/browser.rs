@@ -43,8 +43,6 @@ pub async fn shred_browser_data(
         Arc::new(TauriProgressReporter::new(app, LogObfuscation::None));
     let journal = JournalStore::portable().map_err(|error| error.to_string())?;
 
-    // Fresh cancellation token per operation (mirrors `execute_roots`).
-    crate::shredder::cancel::reset_global();
     let cancel = crate::shredder::cancel::get_global_token();
 
     tokio::task::spawn_blocking(move || shred_browser_core(request, progress, &cancel, &journal))

@@ -79,6 +79,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::shred::execute_roots,
             commands::shred::cancel_shred,
+            commands::shred::begin_shred_operation,
+            commands::shred::is_shred_operation_cancelled,
             commands::shred::cleanup_orphans,
             commands::shred::validate_paths,
             commands::shred::open_files_windows,

@@ -34,8 +34,6 @@ pub async fn execute_roots(
         write_check,
     };
 
-    // Reset cancellation token for fresh operation
-    crate::shredder::cancel::reset_global();
     let cancel = crate::shredder::cancel::get_global_token();
 
     let progress: Arc<dyn ProgressReporter> =
@@ -100,6 +98,16 @@ pub(crate) fn execute_roots_core(
 #[tauri::command]
 pub fn cancel_shred() {
     crate::shredder::cancel::cancel_global();
+}
+
+#[tauri::command]
+pub fn begin_shred_operation() {
+    crate::shredder::cancel::begin_global_operation();
+}
+
+#[tauri::command]
+pub fn is_shred_operation_cancelled() -> bool {
+    crate::shredder::cancel::is_global_operation_cancelled()
 }
 
 /// Re-launch the current executable with administrator privileges.
