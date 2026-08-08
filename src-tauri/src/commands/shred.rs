@@ -29,7 +29,10 @@ pub async fn execute_roots(
         "partial_mask" => LogObfuscation::PartialMask,
         _ => LogObfuscation::None,
     };
-    let policy = DeletionPolicy { method, write_check };
+    let policy = DeletionPolicy {
+        method,
+        write_check,
+    };
 
     // Reset cancellation token for fresh operation
     crate::shredder::cancel::reset_global();

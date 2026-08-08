@@ -7,8 +7,8 @@ use crate::shredder::journal::JournalStore;
 use crate::shredder::logging::LogObfuscation;
 use crate::shredder::progress::TauriProgressReporter;
 use crate::shredder::root_execution::types::{ExecuteRootRequest, ExecuteRootsRequest, TargetKind};
-use crate::shredder::types::DeletionPolicy;
 use crate::shredder::traits::ProgressReporter;
+use crate::shredder::types::DeletionPolicy;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -235,7 +235,9 @@ fn is_dir_nofollow(path: &std::path::Path) -> bool {
 /// collection candidate (M9).
 fn is_regular_file_nofollow(path: &std::path::Path) -> bool {
     match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata.file_type().is_file() && !browser::paths::is_link_metadata(&metadata),
+        Ok(metadata) => {
+            metadata.file_type().is_file() && !browser::paths::is_link_metadata(&metadata)
+        }
         Err(_) => false,
     }
 }
@@ -343,10 +345,7 @@ fn collect_files_recursive_excluding_nofollow(
     Ok(())
 }
 
-fn collection_error(
-    path: &std::path::Path,
-    error: &std::io::Error,
-) -> crate::shredder::ShredError {
+fn collection_error(path: &std::path::Path, error: &std::io::Error) -> crate::shredder::ShredError {
     crate::shredder::ShredError::BrowserCollectionFailed {
         path: path.to_path_buf(),
         detail: error.to_string(),
@@ -382,7 +381,10 @@ mod tests {
     use std::path::Path;
 
     /// Collects the given data types from `profile_path` into a sorted list.
-    fn collect(profile_path: &Path, data_types: &[BrowserDataType]) -> Result<Vec<PathBuf>, String> {
+    fn collect(
+        profile_path: &Path,
+        data_types: &[BrowserDataType],
+    ) -> Result<Vec<PathBuf>, String> {
         let mut files = Vec::new();
         for data_type in data_types {
             collect_browser_data_files(profile_path, data_type, &mut files)
@@ -467,8 +469,7 @@ mod tests {
         let locked = profile.join("locked");
         std::fs::create_dir(&locked).expect("create locked dir");
         write(&locked.join("inside.txt"), b"inside");
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
-            .expect("chmod 0");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod 0");
 
         let error = collect(&profile, &[BrowserDataType::Profile]).expect_err("must fail");
         assert!(
@@ -497,12 +498,12 @@ mod tests {
 
         let files = collect(&profile, &[BrowserDataType::Cookies]).expect("collect");
 
-        let mut expected = vec![
-            profile.join("Cookies"),
-            profile.join("Network/Cookies"),
-        ];
+        let mut expected = vec![profile.join("Cookies"), profile.join("Network/Cookies")];
         expected.sort();
-        assert_eq!(files, expected, "the cookies.txt symlink must not be collected");
+        assert_eq!(
+            files, expected,
+            "the cookies.txt symlink must not be collected"
+        );
         assert_eq!(
             std::fs::read(&outside.join("secret.txt")).expect("outside readable"),
             b"secret payload",
@@ -608,7 +609,10 @@ mod tests {
             .roots
             .iter()
             .all(|root| root.status == RootStatus::Destroyed));
-        assert!(!profile.join("top.txt").exists(), "top file must be removed");
+        assert!(
+            !profile.join("top.txt").exists(),
+            "top file must be removed"
+        );
         assert!(
             !profile.join("a/b/deep.txt").exists(),
             "nested file must be removed"
@@ -653,7 +657,10 @@ mod tests {
 
         assert_eq!(result.roots.len(), 1, "the link must not be collected");
         assert_eq!(result.roots[0].status, RootStatus::Destroyed);
-        assert!(!profile.join("real.txt").exists(), "real file must be removed");
+        assert!(
+            !profile.join("real.txt").exists(),
+            "real file must be removed"
+        );
         assert!(
             profile.join("link_dir").symlink_metadata().is_ok(),
             "the link itself must remain"
@@ -678,8 +685,7 @@ mod tests {
         let locked = profile.join("locked");
         std::fs::create_dir(&locked).expect("create locked dir");
         write(&locked.join("inside.txt"), b"inside");
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
-            .expect("chmod 0");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod 0");
 
         let error = run(request(&profile, vec![BrowserDataType::Profile], false))
             .expect_err("cleanup must fail");
@@ -707,8 +713,12 @@ mod tests {
         let link_profile = home.0.join("profile-link");
         std::os::unix::fs::symlink(&real_profile, &link_profile).expect("create symlink");
 
-        let error = run(request(&link_profile, vec![BrowserDataType::Profile], false))
-            .expect_err("cleanup must be blocked");
+        let error = run(request(
+            &link_profile,
+            vec![BrowserDataType::Profile],
+            false,
+        ))
+        .expect_err("cleanup must be blocked");
         assert!(
             error.contains("filesystem link; cleanup is blocked"),
             "unexpected error: {error}"
