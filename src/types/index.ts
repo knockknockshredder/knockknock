@@ -148,7 +148,6 @@ export type ExecutionStage =
   | "overwrite"
   | "verify"
   | "rename"
-  | "truncate"
   | "delete"
   | "directory_remove"
   | "journal"
