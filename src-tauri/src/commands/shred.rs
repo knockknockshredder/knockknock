@@ -666,11 +666,6 @@ mod tests {
     }
 
     fn run(request: ExecuteRootsRequest) -> BatchRootResult {
-        // `execute_roots_core` reaches the legacy engine, whose hot loop
-        // polls process-global compatibility cancellation state. Serialize
-        // this path with every other test that can poll or mutate that state.
-        // The guard clears it before execution and on every exit path.
-        let _state = crate::shredder::cancel::global_state_test_guard();
         let journal_directory = tempfile::tempdir().expect("temporary journal directory");
         let journal = JournalStore::at(journal_directory.path().join("journal.json"));
         execute_roots_core(

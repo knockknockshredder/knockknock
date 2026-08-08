@@ -496,9 +496,9 @@ It is not proof of physical-media sanitization, and no mode is ranked as providi
 
 ## Cancellation
 
-Cancellation is coordinated through a shared cancellation token observed at write-chunk and file boundaries.
+Cancellation is coordinated through a shared cancellation token observed at safe file and root boundaries.
 
-Stop is stop-after-current-file: the file currently being processed completes its destructive lifecycle and cleanup, and no further file or target is started. On large files, cancellation latency is bounded by the time to finish the current file.
+Stop is stop-after-current-file: an active file completes its overwrite passes, optional final check, journal, rename, and deletion before Stop takes effect. No further file or target is started. On large files, cancellation latency is bounded by the time to finish the current file.
 
 The design intentionally does not present cancellation as data restoration.
 

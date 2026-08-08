@@ -334,8 +334,9 @@ enum FakeShredOutcome {
     /// Completed overwrite with a failed final write check: removal still
     /// proceeds, but the root must never be a clean Destroyed.
     CompletedCheckFailed,
-    /// Partial overwrite with a cancelled issue: cleanup still proceeds.
-    Partial,
+    /// Partial overwrite after a real post-write I/O error: cleanup still
+    /// proceeds and the original issue remains visible.
+    PartialPostWriteError,
     /// Zero-length vacuous completion or Off write check: nothing to report.
     CompletedNoCheck,
     /// Hard shredder error before any byte was written (NotStarted
@@ -399,14 +400,14 @@ impl OpenFileShredder for FakeShredder {
                 bytes_shredded: 7,
                 issues: vec![ShredError::WriteCheckFailed { path }],
             }),
-            FakeShredOutcome::Partial => Ok(FileShredResult {
+            FakeShredOutcome::PartialPostWriteError => Ok(FileShredResult {
                 overwrite_state: OverwriteState::Partial,
                 write_check_status: WriteCheckOutcome::NotRun,
                 bytes_shredded: 7,
                 issues: vec![ShredError::IoError {
                     path,
-                    kind: "Cancelled".to_string(),
-                    message: "injected partial shredding".to_string(),
+                    kind: "injected_post_write".to_string(),
+                    message: "injected post-write failure".to_string(),
                 }],
             }),
             FakeShredOutcome::CompletedNoCheck => Ok(FileShredResult {
@@ -1600,15 +1601,19 @@ fn open_failure_is_per_file_issue_and_batch_continues() {
 }
 
 #[test]
-fn partial_failure_cleans_up_current_file() {
+fn post_write_error_yields_partial_and_cleans_up_current_file() {
     let parent = home_child("task22-partial");
     let root = parent.join("file");
     let io = FakeIo::new()
         .root(parent.clone(), 1, directory(1, vec![]))
         .root(root.clone(), 2, regular(2));
-    let shredder = FakeShredder::new().outcome(FakeShredOutcome::Partial);
+    let shredder = FakeShredder::new().outcome(FakeShredOutcome::PartialPostWriteError);
     let directory = tempfile::tempdir().expect("temporary directory");
-    let journal = JournalStore::at(directory.path().join("journal.json"));
+    let journal_io = Arc::new(RecordingJournalIo::new());
+    let journal = JournalStore::with_io(
+        directory.path().join("journal.json"),
+        Arc::clone(&journal_io) as Arc<dyn JournalIo>,
+    );
 
     let result = run_with_journal(
         ExecuteRootsRequest {
@@ -1620,7 +1625,7 @@ fn partial_failure_cleans_up_current_file() {
     );
 
     // The partially overwritten file still completes its destructive
-    // lifecycle (M2 rule 2): rename/unlink run, the partial-destruction
+    // lifecycle (M2 rule 2): rename/unlink run, the original post-write
     // issue is preserved with the Overwrite stage, and the root is never a
     // clean Destroyed.
     let root_result = &result.roots[0];
@@ -1630,12 +1635,21 @@ fn partial_failure_cleans_up_current_file() {
     assert_eq!(root_result.write_check, WriteCheckOutcome::NotRun);
     assert!(root_result.errors.iter().any(|error| {
         error.stage == ExecutionStage::Overwrite
-            && error.message.contains("injected partial shredding")
+            && error.message.contains("injected post-write failure")
     }));
     let events = io.events();
     let events = events.lock().unwrap();
     assert!(events.calls.iter().any(|call| call == "rename"));
     assert!(events.calls.iter().any(|call| call == "unlink"));
+    assert_eq!(
+        journal_io
+            .ops()
+            .iter()
+            .filter(|op| *op == "write_temp")
+            .count(),
+        2,
+        "the partial file must append and clear its journal entry"
+    );
 }
 
 #[test]
@@ -1931,7 +1945,11 @@ fn stop_during_file_a_completes_a_skips_b_c() {
     let io = io.cancel_on_nth("open_regular", 1, cancel.clone());
     let shredder = FakeShredder::new();
     let directory = tempfile::tempdir().expect("temporary directory");
-    let journal = JournalStore::at(directory.path().join("journal.json"));
+    let journal_io = Arc::new(RecordingJournalIo::new());
+    let journal = JournalStore::with_io(
+        directory.path().join("journal.json"),
+        Arc::clone(&journal_io) as Arc<dyn JournalIo>,
+    );
 
     let result = run_full(
         ExecuteRootsRequest {
@@ -1955,6 +1973,9 @@ fn stop_during_file_a_completes_a_skips_b_c() {
     assert_eq!(root_result.files_destroyed, 1);
     assert_eq!(root_result.bytes_shredded, 7);
     assert!(root_result.errors.is_empty());
+    let shred_calls = shredder.calls.lock().unwrap();
+    assert_eq!(shred_calls.len(), 1, "only A may start overwrite");
+    assert_eq!(shred_calls[0].diagnostic_path(), root.join("a"));
     let events = io.events();
     let events = events.lock().unwrap();
     assert_eq!(
@@ -1973,6 +1994,79 @@ fn stop_during_file_a_completes_a_skips_b_c() {
             .count(),
         1
     );
+    assert_eq!(
+        events
+            .calls
+            .iter()
+            .filter(|call| *call == "remove_dir")
+            .count(),
+        0,
+        "the cancelled root must not begin directory cleanup"
+    );
+    let journal_ops = journal_io.ops();
+    assert_eq!(
+        journal_ops.iter().filter(|op| *op == "write_temp").count(),
+        2,
+        "A must append and clear exactly one journal entry"
+    );
+}
+
+#[test]
+fn stop_before_root_start_skips_all_destructive_processing() {
+    let root = home_child("task24-stop-before-root");
+    let io = FakeIo::new()
+        .root(root.clone(), 1, directory(1, vec![(2, "a")]))
+        .add_node(2, regular(2));
+    let shredder = FakeShredder::new();
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let journal_io = Arc::new(RecordingJournalIo::new());
+    let journal = JournalStore::with_io(
+        directory.path().join("journal.json"),
+        Arc::clone(&journal_io) as Arc<dyn JournalIo>,
+    );
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+
+    let result = run_full(
+        ExecuteRootsRequest {
+            roots: vec![root_request("stop", &root, TargetKind::Directory)],
+        },
+        DeletionPolicy::default(),
+        &io,
+        &shredder,
+        &journal,
+        &NoopProgressReporter,
+        &cancel,
+        &automatic_classifier(),
+    );
+
+    let root_result = &result.roots[0];
+    assert_eq!(root_result.status, RootStatus::Cancelled);
+    assert!(!root_result.root_removed);
+    assert_eq!(root_result.files_destroyed, 0);
+    assert_eq!(root_result.directories_removed, 0);
+    assert_eq!(root_result.bytes_shredded, 0);
+    assert!(root_result.errors.is_empty());
+    assert!(
+        shredder.calls.lock().unwrap().is_empty(),
+        "no overwrite may start"
+    );
+    let events = io.events();
+    let events = events.lock().unwrap();
+    assert!(
+        events
+            .calls
+            .iter()
+            .any(|call| call.starts_with("open_root:")),
+        "preflight inspection may still open the root"
+    );
+    assert!(!events.calls.iter().any(|call| {
+        matches!(
+            call.as_str(),
+            "open_regular" | "rename" | "unlink" | "remove_dir"
+        )
+    }));
+    assert!(journal_io.ops().is_empty(), "no journal append may occur");
 }
 
 #[test]
@@ -2138,7 +2232,6 @@ fn zero_length_emits_no_pass_events_and_valid_completion() {
 
 #[test]
 fn legacy_progress_never_exceeds_100_percent() {
-    let _state = crate::shredder::cancel::global_state_test_guard();
     let parent = home_child("task25-legacy-progress");
     let root = parent.join("file");
     let io = FakeIo::new()
@@ -2205,7 +2298,6 @@ fn legacy_progress_never_exceeds_100_percent() {
 
 #[test]
 fn automatic_progress_within_bounds() {
-    let _state = crate::shredder::cancel::global_state_test_guard();
     let parent = home_child("task25-automatic-progress");
     let root = parent.join("file");
     let io = FakeIo::new()

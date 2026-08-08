@@ -53,15 +53,6 @@ pub(crate) fn write_pass(
     let mut cipher = seed.map(|s| s.cipher());
 
     while remaining > 0 {
-        // Check cancellation between chunks (chunk size = buffer.len or remaining)
-        if crate::shredder::cancel::is_cancelled_global() {
-            return Err(ShredError::IoError {
-                path: path.to_path_buf(),
-                kind: "Cancelled".to_string(),
-                message: "Shredding cancelled during write".to_string(),
-            });
-        }
-
         let to_write = std::cmp::min(remaining, buffer.len() as u64) as usize;
 
         // Fill buffer based on pattern at absolute file position `written`.
@@ -124,11 +115,9 @@ fn fill_pattern_buffer(
 /// `NotStarted` is never returned in an `Ok` outcome: a failure before any
 /// byte was written is returned as `Err`, and the caller must treat `Err`
 /// as `NotStarted` (target intact — no cleanup). `Partial` means the
-/// overwrite did not complete with at least one byte written — or was
-/// cancelled with none written, since the cancel flag may have been
-/// observed mid-chunk and the engine errs toward cleanup (recorded
-/// deviation) — the caller MUST run best-effort cleanup. `Completed` means
-/// every planned pass ran;
+/// overwrite did not complete because a real write or sync failure occurred
+/// after at least one byte was written — the caller MUST run best-effort
+/// cleanup. `Completed` means every planned pass ran;
 /// a failed final write check is still `Completed` with
 /// `write_check: Failed` and a `WriteCheckFailed` issue (M2 rule 3) — the
 /// file's removal continues.
@@ -168,8 +157,8 @@ pub(crate) fn pass_plan(method: DeletionMethod) -> Vec<PatternType> {
 /// # Error contract (M2)
 /// - `Err` means "no chunk completed": no byte of any pass reached the file
 ///   (state would be `NotStarted`; target intact — the caller must NOT
-///   journal/rename). A non-cancel `write_pass` failure is classified by
-///   recovering the handle cursor (`write_pass` seeks to 0 and writes
+///   journal/rename). A `write_pass` failure is classified by recovering the
+///   handle cursor (`write_pass` seeks to 0 and writes
 ///   sequentially, so the cursor is the interrupted pass's byte count):
 ///   cursor 0 with no completed pass → `Err`; anything else → `Ok(Partial)`.
 /// - `Ok(Partial)` with the issue preserved in `issues`: at least one byte
@@ -179,14 +168,10 @@ pub(crate) fn pass_plan(method: DeletionMethod) -> Vec<PatternType> {
 ///   pushed; removal still continues).
 ///
 /// # Cancellation
-/// `write_pass` keeps its legacy per-chunk global cancel check. A mid-pass
-/// stop surfaces as a `Cancelled` `write_pass` error and yields a `Partial`
-/// outcome (even when no completed pass exists and no byte was written,
-/// because the flag may have been observed mid-chunk — the engine errs
-/// toward cleanup): the caller runs best-effort cleanup for the current
-/// file, and the batch layer stops at the next boundary (stop-after-current-
-/// file). Any interrupted pass — cancelled or errored — skips the final
-/// `sync_all` and write check entirely (`write_check: NotRun`).
+/// `write_pass` never observes cancellation. The root execution layer checks
+/// its cancellation token before each file or root begins, so an active file
+/// completes every pass, sync, optional final write check, and destructive
+/// cleanup before Stop takes effect at the next safe boundary.
 ///
 /// # Progress (M5)
 /// `on_pass_start(pass, total)` / `on_pass_complete(pass, total)` with
@@ -274,10 +259,6 @@ pub(crate) fn overwrite_file_with_seed(
                 progress.on_pass_complete(pass, total_passes);
             }
             Err(error) => {
-                let cancelled = matches!(
-                    error,
-                    ShredError::IoError { ref kind, .. } if kind == "Cancelled"
-                );
                 // `write_pass` reports no partial byte count on error, so
                 // recover how much of the interrupted pass reached the file
                 // from the handle cursor: `write_pass` seeks to 0 at the
@@ -289,16 +270,13 @@ pub(crate) fn overwrite_file_with_seed(
                     .stream_position()
                     .map(|pos| pos.min(file_size))
                     .unwrap_or(file_size);
-                if !cancelled && bytes_written_total == 0 && pass_bytes == 0 {
+                if bytes_written_total == 0 && pass_bytes == 0 {
                     // No byte of any pass reached the file: target intact.
                     // `Err` means "no chunk completed" (NotStarted).
                     return Err(error);
                 }
-                // `Cancelled` always yields Partial (the flag may have been
-                // observed mid-chunk; erring toward cleanup per the
-                // destructive-lifecycle contract — recorded deviation).
-                // Non-cancel errors yield Partial once any byte was written.
-                // The final sync/write check must NEVER run after an
+                // A real write failure after any byte was modified yields
+                // Partial. The final sync/write check must NEVER run after an
                 // interrupted pass: the caller decides cleanup from
                 // `state == Partial` (M2).
                 issues.push(error);
@@ -405,8 +383,7 @@ mod tests {
 
     /// Recording progress reporter: captures pass events and progress calls.
     /// With `cancel_on_first_progress` set, the first `on_progress` call
-    /// additionally fires the global cancel flag — the flag takes effect
-    /// mid-pass because `write_pass` reports after each 1 MiB chunk.
+    /// additionally requests cancellation through the current global session.
     #[derive(Default)]
     struct RecordingProgress {
         pass_starts: Mutex<Vec<(u32, u32)>>,
@@ -464,7 +441,6 @@ mod tests {
 
     #[test]
     fn automatic_seeded_overwrite_matches_expected_stream() {
-        let _serial = engine_test_lock();
         let mut temp = NamedTempFile::new().unwrap();
         temp.write_all(&[0xAA; 256 * KIB as usize]).unwrap();
         temp.flush().unwrap();
@@ -496,7 +472,6 @@ mod tests {
 
     #[test]
     fn legacy_seeded_overwrite_matches_pass3_stream() {
-        let _serial = engine_test_lock();
         let mut temp = NamedTempFile::new().unwrap();
         temp.write_all(&[0xAA; 256 * KIB as usize]).unwrap();
         temp.flush().unwrap();
@@ -535,7 +510,6 @@ mod tests {
 
     #[test]
     fn write_pass_writes_fixed_patterns_and_seeded_random() {
-        let _serial = engine_test_lock();
         let seed = PrngSeed {
             key: [5u8; 32],
             nonce: [6u8; 12],
@@ -572,7 +546,6 @@ mod tests {
 
     #[test]
     fn zero_length_file_returns_vacuous_completed() {
-        let _serial = engine_test_lock();
         let temp = NamedTempFile::new().unwrap();
         let mut file = temp.reopen().unwrap();
         let progress = NoopProgressReporter;
@@ -595,7 +568,6 @@ mod tests {
 
     #[test]
     fn write_check_read_error_yields_completed_with_failed() {
-        let _serial = engine_test_lock();
         // A write-only handle accepts the overwrite but cannot be read back:
         // the final check fails with a read error, which must surface as an
         // Ok(Completed) outcome with write_check Failed + a WriteCheckFailed
@@ -632,7 +604,6 @@ mod tests {
 
     #[test]
     fn overwrite_on_read_only_handle_errors_and_leaves_file_intact() {
-        let _serial = engine_test_lock();
         let mut temp = NamedTempFile::new().unwrap();
         let original = vec![0xAAu8; 256 * KIB as usize];
         temp.write_all(&original).unwrap();
@@ -655,30 +626,16 @@ mod tests {
         assert_eq!(read_all(&reopened), original, "file must be intact");
     }
 
-    /// The global cancel flag is process-wide state, and `write_pass` checks
-    /// it before every chunk. A test that fires it must therefore never run
-    /// concurrently with lifecycle tests. The shared guard also clears it on
-    /// every exit path so the module is deterministic under the default
-    /// parallel test harness.
-    fn engine_test_lock() -> crate::shredder::cancel::GlobalStateTestGuard {
-        crate::shredder::cancel::global_state_test_guard()
-    }
-
     #[test]
-    fn automatic_mid_pass_cancel_reports_partial_and_skips_final_check() {
-        let _serial = engine_test_lock();
-        // The global flag is process-wide state: never assume a prior test
-        // left it clean. The guard resets it on every exit path.
-        crate::shredder::cancel::reset_global();
+    fn legacy_stop_during_first_progress_completes_all_passes_and_write_check() {
+        let _state = crate::shredder::cancel::global_state_test_guard();
+        crate::shredder::cancel::begin_global_operation();
 
         let mut temp = NamedTempFile::new().unwrap();
         temp.write_all(&vec![0xAAu8; 3 * MIB as usize]).unwrap();
         temp.flush().unwrap();
 
         let mut file = temp.reopen().unwrap();
-        // The first progress event (after the 1 MiB chunk completes) fires
-        // the global cancel flag; write_pass observes it before the next
-        // chunk and aborts the pass.
         let progress = RecordingProgress {
             cancel_on_first_progress: AtomicBool::new(true),
             ..Default::default()
@@ -686,75 +643,26 @@ mod tests {
         let outcome = overwrite_file(
             &mut file,
             3 * MIB,
-            automatic_policy(WriteCheck::Spot),
+            legacy_policy(WriteCheck::Full),
             &progress,
             temp.path(),
         )
         .unwrap();
 
-        assert_eq!(outcome.state, OverwriteState::Partial);
-        assert_eq!(
-            outcome.write_check,
-            WriteCheckOutcome::NotRun,
-            "the final write check must never run after an interrupted pass"
-        );
-        assert_eq!(outcome.passes_completed, 0);
-        assert_eq!(
-            outcome.bytes_written, MIB,
-            "the first 1 MiB chunk completed before the cancel fired"
-        );
+        assert_eq!(outcome.state, OverwriteState::Completed);
+        assert_eq!(outcome.passes_completed, 3);
+        assert_eq!(outcome.write_check, WriteCheckOutcome::Passed);
+        assert!(outcome.issues.is_empty());
         assert!(
-            outcome
-                .issues
-                .iter()
-                .any(|e| matches!(e, ShredError::IoError { ref kind, .. } if kind == "Cancelled")),
-            "expected a Cancelled issue, got {:?}",
-            outcome.issues
-        );
-    }
-
-    #[test]
-    fn legacy_cancel_before_first_pass_reports_partial_never_passed() {
-        let _serial = engine_test_lock();
-        crate::shredder::cancel::reset_global();
-        crate::shredder::cancel::cancel_global();
-
-        let mut temp = NamedTempFile::new().unwrap();
-        temp.write_all(&vec![0xAAu8; MIB as usize]).unwrap();
-        temp.flush().unwrap();
-
-        let mut file = temp.reopen().unwrap();
-        let progress = NoopProgressReporter;
-        let outcome = overwrite_file(
-            &mut file,
-            MIB,
-            legacy_policy(WriteCheck::Spot),
-            &progress,
-            temp.path(),
-        )
-        .unwrap();
-
-        assert_eq!(outcome.state, OverwriteState::Partial);
-        assert_eq!(
-            outcome.write_check,
-            WriteCheckOutcome::NotRun,
-            "a cancelled overwrite must never report a passed write check"
-        );
-        assert_eq!(outcome.bytes_written, 0);
-        assert_eq!(outcome.passes_completed, 0);
-        assert!(
-            outcome
-                .issues
-                .iter()
-                .any(|e| matches!(e, ShredError::IoError { ref kind, .. } if kind == "Cancelled")),
-            "expected a Cancelled issue, got {:?}",
-            outcome.issues
+            crate::shredder::cancel::get_global_token()
+                .expect("operation session exists")
+                .is_cancelled(),
+            "the progress reporter must request stop for the next file boundary"
         );
     }
 
     #[test]
     fn automatic_progress_is_pass_local_and_bounded() {
-        let _serial = engine_test_lock();
         let mut temp = NamedTempFile::new().unwrap();
         temp.write_all(&vec![0x00u8; 2 * MIB as usize]).unwrap();
         temp.flush().unwrap();
@@ -786,7 +694,6 @@ mod tests {
 
     #[test]
     fn legacy_progress_totals_three_and_stays_bounded() {
-        let _serial = engine_test_lock();
         let mut temp = NamedTempFile::new().unwrap();
         temp.write_all(&vec![0x00u8; 2 * MIB as usize]).unwrap();
         temp.flush().unwrap();
@@ -819,7 +726,6 @@ mod tests {
 
     #[test]
     fn zero_length_emits_no_pass_events() {
-        let _serial = engine_test_lock();
         let temp = NamedTempFile::new().unwrap();
         let mut file = temp.reopen().unwrap();
         let progress = RecordingProgress::default();

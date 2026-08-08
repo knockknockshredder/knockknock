@@ -105,13 +105,14 @@ mod tests {
     }
 
     #[test]
-    fn test_cancellation_global_reset() {
+    fn test_cancellation_global_session() {
         let _state = crate::shredder::cancel::global_state_test_guard();
-        crate::shredder::cancel::reset_global();
-        assert!(!crate::shredder::cancel::is_cancelled_global());
+        let token = crate::shredder::cancel::begin_global_operation();
+        assert!(!token.is_cancelled());
         crate::shredder::cancel::cancel_global();
-        assert!(crate::shredder::cancel::is_cancelled_global());
-        crate::shredder::cancel::reset_global();
-        assert!(!crate::shredder::cancel::is_cancelled_global());
+        assert!(token.is_cancelled());
+        assert!(crate::shredder::cancel::get_global_token()
+            .expect("operation session exists")
+            .is_cancelled());
     }
 }

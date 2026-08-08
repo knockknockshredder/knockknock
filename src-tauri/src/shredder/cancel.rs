@@ -23,16 +23,11 @@ impl CancellationToken {
 }
 
 static GLOBAL_TOKEN: Mutex<Option<CancellationToken>> = Mutex::new(None);
-// Lock-free global flag: hot loops (write_pass) check this without taking the
-// mutex. Kept consistent with the cached token via begin_global_operation,
-// cancel_global, and reset_global.
-static CANCELLED: AtomicBool = AtomicBool::new(false);
 
 pub fn begin_global_operation() -> CancellationToken {
     let mut guard = GLOBAL_TOKEN.lock().unwrap_or_else(|e| e.into_inner());
     let token = CancellationToken::new();
     *guard = Some(token.clone());
-    CANCELLED.store(false, Ordering::Relaxed);
     token
 }
 
@@ -51,21 +46,6 @@ pub fn cancel_global() {
     if let Some(token) = guard.as_ref() {
         token.cancel();
     }
-    // Keep this write under the token lock. Otherwise a cancellation of the
-    // previous session can set the compatibility flag after a new session has
-    // installed its token and cleared the flag.
-    CANCELLED.store(true, Ordering::Relaxed);
-}
-
-pub fn reset_global() {
-    let mut guard = GLOBAL_TOKEN.lock().unwrap_or_else(|e| e.into_inner());
-    *guard = Some(CancellationToken::new());
-    CANCELLED.store(false, Ordering::Relaxed);
-}
-
-/// Lock-free cancellation check for hot paths.
-pub fn is_cancelled_global() -> bool {
-    CANCELLED.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -96,7 +76,6 @@ pub(crate) fn global_state_test_guard() -> GlobalStateTestGuard {
 fn clear_global_state_for_test() {
     let mut guard = GLOBAL_TOKEN.lock().unwrap_or_else(|e| e.into_inner());
     *guard = None;
-    CANCELLED.store(false, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -136,18 +115,6 @@ mod tests {
         token.cancel();
         assert!(is_global_operation_cancelled());
         assert!(is_global_operation_cancelled());
-    }
-
-    #[test]
-    fn beginning_a_new_operation_clears_the_legacy_cancelled_flag() {
-        let _state = global_state_test_guard();
-        begin_global_operation();
-        cancel_global();
-        assert!(is_cancelled_global());
-
-        let token = begin_global_operation();
-        assert!(!token.is_cancelled());
-        assert!(!is_cancelled_global());
     }
 
     #[test]

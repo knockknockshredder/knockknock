@@ -584,11 +584,6 @@ mod tests {
     }
 
     fn run(request: BrowserShredRequest) -> Result<BatchRootResult, String> {
-        // `shred_browser_core` delegates to root execution, whose legacy
-        // engine path polls process-global compatibility cancellation state.
-        // The shared guard serializes that path and clears the state before
-        // execution and on every exit path.
-        let _state = crate::shredder::cancel::global_state_test_guard();
         let journal_directory = tempfile::tempdir().expect("temporary journal directory");
         let journal = JournalStore::at(journal_directory.path().join("journal.json"));
         shred_browser_core(

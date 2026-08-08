@@ -252,7 +252,7 @@ Zero-length files skip the overwrite, sync, and write-check stages and proceed d
 
 Cancelling an active operation does **not** undo work that has already occurred.
 
-KnockKnock stops at the next safe boundary: the file currently being processed completes its destructive lifecycle — including its cleanup — and no further file or target is started. The stop is checked between write chunks and at file boundaries, so on large files it can take some time to take effect.
+KnockKnock stops at the next safe boundary: the file currently being processed completes its overwrite passes, optional final check, and destructive cleanup before Stop takes effect. No further file or target is started. On large files, cancellation can take until the active file completes.
 
 > Do not use cancellation as a recovery mechanism.
 
