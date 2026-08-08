@@ -2,7 +2,6 @@
 
 use crate::shredder::types::{DeletionMethod, MediaType};
 use serde::Serialize;
-use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -13,9 +12,6 @@ pub enum ShredError {
 
     #[error("Permission denied: {0}")]
     PermissionDenied(PathBuf),
-
-    #[error("File locked by process '{process}': {path}")]
-    FileLocked { path: PathBuf, process: String },
 
     #[error("I/O error at {path}: {kind}: {message}")]
     IoError {
@@ -100,18 +96,4 @@ pub enum JournalError {
 
     #[error("journal record was not found while clearing: {path}")]
     RecordNotFound { path: PathBuf },
-}
-
-impl JournalError {
-    pub fn path(&self) -> Option<&Path> {
-        match self {
-            Self::Io { path, .. }
-            | Self::Decode { path, .. }
-            | Self::LegacyRecord { path }
-            | Self::IdentityMismatch { path, .. }
-            | Self::UnsafeParent { path, .. }
-            | Self::RecordNotFound { path } => Some(path),
-            Self::Serialize(_) => None,
-        }
-    }
 }

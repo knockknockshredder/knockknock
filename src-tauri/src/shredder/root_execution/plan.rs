@@ -1194,7 +1194,6 @@ fn error_type(error: &ShredError) -> &'static str {
     match error {
         ShredError::FileNotFound(_) => "file_not_found",
         ShredError::PermissionDenied(_) => "permission_denied",
-        ShredError::FileLocked { .. } => "file_locked",
         ShredError::IoError { .. } => "io_error",
         ShredError::HardLinkBlocked { .. } => "hard_link_blocked",
         ShredError::UnsupportedStorageForMethod { .. } => "unsupported_storage_for_method",

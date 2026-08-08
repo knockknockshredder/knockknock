@@ -1,7 +1,5 @@
 // src-tauri/src/shredder/platform/mod.rs
 
-pub mod common;
-
 #[cfg(target_os = "windows")]
 pub mod windows;
 

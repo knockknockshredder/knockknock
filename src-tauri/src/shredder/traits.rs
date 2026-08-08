@@ -29,23 +29,9 @@ pub trait ProgressReporter: Send + Sync {
     fn on_warning(&self, path: &Path, message: &str);
 }
 
-/// Trait for platform-specific I/O operations
+/// Trait for platform-specific I/O operations. Only media-type detection
+/// survived Phase 4: the legacy open/sync/rename/delete surface was deleted
+/// with the legacy pipeline (root execution now uses `SecureTreeIo`).
 pub trait PlatformIo: Send + Sync {
-    fn open_for_shred(&self, path: &Path) -> Result<File, ShredError>;
-    fn sync_to_disk(&self, file: &mut File, path: &Path) -> Result<(), ShredError>;
-    fn rename_random(&self, path: &Path) -> Result<std::path::PathBuf, ShredError>;
-    fn restore_renamed(&self, renamed: &Path, original: &Path) -> Result<(), ShredError> {
-        std::fs::rename(renamed, original)
-            .map_err(|error| ShredError::from_io_error(original.to_path_buf(), error))
-    }
-    fn delete(&self, path: &Path) -> Result<(), ShredError>;
     fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError>;
-
-    fn find_locking_processes(&self, _path: &Path) -> Result<Vec<ProcessInfo>, ShredError> {
-        Err(ShredError::IoError {
-            path: _path.to_path_buf(),
-            kind: "Unsupported".to_string(),
-            message: "Process lock detection not supported on this platform".to_string(),
-        })
-    }
 }
