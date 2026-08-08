@@ -1,5 +1,6 @@
 // src-tauri/src/shredder/platform/windows.rs
 
+use super::map_drive_type;
 use crate::shredder::errors::ShredError;
 use crate::shredder::traits::PlatformIo;
 use crate::shredder::types::MediaType;
@@ -19,15 +20,7 @@ impl PlatformIo for WindowsIo {
         // (seek-penalty query) to distinguish SSD from HDD on fixed drives,
         // and also handles USB SSD vs USB HDD on removable drives.
         match crate::drive::detect_drive_info(path) {
-            Ok(info) => match info.drive_type {
-                crate::drive::DriveType::Ssd | crate::drive::DriveType::UsbSsd => {
-                    Ok(MediaType::Ssd)
-                }
-                crate::drive::DriveType::Hdd | crate::drive::DriveType::UsbHdd => {
-                    Ok(MediaType::Hdd)
-                }
-                _ => Ok(MediaType::Unknown),
-            },
+            Ok(info) => Ok(map_drive_type(info.drive_type)),
             Err(_) => Ok(MediaType::Unknown),
         }
     }

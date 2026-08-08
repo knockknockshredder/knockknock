@@ -17,7 +17,7 @@ pub mod verification;
 mod tests;
 
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::shredder::engine::OverwriteState;
@@ -78,6 +78,23 @@ impl PolicyFileShredder {
     }
 }
 
+/// Validate an execution-time hard-link count queried from an already-open
+/// file handle. Query failures propagate so destructive writes fail closed.
+pub(crate) fn validate_open_handle_link_count(
+    path: &Path,
+    link_count: Result<u64, ShredError>,
+) -> Result<(), ShredError> {
+    let count = link_count?;
+    if count > 1 {
+        return Err(ShredError::HardLinkBlocked {
+            path: path.to_path_buf(),
+            count,
+        });
+    }
+
+    Ok(())
+}
+
 impl crate::shredder::root_execution::OpenFileShredder for PolicyFileShredder {
     fn shred_open_file(
         &self,
@@ -105,32 +122,27 @@ impl crate::shredder::root_execution::OpenFileShredder for PolicyFileShredder {
         // 2. Execution-time hard-link recheck against the already-open handle
         // (M6). Preflight already blocks link counts > 1; this recheck covers
         // a link created between preflight and the overwrite without ever
-        // reopening by path. A query error does NOT hard-block: preflight is
-        // the enforcement point, and a failed query cannot prove a link
-        // count > 1, so the already-validated target proceeds.
+        // reopening by path. A query error hard-blocks because it cannot prove
+        // the already-open handle is not hard linked.
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            if let Ok(metadata) = file.metadata() {
-                if metadata.nlink() > 1 {
-                    return Err(ShredError::HardLinkBlocked {
-                        path: request.diagnostic_path().to_path_buf(),
-                        count: metadata.nlink(),
-                    });
-                }
-            }
+            validate_open_handle_link_count(
+                request.diagnostic_path(),
+                file.metadata()
+                    .map(|metadata| metadata.nlink())
+                    .map_err(|error| {
+                        ShredError::from_io_error(request.diagnostic_path().to_path_buf(), error)
+                    }),
+            )?;
         }
         #[cfg(windows)]
         {
             use std::os::windows::io::AsRawHandle;
-            if let Ok(count) = windows_link_count(file.as_raw_handle()) {
-                if count > 1 {
-                    return Err(ShredError::HardLinkBlocked {
-                        path: request.diagnostic_path().to_path_buf(),
-                        count,
-                    });
-                }
-            }
+            validate_open_handle_link_count(
+                request.diagnostic_path(),
+                windows_link_count(file.as_raw_handle()),
+            )?;
         }
 
         // 3. Overwrite lifecycle: passes → sync → final write check.

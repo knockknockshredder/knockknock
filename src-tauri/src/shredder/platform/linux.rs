@@ -1,5 +1,6 @@
 // src-tauri/src/shredder/platform/linux.rs
 
+use super::map_drive_type;
 use crate::shredder::errors::ShredError;
 use crate::shredder::traits::PlatformIo;
 use crate::shredder::types::MediaType;
@@ -50,11 +51,7 @@ impl PlatformIo for LinuxIo {
     fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError> {
         // Delegate to the drive module for centralized detection.
         match crate::drive::detect_drive_info(path) {
-            Ok(info) => match info.drive_type {
-                crate::drive::DriveType::Ssd => Ok(MediaType::Ssd),
-                crate::drive::DriveType::Hdd => Ok(MediaType::Hdd),
-                _ => Ok(MediaType::Unknown),
-            },
+            Ok(info) => Ok(map_drive_type(info.drive_type)),
             Err(_) => Ok(MediaType::Unknown),
         }
     }
@@ -62,7 +59,26 @@ impl PlatformIo for LinuxIo {
 
 #[cfg(test)]
 mod tests {
+    use super::super::map_drive_type;
     use super::{ensure_local_volume, is_denied_filesystem_magic};
+    use crate::drive::DriveType;
+    use crate::shredder::types::MediaType;
+
+    #[test]
+    fn maps_usb_and_conservative_drive_types() {
+        let cases = [
+            (DriveType::Hdd, MediaType::Hdd),
+            (DriveType::UsbHdd, MediaType::Hdd),
+            (DriveType::Ssd, MediaType::Ssd),
+            (DriveType::UsbSsd, MediaType::Ssd),
+            (DriveType::Unknown, MediaType::Unknown),
+            (DriveType::Network, MediaType::Unknown),
+        ];
+
+        for (drive_type, expected) in cases {
+            assert_eq!(map_drive_type(drive_type), expected);
+        }
+    }
 
     #[test]
     fn denies_known_network_fuse_ceph_and_9p_filesystem_magics() {

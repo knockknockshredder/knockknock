@@ -16,7 +16,7 @@ use crate::shredder::types::{
     BatchRootResult, DeletionMethod, DeletionPolicy, ExecuteRootRequest, ExecuteRootsRequest,
     ExecutionStage, MediaType, RootStatus, ShredResult, TargetKind, WriteCheck, WriteCheckOutcome,
 };
-use crate::shredder::PolicyFileShredder;
+use crate::shredder::{validate_open_handle_link_count, PolicyFileShredder};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
@@ -1454,6 +1454,29 @@ fn policy_file_shredder_rechecks_hard_links_on_open_handle() {
         std::fs::read(&sibling).expect("sibling readable"),
         b"payload",
         "sibling name must be untouched"
+    );
+}
+
+#[test]
+fn open_handle_link_count_query_error_leaves_fixture_unchanged() {
+    let fixture = TempHomeDir::new("openhandle-query-error");
+    let target = fixture.path().join("target.txt");
+    std::fs::write(&target, b"payload").expect("write fixture");
+
+    let error = validate_open_handle_link_count(
+        &target,
+        Err(ShredError::from_io_error(
+            target.clone(),
+            std::io::Error::other("injected open-handle link-count query failure"),
+        )),
+    )
+    .expect_err("an open-handle link-count query error must block shredding");
+
+    assert!(matches!(error, ShredError::IoError { .. }));
+    assert_eq!(
+        std::fs::read(&target).expect("target readable"),
+        b"payload",
+        "target must remain untouched when the recheck cannot complete"
     );
 }
 
