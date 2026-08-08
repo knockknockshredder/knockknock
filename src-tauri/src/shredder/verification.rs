@@ -346,11 +346,11 @@ mod tests {
         assert_eq!(plan[plan.len() - 1], (size - SPOT_BLOCK, SPOT_BLOCK));
         assert_plan_invariants(size);
 
-        let plan = spot_check_plan(1 * MIB);
+        let plan = spot_check_plan(MIB);
         assert_eq!(plan.len(), SPOT_INTERIOR + 2);
         assert_eq!(plan[0], (0, SPOT_BLOCK));
-        assert_eq!(plan[plan.len() - 1], (1 * MIB - SPOT_BLOCK, SPOT_BLOCK));
-        assert_plan_invariants(1 * MIB);
+        assert_eq!(plan[plan.len() - 1], (MIB - SPOT_BLOCK, SPOT_BLOCK));
+        assert_plan_invariants(MIB);
 
         // Interior positions must lie strictly between first and last block.
         for &(pos, len) in &plan[1..plan.len() - 1] {
@@ -359,7 +359,7 @@ mod tests {
                 "interior position {pos} inside first block"
             );
             assert!(
-                pos + len <= 1 * MIB - SPOT_BLOCK,
+                pos + len <= MIB - SPOT_BLOCK,
                 "interior position {pos} collides with last block"
             );
         }
@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn spot_plan_invariants_hold_across_sizes() {
-        for size in [65537u64, 100_000, 1 * MIB, 10 * MIB, 123_456_789] {
+        for size in [65537u64, 100_000, MIB, 10 * MIB, 123_456_789] {
             assert_plan_invariants(size);
         }
     }

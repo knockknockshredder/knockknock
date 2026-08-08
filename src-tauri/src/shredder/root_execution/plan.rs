@@ -202,6 +202,9 @@ enum PreflightOutcome {
     Failed(RootFailure),
 }
 
+// Production entry point; grew with the M7 per-volume `classify_media`
+// callback (the test wrapper `run_full` mirrors this signature).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_roots(
     request: ExecuteRootsRequest,
     policy: DeletionPolicy,

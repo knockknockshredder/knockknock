@@ -30,6 +30,9 @@ const PROGRESS_INTERVAL: u64 = 1024 * 1024;
 /// seed is supplied (deterministic, verifiable) or from the OS CSPRNG
 /// (`getrandom`) when no seed is available. For fixed patterns (Zeros, Ones)
 /// the buffer is used as-is.
+// Legacy-verbatim signature (moved from algorithms::common in Phase 4);
+// bundling the parameters would churn the engine's only call site for no gain.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn write_pass(
     file: &mut File,
     file_size: u64,
@@ -648,8 +651,8 @@ mod tests {
         );
         assert!(result.is_err(), "expected Err for read-only handle");
 
-        let mut reopened = std::fs::File::open(temp.path()).unwrap();
-        assert_eq!(read_all(&mut reopened), original, "file must be intact");
+        let reopened = std::fs::File::open(temp.path()).unwrap();
+        assert_eq!(read_all(&reopened), original, "file must be intact");
     }
 
     /// Restores the process-wide global cancel flag on drop — including
@@ -712,8 +715,7 @@ mod tests {
         );
         assert_eq!(outcome.passes_completed, 0);
         assert_eq!(
-            outcome.bytes_written,
-            1 * MIB,
+            outcome.bytes_written, MIB,
             "the first 1 MiB chunk completed before the cancel fired"
         );
         assert!(

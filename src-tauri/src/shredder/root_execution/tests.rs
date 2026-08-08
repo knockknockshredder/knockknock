@@ -274,7 +274,7 @@ impl SecureTreeIo for FakeIo {
                 "fake adapter opened a non-regular node".to_string(),
             ));
         }
-        let mut file = tempfile::tempfile()
+        let file = tempfile::tempfile()
             .map_err(|error| ShredError::from_io_error(PathBuf::from("fake"), error))?;
         if let Some(size) = self.regular_file_size {
             file.set_len(size)
@@ -1089,6 +1089,9 @@ fn automatic_classifier() -> impl Fn(&Path) -> Result<MediaType, ShredError> {
     |_path: &Path| Ok(MediaType::Unknown)
 }
 
+/// Test harness wrapper over `execute_roots`; grew with the M7
+/// `classify_media` callback.
+#[allow(clippy::too_many_arguments)]
 fn run_full(
     request: ExecuteRootsRequest,
     policy: DeletionPolicy,
