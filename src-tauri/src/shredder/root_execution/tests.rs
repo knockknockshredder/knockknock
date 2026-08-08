@@ -2138,6 +2138,7 @@ fn zero_length_emits_no_pass_events_and_valid_completion() {
 
 #[test]
 fn legacy_progress_never_exceeds_100_percent() {
+    let _state = crate::shredder::cancel::global_state_test_guard();
     let parent = home_child("task25-legacy-progress");
     let root = parent.join("file");
     let io = FakeIo::new()
@@ -2204,6 +2205,7 @@ fn legacy_progress_never_exceeds_100_percent() {
 
 #[test]
 fn automatic_progress_within_bounds() {
+    let _state = crate::shredder::cancel::global_state_test_guard();
     let parent = home_child("task25-automatic-progress");
     let root = parent.join("file");
     let io = FakeIo::new()
