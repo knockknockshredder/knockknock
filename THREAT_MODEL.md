@@ -105,6 +105,10 @@ File-level deletion is different from device-level media sanitization.
 
 KnockKnock cannot directly control flash translation layers, wear leveling, spare blocks, over-provisioned cells, or storage-controller remapping.
 
+### Issue storage-deallocation requests
+
+KnockKnock performs no mount-wide TRIM/fstrim. Storage deallocation is left to the operating system and is independent of KnockKnock.
+
 ### Remove copies outside the selected local target
 
 KnockKnock does not remove:
@@ -240,7 +244,7 @@ This is particularly important for SSDs.
 | Directory traversal escapes selected root               | Root-scoped platform execution                                    |
 | Target changes between validation and deletion          | Identity checks and handle-relative execution in folder workflows |
 | Network filesystem behaves unpredictably                | Detected network filesystems are rejected                         |
-| Multiple hard links create ambiguous deletion semantics | Hard links are detected and surfaced to the user                  |
+| Multiple hard links create ambiguous deletion semantics | Hard links are blocked at preflight and rechecked at execution  |
 | Process interruption during cleanup                     | Durable cleanup journal tracks unresolved operations              |
 | Authentication bypass                                   | PIN verification gates configured operations                      |
 | Repeated interactive PIN guessing                       | Persistent lockout state                                          |
@@ -277,7 +281,7 @@ Cancellation does **not** mean:
 
 > restore data already overwritten or processed.
 
-Cleanup may continue for a target that has already entered the destructive pipeline.
+Cancellation is stop-after-current-file: the file in progress completes its destructive lifecycle and cleanup, and no further file or target is started.
 
 ## Crash Recovery Model
 

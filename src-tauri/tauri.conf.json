@@ -38,7 +38,7 @@
     ],
     "category": "Utility",
     "shortDescription": "Open-source local data deletion utility",
-    "longDescription": "KnockKnock is an open-source local data deletion utility for Windows, macOS, and Linux. It overwrites and deletes user-selected files, folders, and supported local browser data using configurable overwrite and read-back verification modes, with storage-aware handling for HDDs and SSDs.",
+    "longDescription": "KnockKnock is an open-source local data deletion utility for Windows, macOS, and Linux. It overwrites and deletes user-selected files, folders, and supported local browser data using storage-aware deletion methods and write-check options.",
     "copyright": "Copyright (c) 2026 KnockKnock Contributors",
     "windows": {
       "webviewInstallMode": {
