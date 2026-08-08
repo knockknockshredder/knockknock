@@ -464,39 +464,40 @@ mod tests {
         temp.as_file().set_len(actual_size).unwrap();
         let mut file = temp.reopen().unwrap();
 
-        let result = FullVerification.verify(
-            &mut file,
-            &PatternType::Zeros,
-            planned_size,
-            None,
-            temp.path(),
-        );
-
-        assert!(
-            matches!(result, Err(ShredError::IoError { .. })),
-            "a planned range that cannot be read in full must fail: {result:?}"
-        );
+        let verifier = FullVerification;
+        let error = verifier
+            .verify(
+                &mut file,
+                &PatternType::Zeros,
+                planned_size,
+                None,
+                temp.path(),
+            )
+            .expect_err("premature EOF must fail");
+        assert!(matches!(error, ShredError::IoError { ref kind, .. } if kind == "UnexpectedEof"));
     }
 
     #[test]
     fn spot_verification_fails_when_a_planned_range_hits_eof() {
         let temp = NamedTempFile::new().unwrap();
         let planned_size = 256 * 1024;
-        temp.as_file().set_len(SPOT_BLOCK).unwrap();
+        // All ranges before the final block fit; the final sampled range
+        // begins exactly at EOF and must therefore be read exactly or fail.
+        let actual_size = planned_size - SPOT_BLOCK;
+        temp.as_file().set_len(actual_size).unwrap();
         let mut file = temp.reopen().unwrap();
 
-        let result = SpotVerification::new().verify(
-            &mut file,
-            &PatternType::Zeros,
-            planned_size,
-            None,
-            temp.path(),
-        );
-
-        assert!(
-            matches!(result, Err(ShredError::IoError { .. })),
-            "a planned range that cannot be read in full must fail: {result:?}"
-        );
+        let verifier = SpotVerification::new();
+        let error = verifier
+            .verify(
+                &mut file,
+                &PatternType::Zeros,
+                planned_size,
+                None,
+                temp.path(),
+            )
+            .expect_err("premature EOF must fail");
+        assert!(matches!(error, ShredError::IoError { ref kind, .. } if kind == "UnexpectedEof"));
     }
 
     #[test]

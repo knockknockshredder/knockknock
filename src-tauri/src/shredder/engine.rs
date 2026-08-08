@@ -189,10 +189,25 @@ pub(crate) fn overwrite_file(
     progress: &dyn ProgressReporter,
     path: &Path,
 ) -> Result<OverwriteOutcome, ShredError> {
+    if file_size == 0 {
+        // Vacuous overwrite: skip seed generation as well as write/check I/O.
+        return Ok(empty_overwrite_outcome());
+    }
+
     // One fresh seed per file; the (single) random pass of either method
     // uses it, and the final write check reproduces the stream from it.
     let seed = PrngSeed::generate()?;
     overwrite_file_with_seed(file, file_size, policy, progress, path, seed)
+}
+
+fn empty_overwrite_outcome() -> OverwriteOutcome {
+    OverwriteOutcome {
+        state: OverwriteState::Completed,
+        bytes_written: 0,
+        passes_completed: 0,
+        write_check: WriteCheckOutcome::NotRun,
+        issues: Vec::new(),
+    }
 }
 
 /// Overwrite core with the seed supplied instead of generated, so tests can
@@ -215,13 +230,7 @@ pub(crate) fn overwrite_file_with_seed(
     if file_size == 0 {
         // Vacuous overwrite: nothing to seek/write/check. The caller
         // proceeds straight to journal → rename → unlink (M4 lifecycle).
-        return Ok(OverwriteOutcome {
-            state: OverwriteState::Completed,
-            bytes_written: 0,
-            passes_completed: 0,
-            write_check: WriteCheckOutcome::NotRun,
-            issues: Vec::new(),
-        });
+        return Ok(empty_overwrite_outcome());
     }
 
     let mut buffer = vec![0u8; BUFFER_SIZE];
@@ -316,17 +325,23 @@ pub(crate) fn overwrite_file_with_seed(
         // read-backed verification that passed.
         WriteCheck::Off => WriteCheckOutcome::NotRun,
         mode @ (WriteCheck::Spot | WriteCheck::Full) => {
-            let check = create_write_checker(mode)
+            match create_write_checker(mode)
                 .expect("a read-backed write-check mode must provide a verifier")
-                .verify(file, &final_pattern, file_size, final_seed.as_ref(), path);
-            match check {
+                .verify(file, &final_pattern, file_size, final_seed.as_ref(), path)
+            {
                 Ok(result) if result.passed => WriteCheckOutcome::Passed,
-                // Mismatch or read error: outcome stays Ok(Completed); the failure
-                // is surfaced via write_check + a structured issue (M2 rule 3).
-                Ok(_) | Err(_) => {
+                // A content mismatch is a failed write check. The overwrite
+                // itself completed, so cleanup still continues.
+                Ok(_) => {
                     issues.push(ShredError::WriteCheckFailed {
                         path: path.to_path_buf(),
                     });
+                    WriteCheckOutcome::Failed
+                }
+                // Preserve an exact-read or other verifier I/O error rather
+                // than reducing it to a generic mismatch.
+                Err(error) => {
+                    issues.push(error);
                     WriteCheckOutcome::Failed
                 }
             }
@@ -575,7 +590,7 @@ mod tests {
     fn write_check_read_error_yields_completed_with_failed() {
         // A write-only handle accepts the overwrite but cannot be read back:
         // the final check fails with a read error, which must surface as an
-        // Ok(Completed) outcome with write_check Failed + a WriteCheckFailed
+        // Ok(Completed) outcome with write_check Failed + the original I/O
         // issue (M2 rule 3 — only pre-destructive failures are Err).
         let mut temp = NamedTempFile::new().unwrap();
         temp.write_all(&[0xAA; 256 * KIB as usize]).unwrap();
@@ -598,39 +613,50 @@ mod tests {
         assert_eq!(outcome.state, OverwriteState::Completed);
         assert_eq!(outcome.write_check, WriteCheckOutcome::Failed);
         assert!(
-            outcome
-                .issues
-                .iter()
-                .any(|e| matches!(e, ShredError::WriteCheckFailed { .. })),
-            "expected a WriteCheckFailed issue, got {:?}",
+            matches!(outcome.issues.as_slice(), [ShredError::IoError { .. }]),
+            "expected the original IoError issue, got {:?}",
             outcome.issues
         );
     }
 
     #[test]
-    fn write_check_off_returns_not_run_without_readback() {
-        let mut temp = NamedTempFile::new().unwrap();
-        temp.write_all(&[0xAA; 4096]).unwrap();
-        temp.flush().unwrap();
+    fn write_check_off_returns_not_run_without_readback_for_both_methods() {
+        for (method, policy, expected_passes) in [
+            (
+                DeletionMethod::Automatic,
+                automatic_policy(WriteCheck::Off),
+                1,
+            ),
+            (
+                DeletionMethod::LegacyThreePass,
+                legacy_policy(WriteCheck::Off),
+                3,
+            ),
+        ] {
+            let mut temp = NamedTempFile::new().unwrap();
+            temp.write_all(&[0xAA; 4096]).unwrap();
+            temp.flush().unwrap();
 
-        // A write-only handle can complete the overwrite, but a read-backed
-        // checker would fail. Off must instead report NotRun without reading.
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(temp.path())
-            .unwrap();
-        let outcome = overwrite_file(
-            &mut file,
-            4096,
-            automatic_policy(WriteCheck::Off),
-            &NoopProgressReporter,
-            temp.path(),
-        )
-        .unwrap();
+            // A write-only handle can complete the overwrite, but a
+            // read-backed checker would fail. Off must instead report NotRun
+            // without reading for either overwrite method.
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(temp.path())
+                .unwrap();
+            let outcome =
+                overwrite_file(&mut file, 4096, policy, &NoopProgressReporter, temp.path())
+                    .unwrap();
 
-        assert_eq!(outcome.state, OverwriteState::Completed);
-        assert_eq!(outcome.write_check, WriteCheckOutcome::NotRun);
-        assert!(outcome.issues.is_empty());
+            assert_eq!(outcome.state, OverwriteState::Completed, "{method:?}");
+            assert_eq!(outcome.passes_completed, expected_passes, "{method:?}");
+            assert_eq!(outcome.write_check, WriteCheckOutcome::NotRun, "{method:?}");
+            assert!(
+                outcome.issues.is_empty(),
+                "{method:?}: {:?}",
+                outcome.issues
+            );
+        }
     }
 
     #[test]
