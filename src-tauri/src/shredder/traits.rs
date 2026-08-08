@@ -38,7 +38,6 @@ pub trait PlatformIo: Send + Sync {
         std::fs::rename(renamed, original)
             .map_err(|error| ShredError::from_io_error(original.to_path_buf(), error))
     }
-    fn truncate_to_zero(&self, file: &mut File, path: &Path) -> Result<(), ShredError>;
     fn delete(&self, path: &Path) -> Result<(), ShredError>;
     fn detect_media_type(&self, path: &Path) -> Result<MediaType, ShredError>;
 

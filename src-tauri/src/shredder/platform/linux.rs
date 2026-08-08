@@ -105,11 +105,6 @@ impl PlatformIo for LinuxIo {
         Ok(new_path)
     }
 
-    fn truncate_to_zero(&self, file: &mut File, path: &Path) -> Result<(), ShredError> {
-        file.set_len(0)
-            .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
-    }
-
     fn delete(&self, path: &Path) -> Result<(), ShredError> {
         std::fs::remove_file(path).map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))
     }
