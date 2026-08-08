@@ -130,10 +130,7 @@ fn extract_path_and_action(err: &ShredError) -> (Option<String>, String) {
         ),
         ShredError::ValidationFailed(msg) => (
             None,
-            format!(
-                "The selected shredding algorithm does not support the requested overwrite pattern. {}",
-                msg
-            ),
+            format!("The selected target failed validation. {}", msg),
         ),
     }
 }
