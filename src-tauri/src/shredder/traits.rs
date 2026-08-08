@@ -49,8 +49,4 @@ pub trait PlatformIo: Send + Sync {
             message: "Process lock detection not supported on this platform".to_string(),
         })
     }
-
-    fn issue_trim(&self, _path: &Path) -> Result<(), ShredError> {
-        Ok(()) // Default: no-op, platform can override
-    }
 }
