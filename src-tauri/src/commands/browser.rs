@@ -156,7 +156,7 @@ fn collect_browser_data_files(
             let cache_dirs = ["Cache", "cache2", "Code Cache", "GPUCache", "OfflineCache"];
             for dir in &cache_dirs {
                 let cache_path = profile_path.join(dir);
-                if is_dir_nofollow(&cache_path) {
+                if is_dir_nofollow(&cache_path)? {
                     collect_files_recursive_nofollow(&cache_path, files)?;
                 }
             }
@@ -171,7 +171,7 @@ fn collect_browser_data_files(
             ];
             for name in &cookie_files {
                 let path = profile_path.join(name);
-                if is_regular_file_nofollow(&path) {
+                if is_regular_file_nofollow(&path)? {
                     files.push(path);
                 }
             }
@@ -187,7 +187,7 @@ fn collect_browser_data_files(
             ];
             for name in &history_files {
                 let path = profile_path.join(name);
-                if is_regular_file_nofollow(&path) {
+                if is_regular_file_nofollow(&path)? {
                     files.push(path);
                 }
             }
@@ -202,14 +202,14 @@ fn collect_browser_data_files(
             ];
             for name in &password_files {
                 let path = profile_path.join(name);
-                if is_regular_file_nofollow(&path) {
+                if is_regular_file_nofollow(&path)? {
                     files.push(path);
                 }
             }
         }
         BrowserDataType::Extensions => {
             let ext_path = profile_path.join("Extensions");
-            if is_dir_nofollow(&ext_path) {
+            if is_dir_nofollow(&ext_path)? {
                 collect_files_recursive_nofollow(&ext_path, files)?;
             }
         }
@@ -224,22 +224,37 @@ fn collect_browser_data_files(
 
 /// Non-followed existence check for directory starts: the path exists,
 /// is a real directory, and is not a filesystem link.
-fn is_dir_nofollow(path: &std::path::Path) -> bool {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata.is_dir() && !browser::paths::is_link_metadata(&metadata),
-        Err(_) => false,
+fn is_dir_nofollow(path: &std::path::Path) -> Result<bool, crate::shredder::ShredError> {
+    let Some(metadata) = fixed_metadata_from_result(path, std::fs::symlink_metadata(path))? else {
+        return Ok(false);
+    };
+    if browser::paths::is_link_metadata(&metadata) {
+        return Ok(false);
     }
+    Ok(metadata.is_dir())
 }
 
 /// Non-followed regular-file check for the fixed file-name patterns
 /// (Cookies/History/Passwords). A symlink pointing at a real file is NOT a
 /// collection candidate (M9).
-fn is_regular_file_nofollow(path: &std::path::Path) -> bool {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            metadata.file_type().is_file() && !browser::paths::is_link_metadata(&metadata)
-        }
-        Err(_) => false,
+fn is_regular_file_nofollow(path: &std::path::Path) -> Result<bool, crate::shredder::ShredError> {
+    let Some(metadata) = fixed_metadata_from_result(path, std::fs::symlink_metadata(path))? else {
+        return Ok(false);
+    };
+    if browser::paths::is_link_metadata(&metadata) {
+        return Ok(false);
+    }
+    Ok(metadata.file_type().is_file())
+}
+
+fn fixed_metadata_from_result(
+    path: &std::path::Path,
+    metadata_result: Result<std::fs::Metadata, std::io::Error>,
+) -> Result<Option<std::fs::Metadata>, crate::shredder::ShredError> {
+    match metadata_result {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(collection_error(path, &error)),
     }
 }
 
@@ -433,6 +448,61 @@ mod tests {
         drop(tmp);
     }
 
+    #[test]
+    fn fixed_candidate_missing_is_absent() {
+        let (tmp, profile, _outside) = profile_fixture();
+        let missing = profile.join("Cookies");
+
+        assert!(
+            !is_regular_file_nofollow(&missing).expect("inspect missing fixed candidate"),
+            "a missing fixed candidate must be treated as absent"
+        );
+        drop(tmp);
+    }
+
+    #[test]
+    fn fixed_candidates_with_real_type_mismatches_are_absent() {
+        let (tmp, profile, _outside) = profile_fixture();
+        let directory = profile.join("Cookies");
+        let file = profile.join("Cache");
+        std::fs::create_dir(&directory).expect("create fixed-name directory");
+        write(&file, b"not a directory");
+
+        assert!(
+            !is_regular_file_nofollow(&directory).expect("inspect fixed-name directory"),
+            "a directory is not a fixed file candidate"
+        );
+        assert!(
+            !is_dir_nofollow(&file).expect("inspect fixed-name file"),
+            "a file is not a fixed directory candidate"
+        );
+        drop(tmp);
+    }
+
+    #[test]
+    fn fixed_candidate_metadata_error_is_propagated() {
+        let path = PathBuf::from("fixed-candidate");
+        let error = fixed_metadata_from_result(
+            &path,
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected metadata failure",
+            )),
+        )
+        .expect_err("metadata failure must surface");
+
+        match error {
+            crate::shredder::ShredError::BrowserCollectionFailed {
+                path: error_path,
+                detail,
+            } => {
+                assert_eq!(error_path, path);
+                assert!(detail.contains("injected metadata failure"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
     /// M9: a symlink directory inside the profile must not be traversed, and
     /// its target content must not be collected.
     #[cfg(unix)]
@@ -494,8 +564,14 @@ mod tests {
         std::fs::create_dir_all(profile.join("Network")).expect("create network dir");
         write(&profile.join("Network/Cookies"), b"network cookies");
         write(&outside.join("secret.txt"), b"secret payload");
-        std::os::unix::fs::symlink(&outside.join("secret.txt"), profile.join("cookies.txt"))
+        let linked_candidate = profile.join("cookies.txt");
+        std::os::unix::fs::symlink(&outside.join("secret.txt"), &linked_candidate)
             .expect("create file symlink");
+
+        assert!(
+            !is_regular_file_nofollow(&linked_candidate).expect("inspect fixed-name symlink"),
+            "the fixed-name symlink must be skipped"
+        );
 
         let files = collect(&profile, &[BrowserDataType::Cookies]).expect("collect");
 
