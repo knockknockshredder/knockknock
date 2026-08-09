@@ -104,8 +104,10 @@ pub(crate) fn shred_browser_core(
     // failures are surfaced, never silently swallowed (M9).
     let mut files_to_shred = Vec::new();
     for data_type in &request.data_types {
-        collect_browser_data_files(&profile_path, data_type, &mut files_to_shred)
-            .map_err(|error| error.to_string())?;
+        match collect_browser_data_files(&profile_path, data_type, &mut files_to_shred) {
+            Ok(()) => {}
+            Err(error) => return browser_collection_error_result(&request, error),
+        }
     }
     if files_to_shred.is_empty() {
         return Err("No browser data files found to shred".to_string());
@@ -143,21 +145,22 @@ pub(crate) fn shred_browser_core(
 
 /// Collect files for a specific browser data type into `files`.
 ///
-/// Returns `Err(BrowserCollectionFailed)` on any inspection failure — an
-/// unreadable profile must never silently become a "successful" cleanup
-/// (M9). Filesystem links are never followed anywhere in collection.
+/// Returns a fixed-path inspection failure separately so the command can
+/// preserve its structured context over IPC. Other collection failures remain
+/// command errors. Filesystem links are never followed anywhere in collection.
 fn collect_browser_data_files(
     profile_path: &std::path::Path,
     data_type: &BrowserDataType,
     files: &mut Vec<PathBuf>,
-) -> Result<(), crate::shredder::ShredError> {
+) -> Result<(), BrowserCollectionError> {
     match data_type {
         BrowserDataType::Cache => {
             let cache_dirs = ["Cache", "cache2", "Code Cache", "GPUCache", "OfflineCache"];
             for dir in &cache_dirs {
                 let cache_path = profile_path.join(dir);
-                if is_dir_nofollow(&cache_path)? {
-                    collect_files_recursive_nofollow(&cache_path, files)?;
+                if is_dir_nofollow(&cache_path).map_err(BrowserCollectionError::fixed_path)? {
+                    collect_files_recursive_nofollow(&cache_path, files)
+                        .map_err(BrowserCollectionError::other)?;
                 }
             }
         }
@@ -171,7 +174,7 @@ fn collect_browser_data_files(
             ];
             for name in &cookie_files {
                 let path = profile_path.join(name);
-                if is_regular_file_nofollow(&path)? {
+                if is_regular_file_nofollow(&path).map_err(BrowserCollectionError::fixed_path)? {
                     files.push(path);
                 }
             }
@@ -187,7 +190,7 @@ fn collect_browser_data_files(
             ];
             for name in &history_files {
                 let path = profile_path.join(name);
-                if is_regular_file_nofollow(&path)? {
+                if is_regular_file_nofollow(&path).map_err(BrowserCollectionError::fixed_path)? {
                     files.push(path);
                 }
             }
@@ -202,24 +205,97 @@ fn collect_browser_data_files(
             ];
             for name in &password_files {
                 let path = profile_path.join(name);
-                if is_regular_file_nofollow(&path)? {
+                if is_regular_file_nofollow(&path).map_err(BrowserCollectionError::fixed_path)? {
                     files.push(path);
                 }
             }
         }
         BrowserDataType::Extensions => {
             let ext_path = profile_path.join("Extensions");
-            if is_dir_nofollow(&ext_path)? {
-                collect_files_recursive_nofollow(&ext_path, files)?;
+            if is_dir_nofollow(&ext_path).map_err(BrowserCollectionError::fixed_path)? {
+                collect_files_recursive_nofollow(&ext_path, files)
+                    .map_err(BrowserCollectionError::other)?;
             }
         }
         BrowserDataType::Profile => {
             // Shred entire profile (except Extensions which are re-downloadable)
-            collect_files_recursive_excluding_nofollow(profile_path, files, &["Extensions"])?;
+            collect_files_recursive_excluding_nofollow(profile_path, files, &["Extensions"])
+                .map_err(BrowserCollectionError::other)?;
         }
     }
 
     Ok(())
+}
+
+enum BrowserCollectionError {
+    FixedPath { path: PathBuf, detail: String },
+    Other(crate::shredder::ShredError),
+}
+
+impl BrowserCollectionError {
+    fn fixed_path(error: crate::shredder::ShredError) -> Self {
+        match error {
+            crate::shredder::ShredError::BrowserCollectionFailed { path, detail } => {
+                Self::FixedPath { path, detail }
+            }
+            error => Self::Other(error),
+        }
+    }
+
+    fn other(error: crate::shredder::ShredError) -> Self {
+        Self::Other(error)
+    }
+
+    fn into_shred_error(self) -> crate::shredder::ShredError {
+        match self {
+            Self::FixedPath { path, detail } => {
+                crate::shredder::ShredError::BrowserCollectionFailed { path, detail }
+            }
+            Self::Other(error) => error,
+        }
+    }
+}
+
+fn browser_collection_error_result(
+    request: &BrowserShredRequest,
+    error: BrowserCollectionError,
+) -> Result<crate::shredder::root_execution::types::BatchRootResult, String> {
+    match error {
+        BrowserCollectionError::FixedPath { path, detail } => {
+            Ok(failed_browser_profile_result(request, path, detail))
+        }
+        error => Err(error.into_shred_error().to_string()),
+    }
+}
+
+fn failed_browser_profile_result(
+    request: &BrowserShredRequest,
+    path: PathBuf,
+    detail: String,
+) -> crate::shredder::root_execution::types::BatchRootResult {
+    crate::shredder::root_execution::types::BatchRootResult {
+        roots: vec![crate::shredder::root_execution::types::RootResultDto {
+            target_id: "browser-profile".to_string(),
+            requested_path: request.profile_path.clone(),
+            kind: TargetKind::Directory,
+            status: crate::shredder::root_execution::types::RootStatus::Failed,
+            root_removed: false,
+            files_destroyed: 0,
+            directories_removed: 0,
+            bytes_shredded: 0,
+            write_check: crate::shredder::types::WriteCheckOutcome::NotRun,
+            errors: vec![crate::shredder::root_execution::types::ChildErrorDto {
+                path: path.to_string_lossy().into_owned(),
+                stage: crate::shredder::root_execution::types::ExecutionStage::Preflight,
+                error_type: "browser_collection_failed".to_string(),
+                message: format!(
+                    "browser data collection failed at {}: {detail}",
+                    path.display()
+                ),
+                actionable: "Fix the target validation errors and retry".to_string(),
+            }],
+        }],
+    }
 }
 
 /// Non-followed existence check for directory starts: the path exists,
@@ -392,7 +468,7 @@ mod tests {
     use crate::shredder::cancel::CancellationToken;
     use crate::shredder::journal::JournalStore;
     use crate::shredder::progress::NoopProgressReporter;
-    use crate::shredder::root_execution::types::{BatchRootResult, RootStatus};
+    use crate::shredder::root_execution::types::{BatchRootResult, ExecutionStage, RootStatus};
     use crate::shredder::types::{DeletionMethod, WriteCheck};
     use std::path::Path;
 
@@ -404,7 +480,7 @@ mod tests {
         let mut files = Vec::new();
         for data_type in data_types {
             collect_browser_data_files(profile_path, data_type, &mut files)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| error.into_shred_error().to_string())?;
         }
         files.sort();
         Ok(files)
@@ -481,7 +557,11 @@ mod tests {
 
     #[test]
     fn fixed_candidate_metadata_error_is_propagated() {
-        let path = PathBuf::from("fixed-candidate");
+        let (tmp, profile, _outside) = profile_fixture();
+        let readable_candidate = profile.join("Cookies");
+        let path = profile.join("cookies.sqlite");
+        write(&readable_candidate, b"readable cookies");
+
         let error = fixed_metadata_from_result(
             &path,
             Err(std::io::Error::new(
@@ -491,16 +571,29 @@ mod tests {
         )
         .expect_err("metadata failure must surface");
 
-        match error {
-            crate::shredder::ShredError::BrowserCollectionFailed {
-                path: error_path,
-                detail,
-            } => {
-                assert_eq!(error_path, path);
-                assert!(detail.contains("injected metadata failure"));
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        let result = browser_collection_error_result(
+            &request(&profile, vec![BrowserDataType::Cookies], false),
+            BrowserCollectionError::fixed_path(error),
+        )
+        .expect("fixed-path error must be reported in-band");
+
+        assert_eq!(result.roots.len(), 1);
+        let root = &result.roots[0];
+        assert_eq!(root.status, RootStatus::Failed);
+        assert_eq!(root.requested_path, profile.to_string_lossy());
+        assert_eq!(root.errors.len(), 1);
+        let collection_error = &root.errors[0];
+        assert_eq!(collection_error.path, path.to_string_lossy());
+        assert_eq!(collection_error.stage, ExecutionStage::Preflight);
+        assert_eq!(collection_error.error_type, "browser_collection_failed");
+        assert!(collection_error
+            .message
+            .contains("injected metadata failure"));
+        assert_eq!(
+            std::fs::read(&readable_candidate).expect("readable candidate remains"),
+            b"readable cookies"
+        );
+        drop(tmp);
     }
 
     /// M9: a symlink directory inside the profile must not be traversed, and
