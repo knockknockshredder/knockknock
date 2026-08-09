@@ -3,14 +3,17 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DeletionMethodSelector } from "./DeletionMethodSelector";
-import type { DeletionMethod, DriveInfo, ShredFile } from "@/types";
+import type { DeletionMethod, DetectedBrowser, DriveInfo, ShredFile } from "@/types";
 
-const { invokeMock, contextMock } = vi.hoisted(() => ({
+const { invokeMock, contextMock, browserState } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   contextMock: {
     files: [] as ShredFile[],
     deletionMethod: "automatic" as DeletionMethod,
     setDeletionMethod: vi.fn(),
+  },
+  browserState: {
+    browsers: [] as DetectedBrowser[],
   },
 }));
 
@@ -20,6 +23,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@/contexts/ShredContext", () => ({
   useShred: () => contextMock,
+}));
+
+vi.mock("@/contexts/BrowserContext", () => ({
+  useBrowser: () => browserState,
 }));
 
 function drive(drive_type: DriveInfo["drive_type"]): DriveInfo {
@@ -45,12 +52,31 @@ function pendingFile(path: string): ShredFile {
   };
 }
 
+function selectedProfile(path: string): DetectedBrowser {
+  return {
+    id: "chrome",
+    name: "Chrome",
+    icon: "",
+    isRunning: false,
+    profiles: [
+      {
+        id: "default",
+        name: "Default",
+        path,
+        size: 1,
+        selected: true,
+      },
+    ],
+  };
+}
+
 describe("DeletionMethodSelector", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     contextMock.files = [];
     contextMock.deletionMethod = "automatic";
     contextMock.setDeletionMethod.mockReset();
+    browserState.browsers = [];
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_all_drive_info") return Promise.resolve([]);
       return Promise.resolve(undefined);
@@ -76,6 +102,17 @@ describe("DeletionMethodSelector", () => {
     expect(
       screen.getByRole("button", { name: /Automatic/ })
     ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /Legacy 3-pass/ })).toBeDisabled();
+  });
+
+  it("disables Legacy 3-pass when drive information is incomplete", async () => {
+    contextMock.files = [pendingFile("C:\\a.txt")];
+
+    render(<DeletionMethodSelector />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Legacy 3-pass/ })).toBeDisabled()
+    );
   });
 
   it("disables Legacy 3-pass with an SSD limitation note when targets sit on SSDs", async () => {
@@ -135,6 +172,33 @@ describe("DeletionMethodSelector", () => {
     await user.click(legacy);
     expect(contextMock.setDeletionMethod).toHaveBeenCalledWith(
       "legacy_three_pass"
+    );
+  });
+
+  it("includes selected browser profile paths when classifying Legacy availability", async () => {
+    browserState.browsers = [selectedProfile("C:\\chrome\\default")];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_all_drive_info") return Promise.resolve([drive("hdd")]);
+      return Promise.resolve(undefined);
+    });
+
+    render(<DeletionMethodSelector />);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("get_all_drive_info", {
+        paths: ["C:\\chrome\\default"],
+      })
+    );
+    expect(screen.getByRole("button", { name: /Legacy 3-pass/ })).toBeEnabled();
+  });
+
+  it("disables Legacy 3-pass when a selected browser profile cannot be classified", async () => {
+    browserState.browsers = [selectedProfile("relative-profile")];
+
+    render(<DeletionMethodSelector />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Legacy 3-pass/ })).toBeDisabled()
     );
   });
 

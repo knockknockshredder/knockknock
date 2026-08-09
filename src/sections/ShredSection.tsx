@@ -78,6 +78,7 @@ export function ShredSection() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const unlistenRef = useRef<(() => void) | null>(null);
   const isExecutingRef = useRef(false); // guards against StrictMode double-fire
+  const stopRequestedRef = useRef(false);
   const completedCountRef = useRef(0);
   // Honest consent flag (M10, ora-2 amendment 5): set ONLY by the DELETE
   // action on the confirmation dialog. Never derived from a stale browser
@@ -175,6 +176,20 @@ export function ShredSection() {
     if (pendingFiles.length === 0 && selectedProfileCount === 0) return;
 
     isExecutingRef.current = true;
+    stopRequestedRef.current = false;
+
+    // Create the shared cancellation session before any asynchronous
+    // preparation. This lets Stop target the same session while vault
+    // persistence is in flight.
+    try {
+      await invoke<void>("begin_shred_operation");
+    } catch (err) {
+      addLogEntry("error", `Refusing to shred: could not begin operation: ${String(err)}`);
+      setIsShredding(false);
+      isExecutingRef.current = false;
+      return;
+    }
+
     setIsShredding(true);
     // Persist the pending shred list one last time before the destructive
     // operation. The auto-save effect is suppressed while isShredding is
@@ -191,164 +206,223 @@ export function ShredSection() {
         return;
       }
     }
+
     const request = buildExecuteRootsRequest();
     addLogEntry(
       "command",
       `Processing ${pendingFileCount} file(s), ${pendingFolderCount} folder(s), and ${selectedProfileCount} browser profile(s)...`
     );
 
-    // Reset completed count before listening
-    completedCountRef.current = 0;
+    const outcome = {
+      removed: 0,
+      failed: 0,
+      cancelled: 0,
+      skipped: 0,
+      browserProfilesCompleted: 0,
+      browserProfilesFailed: 0,
+      browserProfilesCancelled: 0,
+      browserProfilesSkipped: 0,
+      hasWriteCheckFailure: false,
+      stopped: false,
+    };
 
-    // Listen for progress events
-    const unlisten = await listen<ProgressEvent>("shred-progress", (event) => {
-      const {
-        file_path,
-        status,
-        current_pass,
-        total_passes,
-        bytes_written,
-        file_size,
-      } = event.payload;
-      const statusStr = statusToString(status);
-      const message =
-        status.type === "Error"
-          ? `[${file_path}] error: ${status.message}`
-          : status.type === "Warning"
-            ? `[${file_path}] warning: ${status.message}`
-            : `[${file_path}] ${statusStr} (pass ${current_pass}/${total_passes})`;
-      const level =
-        status.type === "Error"
-          ? "error"
-          : status.type === "Warning"
-            ? "warning"
-            : "info";
-      addLogEntry(level, message);
+    const shouldStartNextPhase = async () => {
+      const backendCancelled = await invoke<boolean>("is_shred_operation_cancelled");
+      return !backendCancelled && !stopRequestedRef.current;
+    };
 
-      if (status.type === "Complete") {
-        completedCountRef.current += 1;
+    const recordRootOutcome = (report: BatchRootResult) => {
+      outcome.removed += report.roots.filter(
+        (root) => root.status === "destroyed" && root.root_removed
+      ).length;
+      outcome.failed += report.roots.filter((root) => root.status === "failed").length;
+      outcome.cancelled += report.roots.filter((root) => root.status === "cancelled").length;
+      outcome.skipped += report.roots.filter((root) => root.status === "skipped").length;
+      outcome.hasWriteCheckFailure ||= report.roots.some(isWriteCheckFailure);
+    };
+
+    const recordBrowserProfileOutcome = (report: BatchRootResult) => {
+      const hasFailedRoot = report.roots.some((root) => root.status === "failed");
+      const hasCancelledRoot = report.roots.some(
+        (root) => root.status === "cancelled"
+      );
+      const hasSkippedRoot = report.roots.some((root) => root.status === "skipped");
+
+      if (hasCancelledRoot) {
+        outcome.browserProfilesCancelled += 1;
+      } else if (hasFailedRoot) {
+        outcome.browserProfilesFailed += 1;
+      } else if (hasSkippedRoot) {
+        outcome.browserProfilesSkipped += 1;
+      } else {
+        outcome.browserProfilesCompleted += 1;
       }
+      outcome.hasWriteCheckFailure ||= report.roots.some(isWriteCheckFailure);
+    };
 
-      // Pass-local progress percent (M5): completed passes plus the fraction
-      // of the current pass over the total pass count, guarded and clamped.
-      setProgress({
-        current: completedCountRef.current,
-        total: pendingFiles.length,
-        percent: computeProgressPercent(
+    let unlisten: (() => void) | null = null;
+
+    try {
+      // Reset completed count before listening.
+      completedCountRef.current = 0;
+
+      // Listen for progress events.
+      unlisten = await listen<ProgressEvent>("shred-progress", (event) => {
+        const {
+          file_path,
+          status,
           current_pass,
           total_passes,
           bytes_written,
-          file_size
-        ),
-        currentFile: file_path,
+          file_size,
+        } = event.payload;
+        const statusStr = statusToString(status);
+        const message =
+          status.type === "Error"
+            ? `[${file_path}] error: ${status.message}`
+            : status.type === "Warning"
+              ? `[${file_path}] warning: ${status.message}`
+              : `[${file_path}] ${statusStr} (pass ${current_pass}/${total_passes})`;
+        const level =
+          status.type === "Error"
+            ? "error"
+            : status.type === "Warning"
+              ? "warning"
+              : "info";
+        addLogEntry(level, message);
+
+        if (status.type === "Complete") {
+          completedCountRef.current += 1;
+        }
+
+        // Pass-local progress percent (M5): completed passes plus the fraction
+        // of the current pass over the total pass count, guarded and clamped.
+        setProgress({
+          current: completedCountRef.current,
+          total: pendingFiles.length,
+          percent: computeProgressPercent(
+            current_pass,
+            total_passes,
+            bytes_written,
+            file_size
+          ),
+          currentFile: file_path,
+        });
       });
-    });
-    unlistenRef.current = unlisten;
 
-    try {
-      const report: BatchRootResult = await invoke<BatchRootResult>("execute_roots", {
-        request,
-        method: deletionMethod,
-        writeCheck,
-        logObfuscation,
-      });
+      unlistenRef.current = unlisten;
+      let canStartNextPhase = !stopRequestedRef.current;
 
-      // Apply typed per-root results: destroyed roots with root_removed are
-      // removed from the list, everything else is retained with error details.
-      await applyRootResults(report.roots);
+      if (request.roots.length > 0 && canStartNextPhase) {
+        const report: BatchRootResult = await invoke<BatchRootResult>("execute_roots", {
+          request,
+          method: deletionMethod,
+          writeCheck,
+          logObfuscation,
+        });
 
-      const removed = report.roots.filter(
-        (root) => root.status === "destroyed" && root.root_removed
-      ).length;
-      const failed = report.roots.filter((root) => root.status === "failed").length;
-      const cancelled = report.roots.filter((root) => root.status === "cancelled").length;
-      const skipped = report.roots.filter((root) => root.status === "skipped").length;
+        recordRootOutcome(report);
+        // The backend token is authoritative between destructive phases. Query
+        // it even when the local Stop request is already known.
+        canStartNextPhase = await shouldStartNextPhase();
 
-      addLogEntry(
-        "success",
-        `Complete: ${removed} removed, ${failed} failed, ${cancelled} cancelled, ${skipped} skipped`
+        // Apply typed per-root results: destroyed roots with root_removed are
+        // removed from the list, everything else is retained with error details.
+        await applyRootResults(report.roots);
+      }
+
+      const selectedProfiles = browsers.flatMap((b) =>
+        b.profiles
+          .filter((p) => p.selected)
+          .map((p) => ({
+            browser_name: b.name,
+            profile_path: p.path,
+            data_types: ["cache", "cookies", "history", "passwords"] as const,
+          }))
       );
 
-      // A root whose write check did not pass is not a clean success — warn
-      // instead of rendering a plain "Success" (M3).
-      if (report.roots.some(isWriteCheckFailure)) {
-        addLogEntry(
-          "warning",
-          "Deletion completed, but the requested write check did not pass."
-        );
-      }
+      for (const profile of selectedProfiles) {
+        if (!canStartNextPhase) break;
 
-      if (autoClearLog && failed === 0) {
-        clearLog();
-      }
-
-      // Send system notification for the main shred result.
-      invoke("send_notification", {
-        title: "Deletion Complete",
-        body: `${removed} removed, ${failed} failed, ${cancelled} cancelled, ${skipped} skipped`,
-      }).catch(() => {});
-
-      // Shred browser profiles if any
-      if (selectedProfileCount > 0) {
-        const selectedProfiles = browsers.flatMap((b) =>
-          b.profiles
-            .filter((p) => p.selected)
-            .map((p) => ({
-              browser_name: b.name,
-              profile_path: p.path,
-              data_types: ["cache", "cookies", "history", "passwords"] as const,
-            }))
-        );
-
-        for (const profile of selectedProfiles) {
-          try {
-            addLogEntry(
-              "info",
-              `Deleting selected local data from ${profile.browser_name} profile: ${profile.profile_path}`
-            );
-            const browserReport: BatchRootResult = await invoke<BatchRootResult>(
-              "shred_browser_data",
-              {
-                request: {
-                  browser_name: profile.browser_name,
-                  profile_path: profile.profile_path,
-                  data_types: profile.data_types,
-                  method: deletionMethod,
-                  write_check: writeCheck,
-                  explicit_consent: dialogConfirmedRef.current,
-                },
-              }
-            );
-            const removed = browserReport.roots.filter(
-              (root) => root.status === "destroyed" && root.root_removed
-            ).length;
-            const failed = browserReport.roots.filter(
-              (root) => root.status === "failed"
-            ).length;
-            const cancelled = browserReport.roots.filter(
-              (root) => root.status === "cancelled"
-            ).length;
-            addLogEntry(
-              "success",
-              `${profile.browser_name}: ${removed} removed, ${failed} failed, ${cancelled} cancelled`
-            );
-            if (browserReport.roots.some(isWriteCheckFailure)) {
-              addLogEntry(
-                "warning",
-                "Deletion completed, but the requested write check did not pass."
-              );
+        try {
+          addLogEntry(
+            "info",
+            `Deleting selected local data from ${profile.browser_name} profile: ${profile.profile_path}`
+          );
+          const browserReport: BatchRootResult = await invoke<BatchRootResult>(
+            "shred_browser_data",
+            {
+              request: {
+                browser_name: profile.browser_name,
+                profile_path: profile.profile_path,
+                data_types: profile.data_types,
+                method: deletionMethod,
+                write_check: writeCheck,
+                explicit_consent: dialogConfirmedRef.current,
+              },
             }
-          } catch (err) {
-            addLogEntry(
-              "error",
-              `Failed to clean ${profile.browser_name} profile: ${err}`
-            );
-            invoke("send_notification", {
-              title: "Browser Cleanup Failed",
-              body: `${profile.browser_name}: ${err}`,
-            }).catch(() => {});
-          }
+          );
+          recordBrowserProfileOutcome(browserReport);
+        } catch (err) {
+          outcome.browserProfilesFailed += 1;
+          addLogEntry(
+            "error",
+            `Failed to clean ${profile.browser_name} profile: ${err}`
+          );
         }
+
+        // Always query the shared backend session after a browser phase before
+        // considering another profile, including after a local Stop request.
+        canStartNextPhase = await shouldStartNextPhase();
+      }
+
+      if (!canStartNextPhase || stopRequestedRef.current) {
+        outcome.stopped = true;
+      }
+
+      const rootSummary = `${outcome.removed} removed, ${outcome.failed} failed, ${outcome.cancelled} cancelled, ${outcome.skipped} skipped`;
+      const browserSummary =
+        selectedProfiles.length > 0
+          ? `; ${outcome.browserProfilesCompleted} browser profiles completed, ${outcome.browserProfilesFailed} failed, ${outcome.browserProfilesCancelled} cancelled, ${outcome.browserProfilesSkipped} skipped`
+          : "";
+      const writeCheckSummary = outcome.hasWriteCheckFailure
+        ? "; requested write check did not pass"
+        : "";
+      const summary = `${rootSummary}${browserSummary}${writeCheckSummary}`;
+      const hasFailures =
+        outcome.failed > 0 || outcome.browserProfilesFailed > 0 || outcome.skipped > 0 || outcome.browserProfilesSkipped > 0;
+      const wasStopped =
+        outcome.stopped || outcome.cancelled > 0 || outcome.browserProfilesCancelled > 0;
+      const cleanSuccess = !hasFailures && !wasStopped && !outcome.hasWriteCheckFailure;
+
+      if (wasStopped) {
+        addLogEntry("warning", `Stopped: ${summary}`);
+        invoke("send_notification", {
+          title: "Deletion Stopped",
+          body: summary,
+        }).catch(() => {});
+      } else if (hasFailures) {
+        addLogEntry("error", `Completed with issues: ${summary}`);
+        invoke("send_notification", {
+          title: "Deletion Completed with Issues",
+          body: summary,
+        }).catch(() => {});
+      } else if (outcome.hasWriteCheckFailure) {
+        addLogEntry("warning", `Completed with warnings: ${summary}`);
+        invoke("send_notification", {
+          title: "Deletion Completed with Warnings",
+          body: summary,
+        }).catch(() => {});
+      } else {
+        addLogEntry("success", `Complete: ${summary}`);
+        invoke("send_notification", {
+          title: "Deletion Complete",
+          body: summary,
+        }).catch(() => {});
+      }
+
+      if (autoClearLog && cleanSuccess) {
+        clearLog();
       }
     } catch (err) {
       addLogEntry("error", `Deletion failed: ${err}`);
@@ -361,11 +435,21 @@ export function ShredSection() {
         body: `${String(err).slice(0, 200)}`,
       }).catch(() => {});
     } finally {
-      unlisten();
+      unlisten?.();
       unlistenRef.current = null;
       setProgress(null);
       setIsShredding(false);
       isExecutingRef.current = false;
+    }
+  };
+
+  const requestStop = async () => {
+    stopRequestedRef.current = true;
+    try {
+      await invoke<void>("cancel_shred");
+      addLogEntry("warning", "Stop requested. Already processed targets will not be restored.");
+    } catch (err) {
+      addLogEntry("error", `Stop request failed: ${err}`);
     }
   };
 
@@ -374,12 +458,7 @@ export function ShredSection() {
       setCancelPinOpen(true);
       return; // Shredding continues if PIN not entered
     }
-    try {
-      await invoke<void>("cancel_shred");
-      addLogEntry("warning", "Stop requested. Already processed targets will not be restored.");
-    } catch (err) {
-      addLogEntry("error", `Stop request failed: ${err}`);
-    }
+    await requestStop();
   };
 
   return (
@@ -425,9 +504,7 @@ export function ShredSection() {
         onVerified={(pin) => {
           setVaultPin(pin);
           setCancelPinOpen(false);
-          invoke<void>("cancel_shred").catch((err) =>
-            addLogEntry("error", `Failed to stop operation: ${err}`)
-          );
+          void requestStop();
         }}
         purpose="cancel"
       />

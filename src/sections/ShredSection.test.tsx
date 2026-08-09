@@ -83,6 +83,44 @@ function readyFile(path: string) {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function rootResult(status: "destroyed" | "failed" | "cancelled" | "skipped") {
+  return {
+    target_id: "root-1",
+    requested_path: "C:\\a.txt",
+    kind: "file" as const,
+    status,
+    root_removed: status === "destroyed",
+    files_destroyed: status === "destroyed" ? 1 : 0,
+    directories_removed: 0,
+    bytes_shredded: status === "destroyed" ? 1 : 0,
+    write_check: "passed" as const,
+    errors: [],
+  };
+}
+
+function lifecycleCommands() {
+  return invokeMock.mock.calls
+    .map(([command]) => command)
+    .filter((command) =>
+      [
+        "begin_shred_operation",
+        "execute_roots",
+        "shred_browser_data",
+        "send_notification",
+      ].includes(command)
+    );
+}
+
 describe("ShredSection executeShred", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -105,6 +143,7 @@ describe("ShredSection executeShred", () => {
       }
       if (command === "is_pin_enabled") return Promise.resolve(false);
       if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
       return Promise.resolve(undefined);
     });
   });
@@ -162,7 +201,56 @@ describe("ShredSection executeShred", () => {
       ).toBe(true)
     );
     expect(invokeMock).not.toHaveBeenCalledWith("execute_roots", expect.anything());
+    expect(invokeMock).toHaveBeenCalledWith("begin_shred_operation");
     expect(latest.files.every((file) => file.status === "pending")).toBe(true);
+    expect(latest.isShredding).toBe(false);
+  });
+
+  it("restores execution state without starting destructive commands when beginning fails", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [target("C:\\a.txt")],
+        });
+      }
+      if (command === "validate_targets") return Promise.resolve([metadata("C:\\a.txt")]);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "begin_shred_operation") {
+        return Promise.reject(new Error("session unavailable"));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <ShredProvider>
+        <ShredSection />
+        <Probe />
+      </ShredProvider>
+    );
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+    await act(async () => {
+      latest.addFiles([readyFile("C:\\b.txt")]);
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Delete Selected (2 files)" }));
+    await user.click(await screen.findByRole("button", { name: "DELETE" }));
+
+    await waitFor(() =>
+      expect(
+        latest.logEntries.some((entry) =>
+          entry.message.includes("could not begin operation")
+        )
+      ).toBe(true)
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith("execute_roots", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith("shred_browser_data", expect.anything());
     expect(latest.isShredding).toBe(false);
   });
 });
@@ -189,6 +277,7 @@ describe("ShredSection policy wiring", () => {
       }
       if (command === "is_pin_enabled") return Promise.resolve(false);
       if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
       if (command === "execute_roots") {
         return Promise.resolve({ roots: [] });
       }
@@ -217,7 +306,7 @@ describe("ShredSection policy wiring", () => {
   async function confirmDeletion() {
     const user = userEvent.setup();
     await user.click(
-      screen.getByRole("button", { name: "Delete Selected (2 files)" })
+      screen.getByRole("button", { name: /Delete Selected/ })
     );
     await user.click(await screen.findByRole("button", { name: "DELETE" }));
   }
@@ -270,6 +359,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "validate_targets") return Promise.resolve([]);
       if (command === "is_pin_enabled") return Promise.resolve(false);
       if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
       if (command === "execute_roots") return Promise.resolve({ roots: [] });
       if (command === "shred_browser_data") {
         return Promise.resolve({ roots: [] });
@@ -312,6 +402,369 @@ describe("ShredSection policy wiring", () => {
         explicit_consent: true,
       },
     });
+  });
+
+  it("begins once and defers the final notification until browser cleanup completes", async () => {
+    const browserCleanup = deferred<{ roots: ReturnType<typeof rootResult>[] }>();
+    browserState.browsers = [
+      {
+        id: "chrome",
+        name: "Chrome",
+        icon: "",
+        isRunning: false,
+        profiles: [
+          {
+            id: "p1",
+            name: "Default",
+            path: "C:\\chrome\\default",
+            size: 1,
+            selected: true,
+          },
+        ],
+      },
+    ];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [target("C:\\a.txt")],
+        });
+      }
+      if (command === "validate_targets") return Promise.resolve([metadata("C:\\a.txt")]);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "begin_shred_operation") return Promise.resolve(undefined);
+      if (command === "execute_roots") return Promise.resolve({ roots: [] });
+      if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
+      if (command === "shred_browser_data") return browserCleanup.promise;
+      return Promise.resolve(undefined);
+    });
+
+    await renderWithOneFile();
+    await confirmDeletion();
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("shred_browser_data", expect.anything())
+    );
+    expect(lifecycleCommands()).toEqual([
+      "begin_shred_operation",
+      "execute_roots",
+      "shred_browser_data",
+    ]);
+    expect(invokeMock).not.toHaveBeenCalledWith("send_notification", expect.anything());
+
+    browserCleanup.resolve({ roots: [] });
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("send_notification", expect.anything())
+    );
+    expect(lifecycleCommands()).toEqual([
+      "begin_shred_operation",
+      "execute_roots",
+      "shred_browser_data",
+      "send_notification",
+    ]);
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "begin_shred_operation")
+    ).toHaveLength(1);
+  });
+
+  it("queries cancellation status after roots even when Stop was requested and skips browser cleanup", async () => {
+    const roots = deferred<{ roots: ReturnType<typeof rootResult>[] }>();
+    browserState.browsers = [
+      {
+        id: "chrome",
+        name: "Chrome",
+        icon: "",
+        isRunning: false,
+        profiles: [
+          {
+            id: "p1",
+            name: "Default",
+            path: "C:\\chrome\\default",
+            size: 1,
+            selected: true,
+          },
+        ],
+      },
+    ];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [target("C:\\a.txt")],
+        });
+      }
+      if (command === "validate_targets") return Promise.resolve([metadata("C:\\a.txt")]);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "execute_roots") return roots.promise;
+      if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
+      return Promise.resolve(undefined);
+    });
+
+    await renderWithOneFile();
+    await confirmDeletion();
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("execute_roots", expect.anything()));
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Stop Processing" }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cancel_shred"));
+    roots.resolve({ roots: [rootResult("destroyed")] });
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("is_shred_operation_cancelled")
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith("shred_browser_data", expect.anything());
+  });
+
+  it("queries cancellation status after each browser profile and skips later profiles after Stop", async () => {
+    const statusAfterFirstProfile = deferred<boolean>();
+    let statusCalls = 0;
+    browserState.browsers = [
+      {
+        id: "chrome",
+        name: "Chrome",
+        icon: "",
+        isRunning: false,
+        profiles: [
+          {
+            id: "p1",
+            name: "Default",
+            path: "C:\\chrome\\default",
+            size: 1,
+            selected: true,
+          },
+          {
+            id: "p2",
+            name: "Profile 2",
+            path: "C:\\chrome\\profile-2",
+            size: 1,
+            selected: true,
+          },
+        ],
+      },
+    ];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [],
+        });
+      }
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [],
+        });
+      }
+      if (command === "validate_targets") return Promise.resolve([]);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "shred_browser_data") return Promise.resolve({ roots: [rootResult("destroyed")] });
+      if (command === "is_shred_operation_cancelled") {
+        statusCalls += 1;
+        return statusCalls === 1 ? statusAfterFirstProfile.promise : Promise.resolve(false);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <ShredProvider>
+        <ShredSection />
+        <Probe />
+      </ShredProvider>
+    );
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Clean Selected Browser Data (2 profiles)" })
+    );
+    await user.click(await screen.findByRole("button", { name: "DELETE" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("is_shred_operation_cancelled")
+    );
+
+    await user.click(screen.getByRole("button", { name: "Stop Processing" }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cancel_shred"));
+    statusAfterFirstProfile.resolve(false);
+
+    await waitFor(() => expect(latest.isShredding).toBe(false));
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "shred_browser_data")
+    ).toHaveLength(1);
+  });
+
+  it("does not start browser cleanup when the root cancellation status query fails", async () => {
+    browserState.browsers = [
+      {
+        id: "chrome",
+        name: "Chrome",
+        icon: "",
+        isRunning: false,
+        profiles: [
+          {
+            id: "p1",
+            name: "Default",
+            path: "C:\\chrome\\default",
+            size: 1,
+            selected: true,
+          },
+        ],
+      },
+    ];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [target("C:\\a.txt")],
+        });
+      }
+      if (command === "validate_targets") return Promise.resolve([metadata("C:\\a.txt")]);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "execute_roots") return Promise.resolve({ roots: [rootResult("destroyed")] });
+      if (command === "is_shred_operation_cancelled") {
+        return Promise.reject(new Error("status unavailable"));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await renderWithOneFile();
+    await confirmDeletion();
+
+    await waitFor(() => expect(latest.isShredding).toBe(false));
+    expect(invokeMock).not.toHaveBeenCalledWith("shred_browser_data", expect.anything());
+  });
+
+  it("keeps Stop effective while the vault flush is pending because the shared operation starts first", async () => {
+    const vaultSave = deferred<void>();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [target("C:\\a.txt")],
+        });
+      }
+      if (command === "validate_targets") return Promise.resolve([metadata("C:\\a.txt")]);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "save_vault") return vaultSave.promise;
+      if (command === "is_shred_operation_cancelled") return Promise.resolve(true);
+      return Promise.resolve(undefined);
+    });
+
+    await renderWithOneFile();
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("save_vault", expect.anything()));
+    await confirmDeletion();
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("begin_shred_operation"));
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Stop Processing" }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cancel_shred"));
+    vaultSave.resolve();
+
+    await waitFor(() => expect(latest.isShredding).toBe(false));
+    const beginIndex = invokeMock.mock.calls.findIndex(
+      ([command]) => command === "begin_shred_operation"
+    );
+    const cancelIndex = invokeMock.mock.calls.findIndex(([command]) => command === "cancel_shred");
+    expect(beginIndex).toBeLessThan(cancelIndex);
+    expect(invokeMock).not.toHaveBeenCalledWith("execute_roots", expect.anything());
+  });
+
+  it("runs browser-only cleanup without execute_roots and sends one final notification", async () => {
+    browserState.browsers = [
+      {
+        id: "chrome",
+        name: "Chrome",
+        icon: "",
+        isRunning: false,
+        profiles: [
+          {
+            id: "p1",
+            name: "Default",
+            path: "C:\\chrome\\default",
+            size: 1,
+            selected: true,
+          },
+        ],
+      },
+    ];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({ source_schema: "v2", migration_required: false, targets: [] });
+      }
+      if (command === "validate_targets") return Promise.resolve([]);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "shred_browser_data") return Promise.resolve({ roots: [rootResult("destroyed")] });
+      if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <ShredProvider>
+        <ShredSection />
+        <Probe />
+      </ShredProvider>
+    );
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Clean Selected Browser Data (1 profile)" })
+    );
+    await user.click(await screen.findByRole("button", { name: "DELETE" }));
+
+    await waitFor(() => expect(latest.isShredding).toBe(false));
+    expect(invokeMock).not.toHaveBeenCalledWith("execute_roots", expect.anything());
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "send_notification")
+    ).toHaveLength(1);
+  });
+
+  it("sends one final notification for file-only cleanup", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [target("C:\\a.txt")],
+        });
+      }
+      if (command === "validate_targets") return Promise.resolve([metadata("C:\\a.txt")]);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "execute_roots") return Promise.resolve({ roots: [rootResult("destroyed")] });
+      if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
+      return Promise.resolve(undefined);
+    });
+
+    await renderWithOneFile();
+    await confirmDeletion();
+
+    await waitFor(() => expect(latest.isShredding).toBe(false));
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "send_notification")
+    ).toHaveLength(1);
   });
 });
 
