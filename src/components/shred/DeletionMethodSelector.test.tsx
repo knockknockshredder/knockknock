@@ -1,5 +1,5 @@
 // src/components/shred/DeletionMethodSelector.test.tsx
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DeletionMethodSelector } from "./DeletionMethodSelector";
@@ -39,9 +39,9 @@ function drive(drive_type: DriveInfo["drive_type"]): DriveInfo {
   };
 }
 
-function pendingFile(path: string): ShredFile {
+function pendingFile(path: string, id = "1"): ShredFile {
   return {
-    id: "1",
+    id,
     path,
     name: "a.txt",
     size: 1,
@@ -68,6 +68,16 @@ function selectedProfile(path: string): DetectedBrowser {
       },
     ],
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("DeletionMethodSelector", () => {
@@ -199,6 +209,71 @@ describe("DeletionMethodSelector", () => {
 
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Legacy 3-pass/ })).toBeDisabled()
+    );
+  });
+
+  it("classifies every selected Unix path before disabling Legacy for an SSD", async () => {
+    contextMock.files = [
+      pendingFile("/home/alice/report.txt", "1"),
+      pendingFile("/home/bob/archive.txt", "2"),
+    ];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_all_drive_info") {
+        return Promise.resolve([drive("hdd"), drive("ssd")]);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<DeletionMethodSelector />);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("get_all_drive_info", {
+        paths: ["/home/alice/report.txt", "/home/bob/archive.txt"],
+      })
+    );
+    expect(screen.getByRole("button", { name: /Legacy 3-pass/ })).toBeDisabled();
+  });
+
+  it("clears stale drive classification while an updated path request is pending", async () => {
+    const updatedClassification = deferred<DriveInfo[]>();
+    let classificationCalls = 0;
+    contextMock.files = [pendingFile("C:\\first.txt")];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_all_drive_info") {
+        classificationCalls += 1;
+        return classificationCalls === 1
+          ? Promise.resolve([drive("hdd")])
+          : updatedClassification.promise;
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const { rerender } = render(<DeletionMethodSelector />);
+    const legacy = screen.getByRole("button", { name: /Legacy 3-pass/ });
+    await waitFor(() => expect(legacy).toBeEnabled());
+
+    contextMock.files = [pendingFile("D:\\second.txt")];
+    rerender(<DeletionMethodSelector />);
+
+    await waitFor(() => expect(legacy).toBeDisabled());
+    await act(async () => {
+      updatedClassification.resolve([drive("hdd")]);
+    });
+    await waitFor(() => expect(legacy).toBeEnabled());
+  });
+
+  it("resets a selected Legacy method when its storage classification is unavailable", async () => {
+    contextMock.files = [pendingFile("C:\\a.txt")];
+    contextMock.deletionMethod = "legacy_three_pass";
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_all_drive_info") return Promise.resolve([drive("ssd")]);
+      return Promise.resolve(undefined);
+    });
+
+    render(<DeletionMethodSelector />);
+
+    await waitFor(() =>
+      expect(contextMock.setDeletionMethod).toHaveBeenCalledWith("automatic")
     );
   });
 

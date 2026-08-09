@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useShred } from "@/contexts/ShredContext";
 import { useBrowser } from "@/contexts/BrowserContext";
-import { cn, getDriveKey } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import type { DeletionMethod, DriveInfo } from "@/types";
 
 const METHOD_OPTIONS: ReadonlyArray<{
@@ -56,7 +56,10 @@ const STORAGE_NOTES: Partial<Record<StorageState, string>> = {
 export function DeletionMethodSelector() {
   const { files, deletionMethod, setDeletionMethod } = useShred();
   const { browsers } = useBrowser();
-  const [driveInfos, setDriveInfos] = useState<DriveInfo[]>([]);
+  const [driveInfoState, setDriveInfoState] = useState<{
+    pathsKey: string;
+    infos: DriveInfo[];
+  } | null>(null);
 
   const pendingFiles = useMemo(
     () => files.filter((file) => file.status === "pending"),
@@ -69,54 +72,57 @@ export function DeletionMethodSelector() {
         .filter((profile) => profile.selected)
         .map((profile) => profile.path)
     );
-    return [...pendingFiles.map((file) => file.path), ...browserProfilePaths];
+    return Array.from(
+      new Set([...pendingFiles.map((file) => file.path), ...browserProfilePaths])
+    );
   }, [browsers, pendingFiles]);
 
-  const driveKeys = useMemo(() => {
-    const keys = new Set(selectedPaths.map((path) => getDriveKey(path)));
-    return Array.from(keys).sort();
-  }, [selectedPaths]);
+  const selectedPathsKey = selectedPaths.join("\u0000");
 
   useEffect(() => {
-    if (driveKeys.length === 0) {
-      setDriveInfos([]);
+    setDriveInfoState(null);
+    if (selectedPaths.length === 0) {
       return;
     }
-    const representativePath = new Map<string, string>();
-    for (const path of selectedPaths) {
-      const key = getDriveKey(path);
-      if (!representativePath.has(key)) representativePath.set(key, path);
-    }
-    const paths = driveKeys.map((key) => representativePath.get(key) ?? key);
 
     let cancelled = false;
-    invoke<DriveInfo[]>("get_all_drive_info", { paths })
+    invoke<DriveInfo[]>("get_all_drive_info", { paths: selectedPaths })
       .then((infos) => {
-        if (!cancelled) setDriveInfos(infos);
+        if (!cancelled) setDriveInfoState({ pathsKey: selectedPathsKey, infos });
       })
       .catch(() => {
-        if (!cancelled) setDriveInfos([]);
+        if (!cancelled) setDriveInfoState(null);
       });
     return () => {
       cancelled = true;
     };
-  }, [driveKeys, selectedPaths]);
+  }, [selectedPaths, selectedPathsKey]);
 
   const storageState = useMemo<StorageState>(() => {
-    if (driveKeys.length === 0) return "no-files";
-    if (driveInfos.length < driveKeys.length) return "no-info";
-    const hasSsd = driveInfos.some(
+    if (selectedPaths.length === 0) return "no-files";
+    if (!driveInfoState || driveInfoState.pathsKey !== selectedPathsKey) {
+      return "no-info";
+    }
+    const { infos } = driveInfoState;
+    if (infos.length === 0) return "no-info";
+    const hasSsd = infos.some(
       (info) => info.drive_type === "ssd" || info.drive_type === "usb_ssd"
     );
     if (hasSsd) return "ssd-present";
-    const allHdd = driveInfos.every(
+    const allHdd = infos.every(
       (info) => info.drive_type === "hdd" || info.drive_type === "usb_hdd"
     );
     return allHdd ? "all-hdd" : "unknown";
-  }, [driveInfos, driveKeys]);
+  }, [driveInfoState, selectedPaths.length, selectedPathsKey]);
 
   const legacyUnavailable = storageState !== "all-hdd";
   const storageNote = STORAGE_NOTES[storageState] ?? null;
+
+  useEffect(() => {
+    if (legacyUnavailable && deletionMethod === "legacy_three_pass") {
+      setDeletionMethod("automatic");
+    }
+  }, [deletionMethod, legacyUnavailable, setDeletionMethod]);
 
   return (
     <div className="flex flex-col gap-1.5 w-full">

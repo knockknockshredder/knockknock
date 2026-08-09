@@ -322,13 +322,14 @@ export function ShredSection() {
         });
 
         recordRootOutcome(report);
-        // The backend token is authoritative between destructive phases. Query
-        // it even when the local Stop request is already known.
-        canStartNextPhase = await shouldStartNextPhase();
-
         // Apply typed per-root results: destroyed roots with root_removed are
         // removed from the list, everything else is retained with error details.
         await applyRootResults(report.roots);
+
+        // The backend token is authoritative between destructive phases. Check
+        // after persistence has applied the root results, immediately before
+        // browser cleanup can begin, even when Stop is already known locally.
+        canStartNextPhase = await shouldStartNextPhase();
       }
 
       const selectedProfiles = browsers.flatMap((b) =>
