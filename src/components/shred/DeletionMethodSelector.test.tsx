@@ -101,7 +101,7 @@ describe("DeletionMethodSelector", () => {
     expect(screen.getByText("Legacy 3-pass")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Storage-aware local deletion. Uses one logical overwrite pass before removal."
+        "One logical overwrite pass before deletion. Storage and filesystem limitations still apply."
       )
     ).toBeInTheDocument();
     expect(

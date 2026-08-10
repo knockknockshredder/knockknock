@@ -18,7 +18,17 @@ import type {
 } from "@/types";
 
 function statusToString(status: ShredStatus): string {
-  return status.type.toLowerCase();
+  return status.type;
+}
+
+function hasOverwritePass(currentPass: number, totalPasses: number): boolean {
+  return (
+    Number.isInteger(currentPass) &&
+    Number.isInteger(totalPasses) &&
+    currentPass > 0 &&
+    totalPasses > 0 &&
+    currentPass <= totalPasses
+  );
 }
 
 /**
@@ -62,7 +72,6 @@ export function ShredSection() {
     setIsShredding,
     addLogEntry,
     clearLog,
-    updateFileStatus,
     progress,
     setProgress,
     vaultPin,
@@ -277,12 +286,15 @@ export function ShredSection() {
           file_size,
         } = event.payload;
         const statusStr = statusToString(status);
+        const passSuffix = hasOverwritePass(current_pass, total_passes)
+          ? ` (pass ${current_pass}/${total_passes})`
+          : "";
         const message =
           status.type === "Error"
             ? `[${file_path}] error: ${status.message}`
             : status.type === "Warning"
               ? `[${file_path}] warning: ${status.message}`
-              : `[${file_path}] ${statusStr} (pass ${current_pass}/${total_passes})`;
+              : `[${file_path}] ${statusStr}${passSuffix}`;
         const level =
           status.type === "Error"
             ? "error"
@@ -426,14 +438,13 @@ export function ShredSection() {
         clearLog();
       }
     } catch (err) {
-      addLogEntry("error", `Deletion failed: ${err}`);
-      // Mark all pending as error
-      for (const file of pendingFiles) {
-        updateFileStatus(file.id, "error", String(err));
-      }
+      addLogEntry(
+        "error",
+        `Deletion terminated unexpectedly. Technical detail: ${String(err)}`
+      );
       invoke("send_notification", {
         title: "Deletion Failed",
-        body: `${String(err).slice(0, 200)}`,
+        body: `Operation terminated unexpectedly: ${String(err).slice(0, 200)}`,
       }).catch(() => {});
     } finally {
       unlisten?.();

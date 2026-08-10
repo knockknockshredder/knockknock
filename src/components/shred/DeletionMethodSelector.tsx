@@ -24,7 +24,7 @@ const METHOD_OPTIONS: ReadonlyArray<{
     title: "Automatic",
     tag: "Recommended",
     description:
-      "Storage-aware local deletion. Uses one logical overwrite pass before removal.",
+      "One logical overwrite pass before deletion. Storage and filesystem limitations still apply.",
   },
   {
     value: "legacy_three_pass",
@@ -139,9 +139,8 @@ export function DeletionMethodSelector() {
             </TooltipTrigger>
             <TooltipContent>
               Controls how KnockKnock overwrites the selected logical file
-              range before deletion. The Automatic method is storage-aware;
-              the Legacy 3-pass method is available only on confirmed
-              magnetic HDD storage.
+              range before deletion. Automatic uses one logical overwrite pass;
+              Legacy 3-pass is available only on confirmed magnetic HDD storage.
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>

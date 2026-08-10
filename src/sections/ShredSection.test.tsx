@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ShredProvider, useShred } from "@/contexts/ShredContext";
 import { ShredSection, computeProgressPercent } from "./ShredSection";
+import type { ProgressEvent } from "@/types";
 
 const { invokeMock, listenMock, browserState } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -910,6 +911,129 @@ describe("ShredSection policy wiring", () => {
     expect(
       invokeMock.mock.calls.filter(([command]) => command === "send_notification")
     ).toHaveLength(1);
+  });
+
+  it("logs lifecycle progress without synthetic pass numbers", async () => {
+    const roots = deferred<{ roots: ReturnType<typeof rootResult>[] }>();
+    let progressListener: ((event: { payload: ProgressEvent }) => void) | undefined;
+    listenMock.mockImplementation(
+      async (
+        eventName: string,
+        callback: (event: { payload: ProgressEvent }) => void
+      ) => {
+        if (eventName === "shred-progress") progressListener = callback;
+        return () => {};
+      }
+    );
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [target("C:\\a.txt")],
+        });
+      }
+      if (command === "validate_targets") return Promise.resolve([metadata("C:\\a.txt")]);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "execute_roots") return roots.promise;
+      return Promise.resolve(undefined);
+    });
+
+    await renderWithOneFile();
+    await confirmDeletion();
+    await waitFor(() => expect(progressListener).toBeDefined());
+
+    const progressEvent = (
+      status: ProgressEvent["status"],
+      current_pass: number,
+      total_passes: number
+    ): { payload: ProgressEvent } => ({
+      payload: {
+        file_path: "C:\\a.txt",
+        file_size: 1,
+        bytes_written: 0,
+        current_pass,
+        total_passes,
+        speed_bytes_per_sec: 0,
+        estimated_time_remaining_secs: 0,
+        status,
+      },
+    });
+
+    act(() => {
+      progressListener?.(progressEvent({ type: "Shredding" }, 0, 0));
+      progressListener?.(progressEvent({ type: "Shredding" }, 1, 1));
+      progressListener?.(progressEvent({ type: "Shredding" }, 2, 3));
+      progressListener?.(progressEvent({ type: "Complete" }, 0, 0));
+    });
+
+    const messages = latest.logEntries.map((entry) => entry.message);
+    expect(messages).toContain("[C:\\a.txt] Shredding");
+    expect(messages).toContain("[C:\\a.txt] Shredding (pass 1/1)");
+    expect(messages).toContain("[C:\\a.txt] Shredding (pass 2/3)");
+    expect(messages).toContain("[C:\\a.txt] Complete");
+    expect(messages).not.toContain(expect.stringContaining("pass 0/0"));
+
+    await act(async () => {
+      roots.resolve({ roots: [] });
+      await Promise.resolve();
+    });
+  });
+
+  it("records a rejected root command as an operation failure without starting browser cleanup", async () => {
+    browserState.browsers = [
+      {
+        id: "chrome",
+        name: "Chrome",
+        icon: "",
+        isRunning: false,
+        profiles: [
+          {
+            id: "p1",
+            name: "Default",
+            path: "C:\\chrome\\default",
+            size: 1,
+            selected: true,
+          },
+        ],
+      },
+    ];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [target("C:\\a.txt")],
+        });
+      }
+      if (command === "validate_targets") return Promise.resolve([metadata("C:\\a.txt")]);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "execute_roots") return Promise.reject(new Error("backend unavailable"));
+      return Promise.resolve(undefined);
+    });
+
+    await renderWithOneFile();
+    await confirmDeletion();
+
+    await waitFor(() => expect(latest.isShredding).toBe(false));
+    const errors = latest.logEntries.filter((entry) => entry.level === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain("Deletion terminated unexpectedly");
+    expect(errors[0].message).toContain("backend unavailable");
+    expect(invokeMock).not.toHaveBeenCalledWith("shred_browser_data", expect.anything());
+    expect(latest.files.every((file) => file.status === "pending")).toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("send_notification", {
+      title: "Deletion Failed",
+      body: expect.stringContaining("backend unavailable"),
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("send_notification", {
+      title: "Deletion Complete",
+      body: expect.anything(),
+    });
   });
 });
 
