@@ -147,7 +147,10 @@ pub(crate) fn shred_browser_core(
 ///
 /// Returns a fixed-path inspection failure separately so the command can
 /// preserve its structured context over IPC. Other collection failures remain
-/// command errors. Filesystem links are never followed anywhere in collection.
+/// command errors. Collection skips filesystem-link/reparse entries it directly
+/// inspects and rejects linked profile roots. Before mutation, collected
+/// candidates go through the secure handle-relative root executor, which
+/// enforces component-level no-follow confinement.
 fn collect_browser_data_files(
     profile_path: &std::path::Path,
     data_type: &BrowserDataType,
