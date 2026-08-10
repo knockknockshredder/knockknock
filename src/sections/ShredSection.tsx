@@ -286,9 +286,14 @@ export function ShredSection() {
           file_size,
         } = event.payload;
         const statusStr = statusToString(status);
-        const passSuffix = hasOverwritePass(current_pass, total_passes)
-          ? ` (pass ${current_pass}/${total_passes})`
-          : "";
+        // Pass numbers are only meaningful while an overwrite pass is in
+        // progress; completion events can carry valid-looking pass values
+        // (e.g. Automatic 1/1, Legacy 3/3) and must not render a suffix.
+        const passSuffix =
+          status.type === "Shredding" &&
+          hasOverwritePass(current_pass, total_passes)
+            ? ` (pass ${current_pass}/${total_passes})`
+            : "";
         const message =
           status.type === "Error"
             ? `[${file_path}] error: ${status.message}`

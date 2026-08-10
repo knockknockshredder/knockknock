@@ -967,6 +967,10 @@ describe("ShredSection policy wiring", () => {
       progressListener?.(progressEvent({ type: "Shredding" }, 1, 1));
       progressListener?.(progressEvent({ type: "Shredding" }, 2, 3));
       progressListener?.(progressEvent({ type: "Complete" }, 0, 0));
+      progressListener?.(progressEvent({ type: "Complete" }, 1, 1));
+      progressListener?.(progressEvent({ type: "Complete" }, 3, 3));
+      progressListener?.(progressEvent({ type: "Warning", message: "w1" }, 2, 3));
+      progressListener?.(progressEvent({ type: "Error", message: "e1" }, 2, 3));
     });
 
     const messages = latest.logEntries.map((entry) => entry.message);
@@ -974,7 +978,16 @@ describe("ShredSection policy wiring", () => {
     expect(messages).toContain("[C:\\a.txt] Shredding (pass 1/1)");
     expect(messages).toContain("[C:\\a.txt] Shredding (pass 2/3)");
     expect(messages).toContain("[C:\\a.txt] Complete");
+    expect(messages).toContain("[C:\\a.txt] warning: w1");
+    expect(messages).toContain("[C:\\a.txt] error: e1");
     expect(messages).not.toContain(expect.stringContaining("pass 0/0"));
+    // Realistic backend completion events (Automatic 1/1, Legacy 3/3) must
+    // not render a pass suffix.
+    expect(messages).not.toContain("[C:\\a.txt] Complete (pass 1/1)");
+    expect(messages).not.toContain("[C:\\a.txt] Complete (pass 3/3)");
+    // Error/Warning entries never receive synthetic pass suffixes.
+    expect(messages).not.toContain(expect.stringContaining("warning: w1 (pass"));
+    expect(messages).not.toContain(expect.stringContaining("error: e1 (pass"));
 
     await act(async () => {
       roots.resolve({ roots: [] });
