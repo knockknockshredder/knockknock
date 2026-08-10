@@ -312,6 +312,13 @@ describe("ShredSection policy wiring", () => {
     await user.click(await screen.findByRole("button", { name: "DELETE" }));
   }
 
+  it("does not rescan browsers when opening the confirmation or deleting files", async () => {
+    await renderWithOneFile();
+    await confirmDeletion();
+    await waitFor(() => expect(latest.isShredding).toBe(false));
+    expect(browserState.rescanBrowsers).not.toHaveBeenCalled();
+  });
+
   it("sends the selected deletion method and write check to execute_roots", async () => {
     await renderWithOneFile();
     await confirmDeletion();

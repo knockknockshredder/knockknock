@@ -81,7 +81,7 @@ export function ShredSection() {
     applyRootResults,
   } = useShred();
 
-  const { getSelectedCount, browsers, rescanBrowsers } = useBrowser();
+  const { getSelectedCount, browsers } = useBrowser();
   const { logObfuscation, autoClearLog } = useSettings();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -118,16 +118,17 @@ export function ShredSection() {
   const runningBrowsers = browsers.filter((b) => b.isRunning).map((b) => b.name);
 
   /**
-   * Open the confirmation dialog with a fresh consent flag and refresh the
-   * running-browser scan so the warning list is current while it is open.
+   * Open the confirmation dialog with a fresh consent flag. The running
+   * browser list shown in the dialog comes from the cached BrowserContext
+   * state; a general installed-browser scan runs only at app initialization
+   * or on explicit user refresh (LeftSidebar), never per dialog open.
    * The consent flag itself remains `dialogConfirmedRef` — set only by the
    * DELETE action (M10).
    */
   const openConfirmationDialog = useCallback(() => {
     dialogConfirmedRef.current = false;
     setDialogOpen(true);
-    void rescanBrowsers();
-  }, [rescanBrowsers]);
+  }, []);
 
   // Handle tray menu "Quick Shred" — triggers the same PIN→confirmation
   // flow as clicking the Shred button, using the existing executeShred
