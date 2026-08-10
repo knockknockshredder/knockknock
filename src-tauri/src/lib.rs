@@ -91,6 +91,7 @@ pub fn run() {
             commands::shred::request_elevation,
             commands::browser::detect_browsers,
             commands::browser::shred_browser_data,
+            commands::browser::check_browser_running_states,
             commands::tray::minimize_to_tray,
             commands::tray::sync_tray_state,
             commands::tray::send_notification,

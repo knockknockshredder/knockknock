@@ -544,7 +544,7 @@ explicit destructive confirmation
 backend browser-data processing
 ```
 
-Running browsers are detected and surfaced because concurrent browser writes can interfere with cleanup or recreate local data.
+Running browsers are detected and surfaced because concurrent browser writes can interfere with cleanup or recreate local data. Browser cleanup is blocked while the selected browser is running: the backend rechecks running state immediately before collection and refuses cleanup with no override — the destructive confirmation is consent to deletion, never consent to deleting browser data while the browser runs. Running state is also exposed through a lightweight `check_browser_running_states` command that reuses the same lock-file check without re-running installed-browser discovery or profile enumeration.
 
 Browser cleanup is confined to the selected profile: collection skips filesystem-link/reparse entries that it directly inspects, and a profile path that is itself a filesystem link is rejected. Inspection failures are surfaced rather than silently skipped. Collected candidates pass through the secure handle-relative root executor, which enforces component-level no-follow confinement before mutation; destructive cleanup requires explicit user consent (re-checked by the backend).
 

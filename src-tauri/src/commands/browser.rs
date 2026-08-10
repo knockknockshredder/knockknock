@@ -53,12 +53,50 @@ pub async fn shred_browser_data(
         .map_err(|e| format!("Task failed: {}", e))?
 }
 
+/// Lightweight running-state check for already-known browsers/profiles.
+///
+/// No installed-browser discovery and no profile enumeration: only the
+/// provided profile paths are inspected, using the same lock-file logic as
+/// the destructive gate. A browser is reported running when any of its
+/// known profiles is currently running; a request with no known profiles is
+/// reported not running (there is no profile whose lock could block cleanup).
+///
+/// Fail-closed: a profile path that cannot be inspected reliably fails the
+/// whole request rather than silently reporting "not running".
+pub(crate) fn browser_running_states(
+    requests: &[BrowserRunningCheck],
+) -> Result<Vec<BrowserRunningState>, String> {
+    let mut states = Vec::with_capacity(requests.len());
+    for request in requests {
+        let mut is_running = false;
+        for profile_path in &request.profile_paths {
+            if check_browser_lock_file(std::path::Path::new(profile_path))? {
+                is_running = true;
+                break;
+            }
+        }
+        states.push(BrowserRunningState {
+            browser_id: request.browser_id.clone(),
+            is_running,
+        });
+    }
+    Ok(states)
+}
+
+#[tauri::command]
+pub async fn check_browser_running_states(
+    requests: Vec<BrowserRunningCheck>,
+) -> Result<Vec<BrowserRunningState>, String> {
+    tokio::task::spawn_blocking(move || browser_running_states(&requests))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
 /// Command core without the `AppHandle` (testable without a Tauri runtime).
 ///
 /// Pipeline (Task 3.3):
 /// 1. profile exists AND is a real directory, not a filesystem link;
-/// 2. running-browser lock check, `explicit_consent` honored (M10 —
-///    backend authoritative; the flag reflects the confirmed dialog state);
+/// 2. fresh running-browser lock check — fail-closed, no override;
 /// 3. collect candidates (Result-propagating, no-follow — M9);
 /// 4. feed candidates into `execute_roots_core` as File roots with the
 ///    request's `DeletionPolicy`;
@@ -90,12 +128,14 @@ pub(crate) fn shred_browser_core(
         ));
     }
 
-    // 2. Safety: refuse to shred browser data while the browser is running
-    // unless the user has explicitly acknowledged the warning. The backend
-    // check remains authoritative (M10) — the frontend may be stale.
-    if check_browser_lock_file(&profile_path) && !request.explicit_consent {
+    // 2. Safety gate: refuse to shred browser data while the browser is
+    // running. There is no override — the destructive DELETE confirmation
+    // is consent to destructive deletion, not consent to deleting browser
+    // data while the browser is running. The check is fail-closed: if the
+    // running state cannot be inspected reliably, cleanup is blocked too.
+    if check_browser_lock_file(&profile_path)? {
         return Err(format!(
-            "Browser {} is currently running. Close it first or acknowledge the warning.",
+            "Browser {} is currently running. Close it before deleting browser data.",
             request.browser_name
         ));
     }
@@ -450,19 +490,46 @@ fn collection_error(path: &std::path::Path, error: &std::io::Error) -> crate::sh
 /// Detect if a browser is running by looking for lock files in the profile directory.
 /// Chromium-based browsers create `SingletonLock` (or `lock`) while running;
 /// Firefox creates `.parentlock`. Returns true if any lock file is present.
-fn check_browser_lock_file(profile_path: &std::path::Path) -> bool {
+///
+/// Fail-closed: a profile that does not exist cannot host a running browser
+/// (`Ok(false)`); any other failure to inspect the profile — including an
+/// uninspectable path or a path that is not a real directory — is an error,
+/// never a silent "not running" that would weaken the safety gate.
+fn check_browser_lock_file(profile_path: &std::path::Path) -> Result<bool, String> {
     const LOCK_FILES: &[&str] = &["SingletonLock", "lock", ".parentlock"];
+    let metadata = match std::fs::symlink_metadata(profile_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "Cannot inspect browser profile {}: {error}",
+                profile_path.display()
+            ));
+        }
+    };
+    if crate::browser::paths::is_link_metadata(&metadata) {
+        return Err(format!(
+            "Browser profile path is a filesystem link: {}",
+            profile_path.display()
+        ));
+    }
+    if !metadata.is_dir() {
+        return Err(format!(
+            "Browser profile path is not a directory: {}",
+            profile_path.display()
+        ));
+    }
     for lock_name in LOCK_FILES {
         if profile_path.join(lock_name).exists() {
-            return true;
+            return Ok(true);
         }
     }
     if let Some(parent) = profile_path.parent() {
         if parent.join("SingletonLock").exists() {
-            return true;
+            return Ok(true);
         }
     }
-    false
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -575,7 +642,7 @@ mod tests {
         .expect_err("metadata failure must surface");
 
         let result = browser_collection_error_result(
-            &request(&profile, vec![BrowserDataType::Cookies], false),
+            &request(&profile, vec![BrowserDataType::Cookies]),
             BrowserCollectionError::fixed_path(error),
         )
         .expect("fixed-path error must be reported in-band");
@@ -740,18 +807,13 @@ mod tests {
         TempHome(unique_dir)
     }
 
-    fn request(
-        profile_path: &Path,
-        data_types: Vec<BrowserDataType>,
-        explicit_consent: bool,
-    ) -> BrowserShredRequest {
+    fn request(profile_path: &Path, data_types: Vec<BrowserDataType>) -> BrowserShredRequest {
         BrowserShredRequest {
             browser_name: "TestBrowser".to_string(),
             profile_path: profile_path.to_string_lossy().into_owned(),
             data_types,
             method: DeletionMethod::Automatic,
             write_check: WriteCheck::Off,
-            explicit_consent,
         }
     }
 
@@ -774,8 +836,8 @@ mod tests {
         std::fs::create_dir_all(profile.join("a/b")).expect("create nested dirs");
         write(&profile.join("a/b/deep.txt"), b"deep");
 
-        let result = run(request(&profile, vec![BrowserDataType::Profile], false))
-            .expect("cleanup must succeed");
+        let result =
+            run(request(&profile, vec![BrowserDataType::Profile])).expect("cleanup must succeed");
 
         assert_eq!(result.roots.len(), 2);
         assert!(result
@@ -799,8 +861,8 @@ mod tests {
         write(&profile.join("Cookies"), b"cookies payload");
         write(&profile.join("neighbor.txt"), b"neighbor payload");
 
-        let result = run(request(&profile, vec![BrowserDataType::Cookies], false))
-            .expect("cleanup must succeed");
+        let result =
+            run(request(&profile, vec![BrowserDataType::Cookies])).expect("cleanup must succeed");
 
         assert_eq!(result.roots.len(), 1);
         assert_eq!(result.roots[0].status, RootStatus::Destroyed);
@@ -825,8 +887,8 @@ mod tests {
         write(&outside.join("secret.txt"), b"secret payload");
         std::os::unix::fs::symlink(&outside, profile.join("link_dir")).expect("create symlink");
 
-        let result = run(request(&profile, vec![BrowserDataType::Profile], false))
-            .expect("cleanup must succeed");
+        let result =
+            run(request(&profile, vec![BrowserDataType::Profile])).expect("cleanup must succeed");
 
         assert_eq!(result.roots.len(), 1, "the link must not be collected");
         assert_eq!(result.roots[0].status, RootStatus::Destroyed);
@@ -860,8 +922,8 @@ mod tests {
         write(&locked.join("inside.txt"), b"inside");
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod 0");
 
-        let error = run(request(&profile, vec![BrowserDataType::Profile], false))
-            .expect_err("cleanup must fail");
+        let error =
+            run(request(&profile, vec![BrowserDataType::Profile])).expect_err("cleanup must fail");
         assert!(
             error.contains("browser data collection failed"),
             "unexpected error: {error}"
@@ -886,12 +948,8 @@ mod tests {
         let link_profile = home.0.join("profile-link");
         std::os::unix::fs::symlink(&real_profile, &link_profile).expect("create symlink");
 
-        let error = run(request(
-            &link_profile,
-            vec![BrowserDataType::Profile],
-            false,
-        ))
-        .expect_err("cleanup must be blocked");
+        let error = run(request(&link_profile, vec![BrowserDataType::Profile]))
+            .expect_err("cleanup must be blocked");
         assert!(
             error.contains("filesystem link; cleanup is blocked"),
             "unexpected error: {error}"
@@ -903,34 +961,129 @@ mod tests {
         );
     }
 
-    /// M10: a running browser (lock file present) is rejected without
-    /// explicit consent, and accepted with it — the backend honors the flag
-    /// and never hardcodes it.
+    /// Running-state safety gate: a running browser (lock file present)
+    /// always blocks cleanup. There is no request flag or consent field
+    /// that bypasses this — the DELETE confirmation never means "delete
+    /// browser data while the browser is running".
     #[test]
-    fn browser_running_condition_rejected_without_consent() {
+    fn browser_running_always_blocks_cleanup() {
         let home = temp_home();
         let profile = home.profile();
         write(&profile.join("Cookies"), b"cookies payload");
         write(&profile.join("SingletonLock"), b"lock");
 
-        let rejected =
-            run(request(&profile, vec![BrowserDataType::Cookies], false)).expect_err("must reject");
+        let error =
+            run(request(&profile, vec![BrowserDataType::Cookies])).expect_err("must reject");
         assert!(
-            rejected.contains("is currently running"),
-            "unexpected error: {rejected}"
+            error.contains("is currently running"),
+            "unexpected error: {error}"
         );
         assert!(
             profile.join("Cookies").exists(),
-            "nothing may be shredded while rejected"
+            "nothing may be shredded while the browser is running"
+        );
+    }
+
+    /// The lightweight running-state check inspects only the provided
+    /// profile paths (no installed-browser discovery): a known profile with
+    /// a lock file reports running, a known profile without one reports
+    /// closed, and a missing profile reports closed.
+    #[test]
+    fn running_state_check_uses_known_profile_paths() {
+        let (tmp, running_profile, _outside) = profile_fixture();
+        let closed_profile = tmp.path().join("closed-profile");
+        std::fs::create_dir_all(&closed_profile).expect("create closed profile");
+        write(&running_profile.join("SingletonLock"), b"lock");
+
+        let states = browser_running_states(&[
+            BrowserRunningCheck {
+                browser_id: "chrome".to_string(),
+                profile_paths: vec![running_profile.to_string_lossy().into_owned()],
+            },
+            BrowserRunningCheck {
+                browser_id: "firefox".to_string(),
+                profile_paths: vec![closed_profile.to_string_lossy().into_owned()],
+            },
+            BrowserRunningCheck {
+                browser_id: "edge".to_string(),
+                profile_paths: vec![tmp.path().join("missing").to_string_lossy().into_owned()],
+            },
+        ])
+        .expect("running-state check must succeed");
+
+        assert_eq!(states.len(), 3);
+        assert_eq!(states[0].browser_id, "chrome");
+        assert!(
+            states[0].is_running,
+            "chrome must be running (lock present)"
+        );
+        assert_eq!(states[1].browser_id, "firefox");
+        assert!(!states[1].is_running, "firefox must be closed");
+        assert_eq!(states[2].browser_id, "edge");
+        assert!(!states[2].is_running, "missing profile must be closed");
+        drop(tmp);
+    }
+
+    /// Fail-closed: a profile path that cannot be inspected as a browser
+    /// profile (it is not a real directory) is an error — never a silent
+    /// "not running" that would weaken the safety gate.
+    #[test]
+    fn running_state_check_fails_loud_on_uninspectable_path() {
+        let (tmp, _profile, _outside) = profile_fixture();
+        let file_path = tmp.path().join("not-a-profile");
+        write(&file_path, b"i am a file, not a profile");
+
+        let error = check_browser_lock_file(&file_path).expect_err("must fail closed");
+        assert!(
+            error.contains("not a directory"),
+            "unexpected error: {error}"
         );
 
-        let accepted = run(request(&profile, vec![BrowserDataType::Cookies], true))
-            .expect("consent must allow cleanup");
-        assert_eq!(accepted.roots.len(), 1);
-        assert_eq!(accepted.roots[0].status, RootStatus::Destroyed);
+        let states_error = browser_running_states(&[BrowserRunningCheck {
+            browser_id: "chrome".to_string(),
+            profile_paths: vec![file_path.to_string_lossy().into_owned()],
+        }])
+        .expect_err("request must fail closed");
         assert!(
-            !profile.join("Cookies").exists(),
-            "Cookies must be removed after consent"
+            states_error.contains("not a directory"),
+            "unexpected error: {states_error}"
         );
+        drop(tmp);
+    }
+
+    /// Fail-closed: a profile path that is a filesystem link is an error,
+    /// never a silent "not running".
+    #[cfg(unix)]
+    #[test]
+    fn running_state_check_rejects_link_profile() {
+        let (tmp, profile, outside) = profile_fixture();
+        std::os::unix::fs::symlink(&outside, profile.join("linked")).expect("create symlink");
+
+        let error = check_browser_lock_file(&profile.join("linked")).expect_err("must fail closed");
+        assert!(
+            error.contains("filesystem link"),
+            "unexpected error: {error}"
+        );
+        drop(tmp);
+    }
+
+    /// The running-state gate must not block a profile that is actually
+    /// closed: the lightweight check reports it closed and cleanup proceeds.
+    #[test]
+    fn closed_browser_profile_remains_eligible_for_cleanup() {
+        let home = temp_home();
+        let profile = home.profile();
+        write(&profile.join("Cookies"), b"cookies payload");
+
+        assert!(
+            !check_browser_lock_file(&profile).expect("closed profile is inspectable"),
+            "profile without a lock file must not report running"
+        );
+
+        let result = run(request(&profile, vec![BrowserDataType::Cookies]))
+            .expect("cleanup must succeed for a closed browser");
+        assert_eq!(result.roots.len(), 1);
+        assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+        assert!(!profile.join("Cookies").exists(), "Cookies must be removed");
     }
 }
