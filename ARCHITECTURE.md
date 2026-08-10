@@ -546,7 +546,7 @@ backend browser-data processing
 
 Running browsers are detected and surfaced because concurrent browser writes can interfere with cleanup or recreate local data.
 
-Browser cleanup is confined to the selected profile: collection never follows Unix symlinks or Windows reparse points/junctions, a profile path that is itself a filesystem link is rejected, inspection failures are surfaced rather than silently skipped, and destructive cleanup requires explicit user consent (re-checked by the backend).
+Browser cleanup is confined to the selected profile: collection skips filesystem-link/reparse entries that it directly inspects, and a profile path that is itself a filesystem link is rejected. Inspection failures are surfaced rather than silently skipped. Collected candidates pass through the secure handle-relative root executor, which enforces component-level no-follow confinement before mutation; destructive cleanup requires explicit user consent (re-checked by the backend).
 
 Browser cleanup operates on local profile data and does not control remote browser-account synchronization.
 

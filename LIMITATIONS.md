@@ -176,7 +176,7 @@ Close the browser before performing browser cleanup whenever possible.
 
 KnockKnock's browser cleanup affects selected local data only. It does not represent deletion from an online account or another device.
 
-Browser cleanup is confined to the selected profile: collection never follows Unix symlinks or Windows reparse points/junctions, a profile path that is itself a filesystem link is rejected, and inspection failures are surfaced rather than silently skipped. On Linux, profile paths are resolved from the home directory or from `XDG_CONFIG_HOME`; execution roots must be inside the home directory, so profile paths resolved from an `XDG_CONFIG_HOME` outside the home directory are blocked by root confinement.
+Browser cleanup is confined to the selected profile: collection skips filesystem-link/reparse entries that it directly inspects, and a profile path that is itself a filesystem link is rejected. Inspection failures are surfaced rather than silently skipped. Collected candidates pass through the secure handle-relative root executor, which enforces component-level no-follow confinement before mutation. On Linux, profile paths are resolved from the home directory or from `XDG_CONFIG_HOME`; execution roots must be inside the home directory, so profile paths resolved from an `XDG_CONFIG_HOME` outside the home directory are blocked by root confinement.
 
 ## Hard Links
 

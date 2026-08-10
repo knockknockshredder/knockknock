@@ -214,19 +214,19 @@ pub(crate) fn spot_check_plan(size: u64) -> Vec<(u64, u64)> {
     plan
 }
 
+fn planned_spot_buffer_len(plan: &[(u64, u64)]) -> usize {
+    plan.iter().map(|(_, len)| *len as usize).max().unwrap_or(0)
+}
+
 /// v2 Spot write checker: seeks to each `(pos, len)` in `spot_check_plan`
 /// and compares the read-back bytes against the expected stream via
 /// `compare_block` (same ChaCha20-with-seed / zeros / ones machinery as the
 /// legacy sample verifier). An empty file (size 0) always passes.
-pub(crate) struct SpotVerification {
-    block_size: usize,
-}
+pub(crate) struct SpotVerification;
 
 impl SpotVerification {
     pub(crate) fn new() -> Self {
-        Self {
-            block_size: SPOT_BLOCK as usize,
-        }
+        Self
     }
 }
 
@@ -243,10 +243,11 @@ impl VerificationStrategy for SpotVerification {
             return Ok(VerificationResult { passed: true });
         }
 
-        let mut buffer = vec![0u8; self.block_size];
+        let plan = spot_check_plan(size);
+        let mut buffer = vec![0u8; planned_spot_buffer_len(&plan)];
         let mut mismatches = 0;
 
-        for (pos, len) in spot_check_plan(size) {
+        for (pos, len) in plan {
             file.seek(SeekFrom::Start(pos))
                 .map_err(|e| ShredError::from_io_error(path.to_path_buf(), e))?;
             file.read_exact(&mut buffer[..len as usize])
@@ -351,6 +352,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn spot_plan_ranges_fit_the_planned_buffer_across_small_file_sizes() {
+        for size in (1..=SMALL_FILE_LIMIT).chain(std::iter::once(SMALL_FILE_LIMIT + 1)) {
+            let plan = spot_check_plan(size);
+            let planned_buffer_len = planned_spot_buffer_len(&plan);
+
+            for (pos, len) in plan {
+                assert!(
+                    len as usize <= planned_buffer_len,
+                    "range {pos}+{len} exceeds planned buffer {planned_buffer_len} for size {size}"
+                );
+            }
+        }
+    }
+
     /// Write `size` zero bytes, flip one byte at `flip_pos`, and run the
     /// given checker with the Zeros pattern.
     fn verify_zero_file_with_one_flip(
@@ -443,6 +459,37 @@ mod tests {
             )
             .unwrap();
         assert!(result.passed);
+    }
+
+    #[test]
+    fn spot_verification_handles_small_file_boundary_sizes() {
+        let checker = SpotVerification::new();
+
+        for size in [1u64, 4095, 4096, 4097, 6188, 8192, 65535, 65536, 65537] {
+            let temp = NamedTempFile::new().unwrap();
+            temp.as_file().set_len(size).unwrap();
+            let mut file = temp.reopen().unwrap();
+
+            let result = checker
+                .verify(&mut file, &PatternType::Zeros, size, None, temp.path())
+                .unwrap();
+            assert!(result.passed, "size {size}");
+        }
+    }
+
+    #[test]
+    fn spot_verification_checks_small_files_beyond_first_block() {
+        let temp = NamedTempFile::new().unwrap();
+        temp.as_file().set_len(8192).unwrap();
+        let mut file = temp.reopen().unwrap();
+        file.seek(SeekFrom::Start(6000)).unwrap();
+        file.write_all(&[0x01]).unwrap();
+        file.flush().unwrap();
+
+        let result = SpotVerification::new()
+            .verify(&mut file, &PatternType::Zeros, 8192, None, temp.path())
+            .unwrap();
+        assert!(!result.passed);
     }
 
     #[test]

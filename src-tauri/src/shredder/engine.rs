@@ -491,6 +491,34 @@ mod tests {
     }
 
     #[test]
+    fn automatic_spot_write_check_handles_small_file_larger_than_spot_block() {
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(&[0xAA; 6188]).unwrap();
+        temp.flush().unwrap();
+
+        let seed = PrngSeed {
+            key: [1u8; 32],
+            nonce: [2u8; 12],
+        };
+        let mut file = temp.reopen().unwrap();
+        let outcome = overwrite_file_with_seed(
+            &mut file,
+            6188,
+            automatic_policy(WriteCheck::Spot),
+            &NoopProgressReporter,
+            temp.path(),
+            seed.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(outcome.state, OverwriteState::Completed);
+        assert_eq!(outcome.passes_completed, 1);
+        assert_eq!(outcome.write_check, WriteCheckOutcome::Passed);
+        assert!(outcome.issues.is_empty());
+        assert_eq!(read_all(&file), expected_stream(&seed, 6188));
+    }
+
+    #[test]
     fn legacy_seeded_overwrite_matches_pass3_stream() {
         let mut temp = NamedTempFile::new().unwrap();
         temp.write_all(&[0xAA; 256 * KIB as usize]).unwrap();
