@@ -7,13 +7,13 @@ function renderDialog(overrides: {
   fileCount?: number;
   folderCount?: number;
   profileCount?: number;
-  runningBrowsers?: string[];
+  runningSelectedBrowsers?: string[];
 } = {}) {
   const {
     fileCount = 0,
     folderCount = 0,
     profileCount = 0,
-    runningBrowsers = [],
+    runningSelectedBrowsers = [],
   } = overrides;
   return render(
     <ConfirmationDialog
@@ -22,7 +22,7 @@ function renderDialog(overrides: {
       fileCount={fileCount}
       folderCount={folderCount}
       profileCount={profileCount}
-      runningBrowsers={runningBrowsers}
+      runningSelectedBrowsers={runningSelectedBrowsers}
       onConfirm={vi.fn()}
     />
   );
@@ -68,15 +68,22 @@ describe("ConfirmationDialog counts", () => {
     expect(descriptionText()).toBe("Nothing selected.");
   });
 
-  it("keeps the running-browser warning and DELETE action", () => {
-    renderDialog({ fileCount: 1, runningBrowsers: ["Chrome"] });
+  it("warns about a selected running browser and disables DELETE", () => {
+    renderDialog({ fileCount: 1, runningSelectedBrowsers: ["Chrome"] });
     expect(
       screen.getByText(
-        "Chrome is currently running. Close it before continuing; otherwise cleanup may fail or the browser may recreate local data."
+        "Chrome is currently running. Close it before deleting browser data."
       )
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "DELETE" })
-    ).toBeInTheDocument();
+    ).toBeDisabled();
+  });
+
+  it("keeps DELETE enabled when no selected browser is running", () => {
+    renderDialog({ fileCount: 1, runningSelectedBrowsers: [] });
+    expect(
+      screen.getByRole("button", { name: "DELETE" })
+    ).toBeEnabled();
   });
 });

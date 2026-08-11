@@ -1,6 +1,13 @@
 // src/components/browser/BrowserCard.tsx
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ProfileItem } from "./ProfileItem";
+import { Warning } from "@phosphor-icons/react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { DetectedBrowser } from "@/types";
 import {
   siGooglechrome,
@@ -72,10 +79,23 @@ export function BrowserCard({ browser }: { browser: DetectedBrowser }) {
         <div className="flex items-center gap-2">
           <BrowserIcon name={browser.name} />
           <CardTitle className="font-mono text-sm">{browser.name}</CardTitle>
+          {browser.isRunning && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger
+                  aria-label={`${browser.name} is currently running`}
+                  className="inline-flex items-center text-amber-500"
+                >
+                  <Warning size={14} weight="fill" />
+                </TooltipTrigger>
+                <TooltipContent>
+                  {browser.name} is currently running. Close it before deleting
+                  browser data.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
         </div>
-        {browser.isRunning && (
-          <p className="text-xs text-amber-500">Browser is currently running</p>
-        )}
       </CardHeader>
       <CardContent>
         {browser.profiles.map((profile) => (

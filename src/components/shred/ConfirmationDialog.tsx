@@ -17,7 +17,10 @@ interface ConfirmationDialogProps {
   fileCount: number;
   folderCount: number;
   profileCount: number;
-  runningBrowsers: string[];
+  /** Names of SELECTED browsers currently cached as running. DELETE is
+   * disabled while non-empty; the fresh backend pre-delete check remains the
+   * final decision either way. */
+  runningSelectedBrowsers: string[];
   onConfirm: () => void;
 }
 
@@ -27,7 +30,7 @@ export function ConfirmationDialog({
   fileCount,
   folderCount,
   profileCount,
-  runningBrowsers,
+  runningSelectedBrowsers,
   onConfirm,
 }: ConfirmationDialogProps) {
   const hasFiles = fileCount > 0;
@@ -104,9 +107,12 @@ export function ConfirmationDialog({
             Confirm Deletion
           </AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
-          {runningBrowsers.length > 0 && (
-            <p className="mt-2 text-amber-500 font-mono text-xs">
-              {runningBrowsers.join(", ")} {runningBrowsers.length === 1 ? "is" : "are"} currently running. Close {runningBrowsers.length === 1 ? "it" : "them"} before continuing; otherwise cleanup may fail or the browser may recreate local data.
+          {runningSelectedBrowsers.length > 0 && (
+            <p className="mt-2 text-amber-500 font-mono text-xs" role="alert">
+              {runningSelectedBrowsers.join(", ")}{" "}
+              {runningSelectedBrowsers.length === 1 ? "is" : "are"} currently
+              running. Close {runningSelectedBrowsers.length === 1 ? "it" : "them"}{" "}
+              before deleting browser data.
             </p>
           )}
         </AlertDialogHeader>
@@ -117,6 +123,7 @@ export function ConfirmationDialog({
               onConfirm();
               onOpenChange(false);
             }}
+            disabled={runningSelectedBrowsers.length > 0}
             className="bg-red-600 text-white hover:bg-red-700"
           >
             DELETE

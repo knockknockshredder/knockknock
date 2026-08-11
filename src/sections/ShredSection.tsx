@@ -12,6 +12,7 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { PinVerify } from "@/components/settings/PinVerify";
 import type {
   BatchRootResult,
+  BrowserRunningState,
   ProgressEvent,
   RootResultDto,
   ShredStatus,
@@ -89,10 +90,6 @@ export function ShredSection() {
   const isExecutingRef = useRef(false); // guards against StrictMode double-fire
   const stopRequestedRef = useRef(false);
   const completedCountRef = useRef(0);
-  // Honest consent flag (M10, ora-2 amendment 5): set ONLY by the DELETE
-  // action on the confirmation dialog. Never derived from a stale browser
-  // scan, never unconditional. The backend lock check remains authoritative.
-  const dialogConfirmedRef = useRef(false);
 
   // PIN verification gates
   const [pinNeeded, setPinNeeded] = useState(false);
@@ -115,18 +112,19 @@ export function ShredSection() {
     (f) => f.kind === "directory"
   ).length;
   const selectedProfileCount = getSelectedCount();
-  const runningBrowsers = browsers.filter((b) => b.isRunning).map((b) => b.name);
+  const runningSelectedBrowsers = browsers
+    .filter((b) => b.isRunning && b.profiles.some((p) => p.selected))
+    .map((b) => b.name);
 
   /**
-   * Open the confirmation dialog with a fresh consent flag. The running
-   * browser list shown in the dialog comes from the cached BrowserContext
-   * state; a general installed-browser scan runs only at app initialization
-   * or on explicit user refresh (LeftSidebar), never per dialog open.
-   * The consent flag itself remains `dialogConfirmedRef` — set only by the
-   * DELETE action (M10).
+   * Open the confirmation dialog. The running-browser warning shown in the
+   * dialog comes from the cached BrowserContext state (kept live by the
+   * lightweight watcher); a general installed-browser scan runs only at app
+   * initialization or on explicit user refresh (LeftSidebar), never per
+   * dialog open. The fresh backend running-state check before execution is
+   * the final decision — cached state here is never trusted for safety.
    */
   const openConfirmationDialog = useCallback(() => {
-    dialogConfirmedRef.current = false;
     setDialogOpen(true);
   }, []);
 
@@ -176,8 +174,9 @@ export function ShredSection() {
   };
 
   const handleConfirm = () => {
-    // The DELETE action on the dialog IS the explicit user action (M10).
-    dialogConfirmedRef.current = true;
+    // The DELETE action on the dialog confirms the destructive deletion. It
+    // is NOT consent to delete browser data while the browser is running —
+    // the fresh running-state check below still blocks in that case.
     void executeShred();
   };
 
@@ -187,6 +186,68 @@ export function ShredSection() {
 
     isExecutingRef.current = true;
     stopRequestedRef.current = false;
+
+    const selectedProfiles = browsers.flatMap((b) =>
+      b.profiles
+        .filter((p) => p.selected)
+        .map((p) => ({
+          browser_name: b.name,
+          browser_id: b.id,
+          profile_path: p.path,
+          data_types: ["cache", "cookies", "history", "passwords"] as const,
+        }))
+    );
+
+    // Running-state precondition: browser cleanup only proceeds while every
+    // selected browser is currently closed, verified FRESH right now. The
+    // dialog's cached state is never the final decision. This runs before
+    // anything destructive starts, so a running browser also blocks
+    // file/folder roots selected in the same operation. Fail-closed: if the
+    // running state cannot be confirmed, nothing starts.
+    if (selectedProfiles.length > 0) {
+      const requests = Array.from(
+        selectedProfiles.reduce((byBrowser, profile) => {
+          const paths = byBrowser.get(profile.browser_id) ?? [];
+          paths.push(profile.profile_path);
+          byBrowser.set(profile.browser_id, paths);
+          return byBrowser;
+        }, new Map<string, string[]>())
+      ).map(([browserId, profilePaths]) => ({ browserId, profilePaths }));
+
+      let blockedBrowserName: string | null = null;
+      let checkFailed = false;
+      try {
+        const states = await invoke<BrowserRunningState[]>(
+          "check_browser_running_states",
+          { requests }
+        );
+        const runningIds = new Set(
+          states.filter((s) => s.isRunning).map((s) => s.browserId)
+        );
+        blockedBrowserName =
+          selectedProfiles.find((p) => runningIds.has(p.browser_id))
+            ?.browser_name ?? null;
+      } catch {
+        checkFailed = true;
+      }
+
+      if (checkFailed) {
+        addLogEntry(
+          "error",
+          "Could not confirm that the selected browser is closed. Browser data was not deleted."
+        );
+        isExecutingRef.current = false;
+        return;
+      }
+      if (blockedBrowserName) {
+        addLogEntry(
+          "warning",
+          `Browser data deletion blocked: ${blockedBrowserName} is currently running. Close it before deleting browser data.`
+        );
+        isExecutingRef.current = false;
+        return;
+      }
+    }
 
     // Create the shared cancellation session before any asynchronous
     // preparation. This lets Stop target the same session while vault
@@ -350,16 +411,6 @@ export function ShredSection() {
         canStartNextPhase = await shouldStartNextPhase();
       }
 
-      const selectedProfiles = browsers.flatMap((b) =>
-        b.profiles
-          .filter((p) => p.selected)
-          .map((p) => ({
-            browser_name: b.name,
-            profile_path: p.path,
-            data_types: ["cache", "cookies", "history", "passwords"] as const,
-          }))
-      );
-
       for (const profile of selectedProfiles) {
         if (!canStartNextPhase) break;
 
@@ -377,7 +428,6 @@ export function ShredSection() {
                 data_types: profile.data_types,
                 method: deletionMethod,
                 write_check: writeCheck,
-                explicit_consent: dialogConfirmedRef.current,
               },
             }
           );
@@ -503,7 +553,7 @@ export function ShredSection() {
         fileCount={pendingFileCount}
         folderCount={pendingFolderCount}
         profileCount={selectedProfileCount}
-        runningBrowsers={runningBrowsers}
+        runningSelectedBrowsers={runningSelectedBrowsers}
         onConfirm={handleConfirm}
       />
       <PinVerify

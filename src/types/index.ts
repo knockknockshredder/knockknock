@@ -80,6 +80,24 @@ export interface DetectedBrowser {
   profiles: BrowserProfile[];
 }
 
+/**
+ * Mirrors backend `BrowserRunningCheck` (camelCase serialization) — the
+ * lightweight running-state request for already-known browsers/profiles.
+ */
+export interface BrowserRunningCheck {
+  browserId: string;
+  profilePaths: string[];
+}
+
+/**
+ * Mirrors backend `BrowserRunningState` (camelCase serialization). A browser
+ * reports `isRunning: true` when any of its known profiles holds a lock file.
+ */
+export interface BrowserRunningState {
+  browserId: string;
+  isRunning: boolean;
+}
+
 export interface BrowserProfile {
   id: string;
   name: string;

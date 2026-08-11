@@ -145,6 +145,7 @@ describe("ShredSection executeShred", () => {
       if (command === "is_pin_enabled") return Promise.resolve(false);
       if (command === "get_all_drive_info") return Promise.resolve([]);
       if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
   });
@@ -169,6 +170,7 @@ describe("ShredSection executeShred", () => {
         saveAttempts += 1;
         return Promise.reject(new Error("vault write failed"));
       }
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -223,6 +225,7 @@ describe("ShredSection executeShred", () => {
       if (command === "begin_shred_operation") {
         return Promise.reject(new Error("session unavailable"));
       }
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -285,6 +288,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "shred_browser_data") {
         return Promise.resolve({ roots: [] });
       }
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
   });
@@ -336,7 +340,7 @@ describe("ShredSection policy wiring", () => {
     });
   });
 
-  it("sends the policy and the dialog-confirmed consent flag to the browser flow", async () => {
+  it("sends the policy to the browser flow without any running-browser override flag", async () => {
     browserState.browsers = [
       {
         id: "chrome",
@@ -372,6 +376,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "shred_browser_data") {
         return Promise.resolve({ roots: [] });
       }
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -407,9 +412,236 @@ describe("ShredSection policy wiring", () => {
         data_types: ["cache", "cookies", "history", "passwords"],
         method: "automatic",
         write_check: "spot",
-        explicit_consent: true,
       },
     });
+    expect(JSON.stringify(args)).not.toContain("explicit_consent");
+  });
+
+  it("skips the browser running-state check for file-only deletion", async () => {
+    await renderWithOneFile();
+    await confirmDeletion();
+
+    await waitFor(() => expect(latest.isShredding).toBe(false));
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "check_browser_running_states",
+      expect.anything()
+    );
+    expect(invokeMock).toHaveBeenCalledWith("execute_roots", expect.anything());
+  });
+
+  it("blocks the whole operation before any mutation when a selected browser is running", async () => {
+    browserState.browsers = [
+      {
+        id: "chrome",
+        name: "Chrome",
+        icon: "",
+        // Cached state is stale on purpose: the fresh check below decides.
+        isRunning: false,
+        profiles: [
+          {
+            id: "p1",
+            name: "Default",
+            path: "C:\\chrome\\default",
+            size: 1,
+            selected: true,
+          },
+        ],
+      },
+    ];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [target("C:\\a.txt")],
+        });
+      }
+      if (command === "validate_targets") {
+        return Promise.resolve([metadata("C:\\a.txt")]);
+      }
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "check_browser_running_states") {
+        return Promise.resolve([{ browserId: "chrome", isRunning: true }]);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <ShredProvider>
+        <ShredSection />
+        <Probe />
+      </ShredProvider>
+    );
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Delete Selected (1 file + 1 profile)" })
+    );
+    await user.click(await screen.findByRole("button", { name: "DELETE" }));
+
+    await waitFor(() =>
+      expect(
+        latest.logEntries.some((entry) =>
+          entry.message.includes(
+            "Browser data deletion blocked: Chrome is currently running"
+          )
+        )
+      ).toBe(true)
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith("begin_shred_operation");
+    expect(invokeMock).not.toHaveBeenCalledWith("execute_roots", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "shred_browser_data",
+      expect.anything()
+    );
+  });
+
+  it("allows browser cleanup when the fresh check reports the selected browser closed", async () => {
+    browserState.browsers = [
+      {
+        id: "chrome",
+        name: "Chrome",
+        icon: "",
+        isRunning: false,
+        profiles: [
+          {
+            id: "p1",
+            name: "Default",
+            path: "C:\\chrome\\default",
+            size: 1,
+            selected: true,
+          },
+        ],
+      },
+    ];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [],
+        });
+      }
+      if (command === "validate_targets") return Promise.resolve([]);
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "check_browser_running_states") {
+        return Promise.resolve([{ browserId: "chrome", isRunning: false }]);
+      }
+      if (command === "shred_browser_data") {
+        return Promise.resolve({ roots: [rootResult("destroyed")] });
+      }
+      if (command === "is_shred_operation_cancelled") {
+        return Promise.resolve(false);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <ShredProvider>
+        <ShredSection />
+        <Probe />
+      </ShredProvider>
+    );
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Clean Selected Browser Data (1 profile)" })
+    );
+    await user.click(await screen.findByRole("button", { name: "DELETE" }));
+
+    await waitFor(() => expect(latest.isShredding).toBe(false));
+    expect(invokeMock).toHaveBeenCalledWith("check_browser_running_states", {
+      requests: [{ browserId: "chrome", profilePaths: ["C:\\chrome\\default"] }],
+    });
+    expect(invokeMock).toHaveBeenCalledWith(
+      "shred_browser_data",
+      expect.anything()
+    );
+    const [, args] = invokeMock.mock.calls.find(
+      ([command]) => command === "shred_browser_data"
+    ) as [string, unknown];
+    expect(JSON.stringify(args)).not.toContain("explicit_consent");
+  });
+
+  it("fails closed when the fresh running-state check cannot confirm the browser is closed", async () => {
+    browserState.browsers = [
+      {
+        id: "chrome",
+        name: "Chrome",
+        icon: "",
+        isRunning: false,
+        profiles: [
+          {
+            id: "p1",
+            name: "Default",
+            path: "C:\\chrome\\default",
+            size: 1,
+            selected: true,
+          },
+        ],
+      },
+    ];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [target("C:\\a.txt")],
+        });
+      }
+      if (command === "validate_targets") {
+        return Promise.resolve([metadata("C:\\a.txt")]);
+      }
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "check_browser_running_states") {
+        return Promise.reject(new Error("inspection failed"));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <ShredProvider>
+        <ShredSection />
+        <Probe />
+      </ShredProvider>
+    );
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Delete Selected (1 file + 1 profile)" })
+    );
+    await user.click(await screen.findByRole("button", { name: "DELETE" }));
+
+    await waitFor(() =>
+      expect(
+        latest.logEntries.some((entry) =>
+          entry.message.includes(
+            "Could not confirm that the selected browser is closed"
+          )
+        )
+      ).toBe(true)
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith("begin_shred_operation");
+    expect(invokeMock).not.toHaveBeenCalledWith("execute_roots", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "shred_browser_data",
+      expect.anything()
+    );
   });
 
   it("begins once and defers the final notification until browser cleanup completes", async () => {
@@ -447,6 +679,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "execute_roots") return Promise.resolve({ roots: [] });
       if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
       if (command === "shred_browser_data") return browserCleanup.promise;
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -512,6 +745,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "get_all_drive_info") return Promise.resolve([]);
       if (command === "execute_roots") return roots.promise;
       if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -580,6 +814,7 @@ describe("ShredSection policy wiring", () => {
         statusCalls += 1;
         return statusCalls === 1 ? statusAfterFirstProfile.promise : Promise.resolve(false);
       }
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -646,6 +881,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "is_shred_operation_cancelled") {
         return Promise.reject(new Error("status unavailable"));
       }
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -703,6 +939,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "is_shred_operation_cancelled") {
         return Promise.reject(new Error("status unavailable"));
       }
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -775,6 +1012,7 @@ describe("ShredSection policy wiring", () => {
       }
       if (command === "save_vault") return rootSave.promise;
       if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -817,6 +1055,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "get_all_drive_info") return Promise.resolve([]);
       if (command === "save_vault") return vaultSave.promise;
       if (command === "is_shred_operation_cancelled") return Promise.resolve(true);
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -867,6 +1106,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "get_all_drive_info") return Promise.resolve([]);
       if (command === "shred_browser_data") return Promise.resolve({ roots: [rootResult("destroyed")] });
       if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -908,6 +1148,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "get_all_drive_info") return Promise.resolve([]);
       if (command === "execute_roots") return Promise.resolve({ roots: [rootResult("destroyed")] });
       if (command === "is_shred_operation_cancelled") return Promise.resolve(false);
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -945,6 +1186,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "is_pin_enabled") return Promise.resolve(false);
       if (command === "get_all_drive_info") return Promise.resolve([]);
       if (command === "execute_roots") return roots.promise;
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
@@ -1033,6 +1275,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "is_pin_enabled") return Promise.resolve(false);
       if (command === "get_all_drive_info") return Promise.resolve([]);
       if (command === "execute_roots") return Promise.reject(new Error("backend unavailable"));
+      if (command === "check_browser_running_states") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
 
