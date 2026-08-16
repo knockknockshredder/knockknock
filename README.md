@@ -87,12 +87,12 @@ KnockKnock can detect supported installations and profiles for:
 - Brave, including Beta
 - Opera, including Next
 - Vivaldi
-- Safari
 - Tor Browser
 - Chromium
-- Internet Explorer
 
 Browser cleanup can target selected local data types such as cache, cookies, history, passwords, and extensions.
+
+Safari browser cleanup is not currently exposed because KnockKnock does not yet have a reliable running-state policy for Safari.
 
 > KnockKnock checks for browser lock files and warns when a browser appears to be running before destructive cleanup proceeds.
 

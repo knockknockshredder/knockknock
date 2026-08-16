@@ -96,11 +96,11 @@ describe("ConfirmationDialog counts", () => {
   it("blocks DELETE when a selected browser state is unknown", () => {
     renderDialog({
       fileCount: 1,
-      blockedSelectedBrowsers: [{ name: "Safari", state: "unknown" }],
+      blockedSelectedBrowsers: [{ name: "Unknown Browser", state: "unknown" }],
     });
     expect(
       screen.getByText(
-        "KnockKnock could not confirm that Safari is closed. Browser data deletion is unavailable."
+        "KnockKnock could not confirm that Unknown Browser is closed. Browser data deletion is unavailable."
       )
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "DELETE" })).toBeDisabled();

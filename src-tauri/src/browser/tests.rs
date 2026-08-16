@@ -18,13 +18,6 @@ mod tests {
         assert!(names.contains(&"Chrome"));
         assert!(names.contains(&"Firefox"));
         assert!(names.contains(&"Edge"));
-        assert!(names.contains(&"Safari"));
-    }
-
-    #[test]
-    fn test_safari_only_has_windows_empty() {
-        let safari = BROWSER_PATHS.iter().find(|b| b.name == "Safari").unwrap();
-        assert!(safari.windows_paths.is_empty());
     }
 
     #[test]
@@ -121,21 +114,17 @@ mod tests {
     }
 
     #[test]
-    fn every_browser_declares_a_running_state_policy() {
-        for browser in BROWSER_PATHS {
-            match browser.running_detection {
-                BrowserRunningDetection::ChromiumUserData
-                | BrowserRunningDetection::GeckoProfile
-                | BrowserRunningDetection::Unsupported => {}
-            }
-        }
+    fn unsupported_or_deferred_browsers_are_not_exposed() {
+        let names: Vec<&str> = BROWSER_PATHS.iter().map(|browser| browser.name).collect();
+        assert!(!names.contains(&"Internet Explorer"));
+        assert!(!names.contains(&"Safari"));
 
-        let unsupported: Vec<&str> = BROWSER_PATHS
-            .iter()
-            .filter(|browser| browser.running_detection == BrowserRunningDetection::Unsupported)
-            .map(|browser| browser.id)
-            .collect();
-        assert_eq!(unsupported, ["safari", "internet explorer"]);
+        assert!(BROWSER_PATHS.iter().all(|browser| {
+            matches!(
+                browser.running_detection,
+                BrowserRunningDetection::ChromiumUserData | BrowserRunningDetection::GeckoProfile
+            )
+        }));
     }
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]

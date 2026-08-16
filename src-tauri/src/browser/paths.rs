@@ -46,8 +46,7 @@ pub struct BrowserPath {
     pub profile_glob: &'static str, // Glob pattern for profiles
     /// Layout of profile directories relative to the browser base.
     pub profile_layout: ProfileLayout,
-    /// Every browser must declare an explicit policy. Unsupported policies are
-    /// intentionally `Unknown`, never an implicit closed state.
+    /// Every browser must declare an explicit running-state policy.
     pub running_detection: BrowserRunningDetection,
 }
 
@@ -55,9 +54,11 @@ pub struct BrowserPath {
 pub enum BrowserRunningDetection {
     ChromiumUserData,
     GeckoProfile,
-    Unsupported,
 }
 
+// Safari support is intentionally deferred until its running-state policy is
+// implemented. Do not expose Safari cleanup while its state cannot be
+// confirmed safely.
 pub const BROWSER_PATHS: &[BrowserPath] = &[
     BrowserPath {
         id: "chrome",
@@ -142,24 +143,6 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
         running_detection: BrowserRunningDetection::ChromiumUserData,
     },
     BrowserPath {
-        id: "safari",
-        name: "Safari",
-        windows_paths: &[], // Safari not on Windows
-        windows_root_preference: WindowsRootPreference::LocalAppDataFirst,
-        macos_paths: &[
-            "Safari",
-            "Caches/com.apple.Safari",
-            "Caches/com.apple.Safari.WebClips",
-            "Containers/com.apple.Safari",
-            "WebKit",
-            "Saved Application State/com.apple.Safari.savedState",
-        ],
-        linux_paths: &[], // Safari not on Linux
-        profile_glob: "",
-        profile_layout: ProfileLayout::Direct,
-        running_detection: BrowserRunningDetection::Unsupported,
-    },
-    BrowserPath {
         id: "tor browser",
         name: "Tor Browser",
         windows_paths: &["Tor Browser\\Browser\\TorBrowser\\Data\\Browser"],
@@ -180,17 +163,6 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
         profile_glob: "Default",
         profile_layout: ProfileLayout::Direct,
         running_detection: BrowserRunningDetection::ChromiumUserData,
-    },
-    BrowserPath {
-        id: "internet explorer",
-        name: "Internet Explorer",
-        windows_paths: &["Microsoft\\Internet Explorer"],
-        windows_root_preference: WindowsRootPreference::LocalAppDataFirst,
-        macos_paths: &[], // IE not on macOS
-        linux_paths: &[], // IE not on Linux
-        profile_glob: "",
-        profile_layout: ProfileLayout::Direct,
-        running_detection: BrowserRunningDetection::Unsupported,
     },
 ];
 
@@ -334,7 +306,6 @@ impl BrowserPath {
         match self.running_detection {
             BrowserRunningDetection::ChromiumUserData => chromium_running_state(profile_path),
             BrowserRunningDetection::GeckoProfile => gecko_running_state(profile_path),
-            BrowserRunningDetection::Unsupported => BrowserRunningStatus::Unknown,
         }
     }
 }

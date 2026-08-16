@@ -527,8 +527,8 @@ describe("ShredSection policy wiring", () => {
   it("blocks the whole operation before any mutation when browser state is unknown", async () => {
     browserState.browsers = [
       {
-        id: "safari",
-        name: "Safari",
+        id: "unknown-browser",
+        name: "Unknown Browser",
         icon: "",
         // The cached value is deliberately stale. The fresh state below is
         // authoritative and must not be reduced to "closed".
@@ -537,7 +537,7 @@ describe("ShredSection policy wiring", () => {
           {
             id: "p1",
             name: "Default",
-            path: "C:\\safari\\default",
+            path: "C:\\unknown-browser\\default",
             size: 1,
             selected: true,
           },
@@ -560,7 +560,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "get_all_drive_info") return Promise.resolve([]);
       if (command === "check_browser_running_states") {
         return Promise.resolve([
-          { browserId: "safari", state: "unknown" },
+          { browserId: "unknown-browser", state: "unknown" },
         ]);
       }
       return Promise.resolve(undefined);

@@ -315,7 +315,7 @@ This release makes the shredding pipeline robust against locked files, permissio
 
 ### Initial Release
 - File shredding with multiple algorithms (NIST 800-88 Clear, DoD 5220.22-M, Random Only)
-- Browser profile detection and cleanup (Chrome, Firefox, Edge, Brave, Opera, Vivaldi, Safari, Tor)
+- Browser profile detection and cleanup (Chrome, Firefox, Edge, Brave, Opera, Vivaldi, Tor)
 - System path protection (Windows, macOS, Linux)
 - Progress reporting via Tauri IPC
 - Cross-platform support (Windows, macOS, Linux)
