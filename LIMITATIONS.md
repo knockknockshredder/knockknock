@@ -170,7 +170,7 @@ Data may also exist in:
 * application caches;
 * browser-managed recovery/session data.
 
-KnockKnock blocks browser cleanup while the browser is detected as running (lock file present), with no override. If running state cannot be detected — for example a browser variant that holds no recognizable lock file — profile data could still be recreated or rewritten during cleanup.
+KnockKnock blocks browser cleanup while the browser is detected as running by its configured platform policy, with no override. If running state cannot be detected — for example a browser variant that holds no recognizable lock file — cleanup is blocked rather than proceeding on an uncertain state.
 
 Close the browser before performing browser cleanup whenever possible.
 

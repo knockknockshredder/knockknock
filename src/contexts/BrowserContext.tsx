@@ -47,7 +47,7 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
   // full installed-browser discovery, never logs routine polling, never
   // lets requests overlap, and keeps the previously displayed state when a
   // refresh temporarily fails. Browser identities/profiles/selection are
-  // preserved — only `isRunning` is updated.
+  // preserved — only `runningState` is updated.
   useEffect(() => {
     if (!hasBrowsers) return;
     let disposed = false;
@@ -66,11 +66,11 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
           { requests }
         );
         if (disposed) return;
-        const runningById = new Map(states.map((s) => [s.browserId, s.isRunning]));
+        const stateById = new Map(states.map((s) => [s.browserId, s.state]));
         setBrowsers((prev) =>
           prev.map((b) =>
-            runningById.has(b.id)
-              ? { ...b, isRunning: runningById.get(b.id) ?? b.isRunning }
+            stateById.has(b.id)
+              ? { ...b, runningState: stateById.get(b.id) ?? b.runningState }
               : b
           )
         );

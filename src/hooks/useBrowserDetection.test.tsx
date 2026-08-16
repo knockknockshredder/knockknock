@@ -22,7 +22,7 @@ const detectedBrowsers: DetectedBrowser[] = [
     id: "chrome",
     name: "Chrome",
     icon: "",
-    isRunning: false,
+    runningState: "closed",
     profiles: [
       { id: "p1", name: "Default", path: "C:\\chrome", size: 1, selected: false },
     ],

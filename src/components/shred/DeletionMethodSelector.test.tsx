@@ -57,7 +57,7 @@ function selectedProfile(path: string): DetectedBrowser {
     id: "chrome",
     name: "Chrome",
     icon: "",
-    isRunning: false,
+    runningState: "closed",
     profiles: [
       {
         id: "default",

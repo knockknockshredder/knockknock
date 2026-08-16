@@ -13,6 +13,7 @@ import { PinVerify } from "@/components/settings/PinVerify";
 import type {
   BatchRootResult,
   BrowserRunningState,
+  BrowserRunningStatus,
   ProgressEvent,
   RootResultDto,
   ShredStatus,
@@ -112,9 +113,9 @@ export function ShredSection() {
     (f) => f.kind === "directory"
   ).length;
   const selectedProfileCount = getSelectedCount();
-  const runningSelectedBrowsers = browsers
-    .filter((b) => b.isRunning && b.profiles.some((p) => p.selected))
-    .map((b) => b.name);
+  const blockedSelectedBrowsers = browsers
+    .filter((b) => b.runningState !== "closed" && b.profiles.some((p) => p.selected))
+    .map((b) => ({ name: b.name, state: b.runningState }));
 
   /**
    * Open the confirmation dialog. The running-browser warning shown in the
@@ -214,19 +215,23 @@ export function ShredSection() {
         }, new Map<string, string[]>())
       ).map(([browserId, profilePaths]) => ({ browserId, profilePaths }));
 
-      let blockedBrowserName: string | null = null;
+      let blockedBrowser: { name: string; state: BrowserRunningStatus } | null = null;
       let checkFailed = false;
       try {
         const states = await invoke<BrowserRunningState[]>(
           "check_browser_running_states",
           { requests }
         );
-        const runningIds = new Set(
-          states.filter((s) => s.isRunning).map((s) => s.browserId)
+        const stateById = new Map(states.map((state) => [state.browserId, state.state]));
+        const blockedProfile = selectedProfiles.find(
+          (profile) => stateById.get(profile.browser_id) !== "closed"
         );
-        blockedBrowserName =
-          selectedProfiles.find((p) => runningIds.has(p.browser_id))
-            ?.browser_name ?? null;
+        if (blockedProfile) {
+          blockedBrowser = {
+            name: blockedProfile.browser_name,
+            state: stateById.get(blockedProfile.browser_id) ?? "unknown",
+          };
+        }
       } catch {
         checkFailed = true;
       }
@@ -239,10 +244,12 @@ export function ShredSection() {
         isExecutingRef.current = false;
         return;
       }
-      if (blockedBrowserName) {
+      if (blockedBrowser) {
         addLogEntry(
           "warning",
-          `Browser data deletion blocked: ${blockedBrowserName} is currently running. Close it before deleting browser data.`
+          blockedBrowser.state === "running"
+            ? `Browser data deletion blocked: ${blockedBrowser.name} is currently running. Close it before deleting browser data.`
+            : "Could not confirm that the selected browser is closed. Browser data was not deleted."
         );
         isExecutingRef.current = false;
         return;
@@ -423,6 +430,7 @@ export function ShredSection() {
             "shred_browser_data",
             {
               request: {
+                browser_id: profile.browser_id,
                 browser_name: profile.browser_name,
                 profile_path: profile.profile_path,
                 data_types: profile.data_types,
@@ -553,7 +561,7 @@ export function ShredSection() {
         fileCount={pendingFileCount}
         folderCount={pendingFolderCount}
         profileCount={selectedProfileCount}
-        runningSelectedBrowsers={runningSelectedBrowsers}
+        blockedSelectedBrowsers={blockedSelectedBrowsers}
         onConfirm={handleConfirm}
       />
       <PinVerify

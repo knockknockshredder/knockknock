@@ -79,18 +79,23 @@ export function BrowserCard({ browser }: { browser: DetectedBrowser }) {
         <div className="flex items-center gap-2">
           <BrowserIcon name={browser.name} />
           <CardTitle className="font-mono text-sm">{browser.name}</CardTitle>
-          {browser.isRunning && (
+          {browser.runningState !== "closed" && (
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger
-                  aria-label={`${browser.name} is currently running`}
+                  aria-label={
+                    browser.runningState === "running"
+                      ? `${browser.name} is currently running`
+                      : `Could not confirm that ${browser.name} is closed`
+                  }
                   className="inline-flex items-center text-amber-500"
                 >
                   <Warning size={14} weight="fill" />
                 </TooltipTrigger>
                 <TooltipContent>
-                  {browser.name} is currently running. Close it before deleting
-                  browser data.
+                  {browser.runningState === "running"
+                    ? `${browser.name} is currently running. Close it before deleting browser data.`
+                    : `KnockKnock could not confirm that ${browser.name} is closed. Browser data deletion is unavailable.`}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>

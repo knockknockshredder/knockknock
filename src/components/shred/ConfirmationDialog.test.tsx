@@ -7,13 +7,16 @@ function renderDialog(overrides: {
   fileCount?: number;
   folderCount?: number;
   profileCount?: number;
-  runningSelectedBrowsers?: string[];
+  blockedSelectedBrowsers?: Array<{
+    name: string;
+    state: "closed" | "running" | "unknown";
+  }>;
 } = {}) {
   const {
     fileCount = 0,
     folderCount = 0,
     profileCount = 0,
-    runningSelectedBrowsers = [],
+    blockedSelectedBrowsers = [],
   } = overrides;
   return render(
     <ConfirmationDialog
@@ -22,7 +25,7 @@ function renderDialog(overrides: {
       fileCount={fileCount}
       folderCount={folderCount}
       profileCount={profileCount}
-      runningSelectedBrowsers={runningSelectedBrowsers}
+      blockedSelectedBrowsers={blockedSelectedBrowsers}
       onConfirm={vi.fn()}
     />
   );
@@ -69,7 +72,10 @@ describe("ConfirmationDialog counts", () => {
   });
 
   it("warns about a selected running browser and disables DELETE", () => {
-    renderDialog({ fileCount: 1, runningSelectedBrowsers: ["Chrome"] });
+    renderDialog({
+      fileCount: 1,
+      blockedSelectedBrowsers: [{ name: "Chrome", state: "running" }],
+    });
     expect(
       screen.getByText(
         "Chrome is currently running. Close it before deleting browser data."
@@ -81,9 +87,22 @@ describe("ConfirmationDialog counts", () => {
   });
 
   it("keeps DELETE enabled when no selected browser is running", () => {
-    renderDialog({ fileCount: 1, runningSelectedBrowsers: [] });
+    renderDialog({ fileCount: 1, blockedSelectedBrowsers: [] });
     expect(
       screen.getByRole("button", { name: "DELETE" })
     ).toBeEnabled();
+  });
+
+  it("blocks DELETE when a selected browser state is unknown", () => {
+    renderDialog({
+      fileCount: 1,
+      blockedSelectedBrowsers: [{ name: "Safari", state: "unknown" }],
+    });
+    expect(
+      screen.getByText(
+        "KnockKnock could not confirm that Safari is closed. Browser data deletion is unavailable."
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "DELETE" })).toBeDisabled();
   });
 });

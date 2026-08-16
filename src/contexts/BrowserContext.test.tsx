@@ -20,7 +20,7 @@ const discovered: DetectedBrowser[] = [
     id: "chrome",
     name: "Chrome",
     icon: "",
-    isRunning: false,
+    runningState: "closed",
     profiles: [
       {
         id: "p1",
@@ -35,7 +35,7 @@ const discovered: DetectedBrowser[] = [
     id: "firefox",
     name: "Firefox",
     icon: "",
-    isRunning: false,
+    runningState: "closed",
     profiles: [
       {
         id: "p2",
@@ -137,21 +137,21 @@ describe("BrowserContext lightweight running-state watcher", () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "check_browser_running_states") {
         return Promise.resolve([
-          { browserId: "chrome", isRunning: runningNow },
-          { browserId: "firefox", isRunning: false },
+          { browserId: "chrome", state: runningNow ? "running" : "closed" },
+          { browserId: "firefox", state: "closed" },
         ]);
       }
       return Promise.resolve(undefined);
     });
 
     await renderWithDiscoveredBrowsers();
-    expect(latest!.browsers[0].isRunning).toBe(false);
+    expect(latest!.browsers[0].runningState).toBe("closed");
 
     runningNow = true;
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
-    expect(latest!.browsers[0].isRunning).toBe(true);
+    expect(latest!.browsers[0].runningState).toBe("running");
     // Identities, profiles, and selection are preserved — only state flips.
     expect(latest!.browsers[0].id).toBe("chrome");
     expect(latest!.browsers[0].profiles).toHaveLength(1);
@@ -161,7 +161,7 @@ describe("BrowserContext lightweight running-state watcher", () => {
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
-    expect(latest!.browsers[0].isRunning).toBe(false);
+    expect(latest!.browsers[0].runningState).toBe("closed");
   });
 
   it("never lets running-state requests overlap", async () => {
@@ -188,7 +188,7 @@ describe("BrowserContext lightweight running-state watcher", () => {
     expect(lightweightCalls()).toHaveLength(1);
 
     await act(async () => {
-      resolveCheck([{ browserId: "chrome", isRunning: false }]);
+      resolveCheck([{ browserId: "chrome", state: "closed" }]);
     });
     await act(async () => {
       vi.advanceTimersByTime(5000);
@@ -203,7 +203,7 @@ describe("BrowserContext lightweight running-state watcher", () => {
       if (command === "check_browser_running_states") {
         return failNext
           ? Promise.reject(new Error("inspection failed"))
-          : Promise.resolve([{ browserId: "chrome", isRunning: true }]);
+          : Promise.resolve([{ browserId: "chrome", state: "running" }]);
       }
       return Promise.resolve(undefined);
     });
@@ -212,14 +212,14 @@ describe("BrowserContext lightweight running-state watcher", () => {
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
-    expect(latest!.browsers[0].isRunning).toBe(true);
+    expect(latest!.browsers[0].runningState).toBe("running");
 
     // A failing refresh must not clear the displayed running state.
     failNext = true;
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
-    expect(latest!.browsers[0].isRunning).toBe(true);
+    expect(latest!.browsers[0].runningState).toBe("running");
 
     // Unmount stops the polling entirely.
     const callsBeforeUnmount = lightweightCalls().length;

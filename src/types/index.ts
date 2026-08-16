@@ -76,9 +76,12 @@ export interface DetectedBrowser {
   id: string;
   name: string;
   icon: string;
-  isRunning: boolean;
+  runningState: BrowserRunningStatus;
   profiles: BrowserProfile[];
 }
+
+/** Mirrors backend `BrowserRunningStatus`: only `closed` permits cleanup. */
+export type BrowserRunningStatus = "closed" | "running" | "unknown";
 
 /**
  * Mirrors backend `BrowserRunningCheck` (camelCase serialization) — the
@@ -90,12 +93,12 @@ export interface BrowserRunningCheck {
 }
 
 /**
- * Mirrors backend `BrowserRunningState` (camelCase serialization). A browser
- * reports `isRunning: true` when any of its known profiles holds a lock file.
+ * Mirrors backend `BrowserRunningState` (camelCase serialization). `unknown`
+ * is fail-closed and is never treated as a browser being closed.
  */
 export interface BrowserRunningState {
   browserId: string;
-  isRunning: boolean;
+  state: BrowserRunningStatus;
 }
 
 export interface BrowserProfile {

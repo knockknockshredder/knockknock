@@ -6,15 +6,14 @@ import { ShredProvider, useShred } from "@/contexts/ShredContext";
 import { ShredSection, computeProgressPercent } from "./ShredSection";
 import type { ProgressEvent } from "@/types";
 
-const { invokeMock, listenMock, browserState } = vi.hoisted(() => ({
-  invokeMock: vi.fn(),
-  listenMock: vi.fn(),
-  browserState: {
+const { invokeMock, listenMock, browserState, browsersForContext } = vi.hoisted(() => {
+  const browserState = {
     browsers: [] as Array<{
       id: string;
       name: string;
       icon: string;
       isRunning: boolean;
+      runningState?: "closed" | "running" | "unknown";
       profiles: Array<{
         id: string;
         name: string;
@@ -24,11 +23,34 @@ const { invokeMock, listenMock, browserState } = vi.hoisted(() => ({
       }>;
     }>,
     rescanBrowsers: vi.fn(),
-  },
-}));
+  };
+  const normalizedBrowserLists = new WeakMap<object, object[]>();
+  const browsersForContext = () => {
+    const cached = normalizedBrowserLists.get(browserState.browsers);
+    if (cached) return cached;
+    const normalized = browserState.browsers.map(({ isRunning, runningState, ...browser }) => ({
+      ...browser,
+      runningState: runningState ?? (isRunning ? "running" : "closed"),
+    }));
+    normalizedBrowserLists.set(browserState.browsers, normalized);
+    return normalized;
+  };
+  return { invokeMock: vi.fn(), listenMock: vi.fn(), browserState, browsersForContext };
+});
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: invokeMock,
+  invoke: async (command: string, args?: unknown) => {
+    const result = await (args === undefined
+      ? invokeMock(command)
+      : invokeMock(command, args));
+    if (command !== "check_browser_running_states" || result.length > 0) {
+      return result;
+    }
+    return browserState.browsers.map((browser) => ({
+      browserId: browser.id,
+      state: browser.runningState ?? (browser.isRunning ? "running" : "closed"),
+    }));
+  },
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -42,7 +64,7 @@ vi.mock("@/contexts/BrowserContext", () => ({
         (sum, b) => sum + b.profiles.filter((p) => p.selected).length,
         0
       ),
-    browsers: browserState.browsers,
+    browsers: browsersForContext(),
     rescanBrowsers: browserState.rescanBrowsers,
   }),
 }));
@@ -407,6 +429,7 @@ describe("ShredSection policy wiring", () => {
     ) as [string, unknown];
     expect(args).toEqual({
       request: {
+        browser_id: "chrome",
         browser_name: "Chrome",
         profile_path: "C:\\chrome\\default",
         data_types: ["cache", "cookies", "history", "passwords"],
@@ -463,7 +486,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "is_pin_enabled") return Promise.resolve(false);
       if (command === "get_all_drive_info") return Promise.resolve([]);
       if (command === "check_browser_running_states") {
-        return Promise.resolve([{ browserId: "chrome", isRunning: true }]);
+        return Promise.resolve([{ browserId: "chrome", state: "running" }]);
       }
       return Promise.resolve(undefined);
     });
@@ -490,6 +513,84 @@ describe("ShredSection policy wiring", () => {
           entry.message.includes(
             "Browser data deletion blocked: Chrome is currently running"
           )
+        )
+      ).toBe(true)
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith("begin_shred_operation");
+    expect(invokeMock).not.toHaveBeenCalledWith("execute_roots", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "shred_browser_data",
+      expect.anything()
+    );
+  });
+
+  it("blocks the whole operation before any mutation when browser state is unknown", async () => {
+    browserState.browsers = [
+      {
+        id: "safari",
+        name: "Safari",
+        icon: "",
+        // The cached value is deliberately stale. The fresh state below is
+        // authoritative and must not be reduced to "closed".
+        isRunning: false,
+        profiles: [
+          {
+            id: "p1",
+            name: "Default",
+            path: "C:\\safari\\default",
+            size: 1,
+            selected: true,
+          },
+        ],
+      },
+    ];
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "vault_exists") return Promise.resolve(true);
+      if (command === "load_vault") {
+        return Promise.resolve({
+          source_schema: "v2",
+          migration_required: false,
+          targets: [target("C:\\a.txt")],
+        });
+      }
+      if (command === "validate_targets") {
+        return Promise.resolve([metadata("C:\\a.txt")]);
+      }
+      if (command === "is_pin_enabled") return Promise.resolve(false);
+      if (command === "get_all_drive_info") return Promise.resolve([]);
+      if (command === "check_browser_running_states") {
+        return Promise.resolve([
+          { browserId: "safari", state: "unknown" },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <ShredProvider>
+        <ShredSection />
+        <Probe />
+      </ShredProvider>
+    );
+    await act(async () => {
+      await latest.loadVault("pin");
+    });
+
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Delete Selected (1 file + 1 profile)" })
+    );
+    const deleteButton = await screen.findByRole("button", { name: "DELETE" });
+    expect(deleteButton).toBeEnabled();
+    await user.click(deleteButton);
+    expect(invokeMock.mock.calls.map(([command]) => command)).toContain(
+      "check_browser_running_states"
+    );
+
+    await waitFor(() =>
+      expect(
+        latest.logEntries.some((entry) =>
+          entry.message.includes("Could not confirm that the selected browser is closed")
         )
       ).toBe(true)
     );
@@ -532,7 +633,7 @@ describe("ShredSection policy wiring", () => {
       if (command === "is_pin_enabled") return Promise.resolve(false);
       if (command === "get_all_drive_info") return Promise.resolve([]);
       if (command === "check_browser_running_states") {
-        return Promise.resolve([{ browserId: "chrome", isRunning: false }]);
+        return Promise.resolve([{ browserId: "chrome", state: "closed" }]);
       }
       if (command === "shred_browser_data") {
         return Promise.resolve({ roots: [rootResult("destroyed")] });

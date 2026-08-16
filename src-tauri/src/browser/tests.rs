@@ -3,7 +3,10 @@
 #[cfg(test)]
 mod tests {
     use crate::browser::detection::{detect_browsers, estimate_directory_size};
-    use crate::browser::paths::{get_browser_base_paths, BROWSER_PATHS};
+    use crate::browser::paths::{
+        find_browser_profiles, get_browser_base_paths, BrowserRunningDetection, ProfileLayout,
+        BROWSER_PATHS,
+    };
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -39,6 +42,63 @@ mod tests {
     fn test_detect_browsers_runs_without_panic() {
         // detect_browsers should never panic; it may return an empty vec.
         let _ = detect_browsers();
+    }
+
+    #[test]
+    fn every_browser_declares_a_running_state_policy() {
+        for browser in BROWSER_PATHS {
+            match browser.running_detection {
+                BrowserRunningDetection::ChromiumUserData
+                | BrowserRunningDetection::GeckoProfile
+                | BrowserRunningDetection::Unsupported => {}
+            }
+        }
+
+        let unsupported: Vec<&str> = BROWSER_PATHS
+            .iter()
+            .filter(|browser| browser.running_detection == BrowserRunningDetection::Unsupported)
+            .map(|browser| browser.id)
+            .collect();
+        assert_eq!(unsupported, ["safari", "internet explorer"]);
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn firefox_profiles_are_discovered_under_profiles_directory() {
+        let tmp = TempDir::new().expect("temporary directory");
+        let base = tmp.path().join("Mozilla/Firefox");
+        let profile = base.join("Profiles/abc.default-release");
+        fs::create_dir_all(&profile).expect("create Firefox profile");
+
+        let firefox = BROWSER_PATHS
+            .iter()
+            .find(|browser| browser.id == "firefox")
+            .expect("Firefox browser configuration");
+        assert!(matches!(
+            firefox.profile_layout,
+            ProfileLayout::Subdirectory("Profiles")
+        ));
+        let profiles = find_browser_profiles(&base, firefox);
+
+        assert_eq!(profiles, vec![profile]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn firefox_profiles_are_discovered_as_direct_children_on_linux() {
+        let tmp = TempDir::new().expect("temporary directory");
+        let base = tmp.path().join(".mozilla/firefox");
+        let profile = base.join("abc.default-release");
+        fs::create_dir_all(&profile).expect("create Firefox profile");
+
+        let firefox = BROWSER_PATHS
+            .iter()
+            .find(|browser| browser.id == "firefox")
+            .expect("Firefox browser configuration");
+        assert!(matches!(firefox.profile_layout, ProfileLayout::Direct));
+        let profiles = find_browser_profiles(&base, firefox);
+
+        assert_eq!(profiles, vec![profile]);
     }
 
     #[test]

@@ -33,11 +33,8 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
         for base_path in &base_paths {
             if base_path.exists() {
                 eprintln!("[detect_browsers] found base_path: {:?}", base_path);
-                // Check lock file for running detection (fast, reliable)
-                let is_running = check_lock_file(base_path, browser_path.lock_file_pattern);
-
                 // Find all profiles in this browser
-                let profile_paths = find_browser_profiles(&base_path, browser_path.profile_glob);
+                let profile_paths = find_browser_profiles(base_path, browser_path);
                 let mut profiles = Vec::new();
 
                 for profile_path in &profile_paths {
@@ -65,10 +62,29 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
 
                 if !profiles.is_empty() {
                     browsers.push(DetectedBrowser {
-                        id: browser_path.name.to_lowercase(),
+                        id: browser_path.id.to_string(),
                         name: browser_path.name.to_string(),
                         icon: browser_icon(browser_path.name),
-                        is_running,
+                        running_state: profiles.iter().fold(
+                            crate::browser::types::BrowserRunningStatus::Closed,
+                            |state, profile| {
+                                let profile_state = crate::browser::paths::browser_running_state(
+                                    browser_path.id,
+                                    std::path::Path::new(&profile.path),
+                                );
+                                match (state, profile_state) {
+                                    (_, crate::browser::types::BrowserRunningStatus::Running)
+                                    | (crate::browser::types::BrowserRunningStatus::Running, _) => {
+                                        crate::browser::types::BrowserRunningStatus::Running
+                                    }
+                                    (_, crate::browser::types::BrowserRunningStatus::Unknown)
+                                    | (crate::browser::types::BrowserRunningStatus::Unknown, _) => {
+                                        crate::browser::types::BrowserRunningStatus::Unknown
+                                    }
+                                    _ => crate::browser::types::BrowserRunningStatus::Closed,
+                                }
+                            },
+                        ),
                         profiles,
                     });
                 }
@@ -80,30 +96,6 @@ pub fn detect_browsers() -> Vec<DetectedBrowser> {
 
     eprintln!("[detect_browsers] done, found {} browsers", browsers.len());
     browsers
-}
-
-/// Check for browser lock files
-fn check_lock_file(base_path: &std::path::Path, pattern: &str) -> bool {
-    if pattern.is_empty() {
-        return false;
-    }
-
-    if pattern.contains('*') {
-        // Glob pattern - check the final filename component in each subdirectory
-        let final_part = pattern.rsplit('/').next().unwrap_or(pattern);
-        if let Ok(entries) = std::fs::read_dir(base_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() && path.join(final_part).exists() {
-                    return true;
-                }
-            }
-        }
-        false
-    } else {
-        // Direct lock file
-        base_path.join(pattern).exists()
-    }
 }
 
 /// Estimate directory size in bytes (iterative, capped, symlink-safe)
