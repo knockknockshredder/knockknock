@@ -45,9 +45,10 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
   // Lightweight running-state watcher: while browsers are known, refresh
   // ONLY their running state via the dedicated backend command. Never calls
   // full installed-browser discovery, never logs routine polling, never
-  // lets requests overlap, and keeps the previously displayed state when a
-  // refresh temporarily fails. Browser identities/profiles/selection are
-  // preserved — only `runningState` is updated.
+  // lets requests overlap. A refresh failure or omitted requested browser
+  // makes a cached `closed` state `unknown`; `running` and `unknown` remain
+  // unchanged. Browser identities/profiles/selection are preserved — only
+  // `runningState` is updated.
   useEffect(() => {
     if (!hasBrowsers) return;
     let disposed = false;
@@ -56,11 +57,15 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
     const refreshRunningStates = async () => {
       if (inFlight) return;
       inFlight = true;
+      const requestedBrowsers = browsersRef.current;
+      const requestedStateById = new Map(
+        requestedBrowsers.map((b) => [b.id, b.runningState])
+      );
+      const requests = requestedBrowsers.map((b) => ({
+        browserId: b.id,
+        profilePaths: b.profiles.map((p) => p.path),
+      }));
       try {
-        const requests = browsersRef.current.map((b) => ({
-          browserId: b.id,
-          profilePaths: b.profiles.map((p) => p.path),
-        }));
         const states = await invoke<BrowserRunningState[]>(
           "check_browser_running_states",
           { requests }
@@ -68,15 +73,27 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
         if (disposed) return;
         const stateById = new Map(states.map((s) => [s.browserId, s.state]));
         setBrowsers((prev) =>
+          prev.map((b) => {
+            if (stateById.has(b.id)) {
+              return { ...b, runningState: stateById.get(b.id)! };
+            }
+            return requestedStateById.get(b.id) === "closed"
+              ? { ...b, runningState: "unknown" }
+              : b;
+          })
+        );
+      } catch {
+        if (disposed) return;
+        // Transient failure: only requested browsers cached as closed become
+        // unknown; running and unknown remain unchanged. Never fall back to a
+        // full discovery scan and never spam the log.
+        setBrowsers((prev) =>
           prev.map((b) =>
-            stateById.has(b.id)
-              ? { ...b, runningState: stateById.get(b.id) ?? b.runningState }
+            requestedStateById.get(b.id) === "closed"
+              ? { ...b, runningState: "unknown" }
               : b
           )
         );
-      } catch {
-        // Transient failure: preserve the previous displayed state; never
-        // fall back to a full discovery scan and never spam the log.
       } finally {
         inFlight = false;
       }

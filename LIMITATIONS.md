@@ -178,6 +178,8 @@ KnockKnock's browser cleanup affects selected local data only. It does not repre
 
 Browser cleanup is confined to the selected profile: collection skips filesystem-link/reparse entries that it directly inspects, and a profile path that is itself a filesystem link is rejected. Inspection failures are surfaced rather than silently skipped. Collected candidates pass through the secure handle-relative root executor, which enforces component-level no-follow confinement before mutation. On Linux, profile paths are resolved from the home directory or from `XDG_CONFIG_HOME`; execution roots must be inside the home directory, so profile paths resolved from an `XDG_CONFIG_HOME` outside the home directory are blocked by root confinement.
 
+Firefox discovery currently supports conventional default profile roots only. Parsing `profiles.ini` for custom profiles and supporting Microsoft Store/MSIX Firefox profile locations are explicitly deferred; those locations are not currently discovered or cleaned by KnockKnock.
+
 ## Hard Links
 
 Multiple directory entries may refer to the same underlying file data.

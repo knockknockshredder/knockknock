@@ -196,7 +196,88 @@ describe("BrowserContext lightweight running-state watcher", () => {
     expect(lightweightCalls()).toHaveLength(2);
   });
 
-  it("keeps the previous displayed state when a refresh fails, and stops on unmount", async () => {
+  it("transitions closed state to unknown when a refresh fails", async () => {
+    vi.useFakeTimers();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "check_browser_running_states") {
+        return Promise.reject(new Error("inspection failed"));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await renderWithDiscoveredBrowsers();
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(latest!.browsers.map((browser) => browser.runningState)).toEqual([
+      "unknown",
+      "unknown",
+    ]);
+  });
+
+  it("transitions omitted closed state to unknown after a successful refresh", async () => {
+    vi.useFakeTimers();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "check_browser_running_states") {
+        return Promise.resolve([{ browserId: "firefox", state: "closed" }]);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await renderWithDiscoveredBrowsers();
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(latest!.browsers[0].runningState).toBe("unknown");
+    expect(latest!.browsers[1].runningState).toBe("closed");
+  });
+
+  it("does not apply refresh fallback to a browser added after the request began", async () => {
+    vi.useFakeTimers();
+    let rejectCheck!: (reason?: unknown) => void;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "check_browser_running_states") {
+        return new Promise((_, reject) => {
+          rejectCheck = reject;
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await renderWithDiscoveredBrowsers();
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    const addedBrowser: DetectedBrowser = {
+      id: "edge",
+      name: "Edge",
+      icon: "",
+      runningState: "closed",
+      profiles: [],
+    };
+    await act(async () => {
+      latest!.setBrowsers([...latest!.browsers, addedBrowser]);
+    });
+
+    await act(async () => {
+      rejectCheck(new Error("inspection failed"));
+    });
+
+    expect(latest!.browsers.find((browser) => browser.id === "chrome")?.runningState).toBe(
+      "unknown"
+    );
+    expect(latest!.browsers.find((browser) => browser.id === "firefox")?.runningState).toBe(
+      "unknown"
+    );
+    expect(latest!.browsers.find((browser) => browser.id === "edge")?.runningState).toBe(
+      "closed"
+    );
+  });
+
+  it("preserves running state on failure and stops on unmount", async () => {
     vi.useFakeTimers();
     let failNext = false;
     invokeMock.mockImplementation((command: string) => {
@@ -213,6 +294,7 @@ describe("BrowserContext lightweight running-state watcher", () => {
       vi.advanceTimersByTime(5000);
     });
     expect(latest!.browsers[0].runningState).toBe("running");
+    expect(latest!.browsers[1].runningState).toBe("unknown");
 
     // A failing refresh must not clear the displayed running state.
     failNext = true;
@@ -220,6 +302,7 @@ describe("BrowserContext lightweight running-state watcher", () => {
       vi.advanceTimersByTime(5000);
     });
     expect(latest!.browsers[0].runningState).toBe("running");
+    expect(latest!.browsers[1].runningState).toBe("unknown");
 
     // Unmount stops the polling entirely.
     const callsBeforeUnmount = lightweightCalls().length;

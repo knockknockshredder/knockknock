@@ -30,10 +30,17 @@ pub enum ProfileLayout {
     Subdirectory(&'static str),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowsRootPreference {
+    LocalAppDataFirst,
+    AppDataFirst,
+}
+
 pub struct BrowserPath {
     pub id: &'static str,
     pub name: &'static str,
     pub windows_paths: &'static [&'static str],
+    pub(crate) windows_root_preference: WindowsRootPreference,
     pub macos_paths: &'static [&'static str],
     pub linux_paths: &'static [&'static str],
     pub profile_glob: &'static str, // Glob pattern for profiles
@@ -60,6 +67,7 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
             "Google\\Chrome Beta\\User Data",
             "Google\\Chrome SxS\\User Data", // Chrome Canary
         ],
+        windows_root_preference: WindowsRootPreference::LocalAppDataFirst,
         macos_paths: &["Google/Chrome"],
         linux_paths: &["google-chrome"],
         profile_glob: "Default",
@@ -70,6 +78,7 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
         id: "firefox",
         name: "Firefox",
         windows_paths: &["Mozilla\\Firefox"],
+        windows_root_preference: WindowsRootPreference::AppDataFirst,
         macos_paths: &["Firefox"],
         linux_paths: &[".mozilla/firefox"],
         profile_glob: "*.default*",
@@ -86,6 +95,7 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
             "Microsoft\\Edge\\User Data",
             "Microsoft\\Edge Beta\\User Data",
         ],
+        windows_root_preference: WindowsRootPreference::LocalAppDataFirst,
         macos_paths: &["Microsoft Edge"],
         linux_paths: &["microsoft-edge"],
         profile_glob: "Default",
@@ -99,6 +109,7 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
             "BraveSoftware\\Brave-Browser\\User Data",
             "BraveSoftware\\Brave-Browser-Beta\\User Data",
         ],
+        windows_root_preference: WindowsRootPreference::LocalAppDataFirst,
         macos_paths: &["BraveSoftware/Brave-Browser"],
         linux_paths: &["BraveSoftware/Brave-Browser"],
         profile_glob: "Default",
@@ -112,6 +123,7 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
             "Opera Software\\Opera Stable",
             "Opera Software\\Opera Next", // Opera Beta
         ],
+        windows_root_preference: WindowsRootPreference::LocalAppDataFirst,
         macos_paths: &["com.operasoftware.Opera"],
         linux_paths: &["opera"],
         profile_glob: "Default",
@@ -122,6 +134,7 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
         id: "vivaldi",
         name: "Vivaldi",
         windows_paths: &["Vivaldi\\User Data"],
+        windows_root_preference: WindowsRootPreference::LocalAppDataFirst,
         macos_paths: &["Vivaldi"],
         linux_paths: &["vivaldi"],
         profile_glob: "Default",
@@ -132,6 +145,7 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
         id: "safari",
         name: "Safari",
         windows_paths: &[], // Safari not on Windows
+        windows_root_preference: WindowsRootPreference::LocalAppDataFirst,
         macos_paths: &[
             "Safari",
             "Caches/com.apple.Safari",
@@ -149,6 +163,7 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
         id: "tor browser",
         name: "Tor Browser",
         windows_paths: &["Tor Browser\\Browser\\TorBrowser\\Data\\Browser"],
+        windows_root_preference: WindowsRootPreference::LocalAppDataFirst,
         macos_paths: &["TorBrowser/Data/Browser"],
         linux_paths: &[".tor-browser"],
         profile_glob: "*.default",
@@ -159,6 +174,7 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
         id: "chromium",
         name: "Chromium",
         windows_paths: &["Chromium\\User Data"],
+        windows_root_preference: WindowsRootPreference::LocalAppDataFirst,
         macos_paths: &["Chromium"],
         linux_paths: &["chromium"],
         profile_glob: "Default",
@@ -169,6 +185,7 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
         id: "internet explorer",
         name: "Internet Explorer",
         windows_paths: &["Microsoft\\Internet Explorer"],
+        windows_root_preference: WindowsRootPreference::LocalAppDataFirst,
         macos_paths: &[], // IE not on macOS
         linux_paths: &[], // IE not on Linux
         profile_glob: "",
@@ -177,20 +194,33 @@ pub const BROWSER_PATHS: &[BrowserPath] = &[
     },
 ];
 
-pub fn get_browser_base_paths(browser: &BrowserPath) -> Vec<PathBuf> {
+pub(crate) fn windows_base_paths_for_roots(
+    browser: &BrowserPath,
+    local_app_data: Option<&Path>,
+    app_data: Option<&Path>,
+) -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
-    // Windows: LOCALAPPDATA / APPDATA are only set on Windows.
-    {
-        for win_path in browser.windows_paths {
-            if let Some(local) = std::env::var("LOCALAPPDATA").ok() {
-                paths.push(PathBuf::from(local).join(win_path));
-            }
-            if let Some(roaming) = std::env::var("APPDATA").ok() {
-                paths.push(PathBuf::from(roaming).join(win_path));
-            }
+    for win_path in browser.windows_paths {
+        let roots = match browser.windows_root_preference {
+            WindowsRootPreference::LocalAppDataFirst => [local_app_data, app_data],
+            WindowsRootPreference::AppDataFirst => [app_data, local_app_data],
+        };
+
+        for root in roots.into_iter().flatten() {
+            paths.push(root.join(win_path));
         }
     }
+
+    paths
+}
+
+pub fn get_browser_base_paths(browser: &BrowserPath) -> Vec<PathBuf> {
+    // Windows: LOCALAPPDATA / APPDATA are only set on Windows.
+    let local_app_data = std::env::var("LOCALAPPDATA").ok().map(PathBuf::from);
+    let app_data = std::env::var("APPDATA").ok().map(PathBuf::from);
+    let mut paths =
+        windows_base_paths_for_roots(browser, local_app_data.as_deref(), app_data.as_deref());
 
     // macOS: paths are relative to ~/Library/Application Support.
     {
