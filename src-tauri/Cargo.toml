@@ -1,6 +1,6 @@
 [package]
 name = "knockknock"
-version = "0.5.0"
+version = "0.6.0"
 description = "Open-source local data deletion utility for Windows, macOS, and Linux"
 authors = ["KnockKnock Contributors"]
 edition = "2021"
@@ -78,4 +78,3 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
-

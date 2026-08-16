@@ -5,6 +5,33 @@ All notable changes to KnockKnock will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-08-16
+
+### "Secure Shredding Engine V2 & Browser Cleanup Safety"
+
+This release completes the V2 shredding pipeline and applies the same fail-closed safety model to selected browser data. It adds policy-driven deletion and write-check controls, stronger cancellation and verification behavior, and clearer progress and failure reporting.
+
+### Added
+
+- **Secure root execution** — Files and folders are processed through the handle-relative V2 engine with identity checks, no-follow semantics, journaling, and platform-specific safeguards.
+- **Deletion method selection** — Choose the automatic storage-aware method or the legacy three-pass HDD compatibility method.
+- **Final-state write checks** — Configure no check, a spot check, or a full read-back check after the final overwrite pass.
+- **Browser running-state detection** — Supported browser profiles are inspected before cleanup and cleanup is blocked when the browser is running or its state cannot be determined.
+- **Regression coverage** — Added frontend and backend coverage for deletion policies, browser detection and cleanup gates, cancellation, verification, and non-target preservation.
+
+### Changed
+
+- **Browser support scope** — Unsupported and unreliable browser integrations are no longer exposed; Safari cleanup is deferred until a reliable running-state policy exists.
+- **Progress and review UI** — Progress stages and overwrite pass information now reflect the active operation, while final review and confirmation copy describe the actual deletion policy.
+- **Fail-closed cleanup** — Browser inspection and fixed-path failures remain visible and prevent destructive cleanup instead of being treated as safe-to-proceed conditions.
+
+### Fixed
+
+- **Cancellation lifecycle** — Cancellation respects active-file boundaries and preserves operation/session state across concurrent or repeated requests.
+- **Write-check safety** — Spot verification avoids buffer overflows and final write-check outcomes are enforced before reporting success.
+- **Link and media safeguards** — Link targets and unsupported USB/media conditions are rejected before destructive execution.
+- **Browser cleanup reporting** — Collection, inspection, and cleanup failures are propagated through IPC and completion notifications are emitted only after cleanup finishes.
+
 ## [0.5.0] — 2026-08-02
 
 ### "Secure Folder Shredding & Persistent Vault Targets"
