@@ -182,7 +182,7 @@ chmod +x KnockKnock-linux-x64.AppImage
 1. KnockKnock detects supported installed browsers and profiles.
 2. Select the browser profile and local data types you want to process.
 3. Review the selection before confirming.
-4. KnockKnock warns if a browser appears to be running.
+4. KnockKnock blocks browser cleanup unless the selected browser is confirmed closed.
 5. Selected browser data is processed using the same local deletion pipeline as other targets.
 
 > Browser cleanup is destructive. Review selected profiles and data types carefully before confirming.
