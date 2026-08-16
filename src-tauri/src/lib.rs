@@ -79,8 +79,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::shred::execute_roots,
             commands::shred::cancel_shred,
+            commands::shred::begin_shred_operation,
+            commands::shred::is_shred_operation_cancelled,
             commands::shred::cleanup_orphans,
-            commands::shred::get_algorithms,
             commands::shred::validate_paths,
             commands::shred::open_files_windows,
             commands::shred::open_folders_windows,
@@ -90,6 +91,7 @@ pub fn run() {
             commands::shred::request_elevation,
             commands::browser::detect_browsers,
             commands::browser::shred_browser_data,
+            commands::browser::check_browser_running_states,
             commands::tray::minimize_to_tray,
             commands::tray::sync_tray_state,
             commands::tray::send_notification,

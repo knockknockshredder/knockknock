@@ -2,16 +2,21 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   BatchRootResult,
   ChildErrorDto,
+  DeletionMethod,
   ExecuteRootRequest,
   ExecuteRootsRequest,
   ExecutionStage,
+  OverwriteStatus,
   RootResultDto,
   RootStatus,
+  ShredStatus,
   TargetAvailability,
   TargetKind,
   TargetMetadataDto,
   VaultSchemaSource,
   VaultTarget,
+  WriteCheck,
+  WriteCheckOutcome,
 } from "./index";
 
 describe("root execution contract", () => {
@@ -28,13 +33,28 @@ describe("root execution contract", () => {
       | "overwrite"
       | "verify"
       | "rename"
-      | "truncate"
       | "delete"
       | "directory_remove"
       | "journal"
       | "sync"
     >();
     expectTypeOf<VaultSchemaSource>().toEqualTypeOf<"v1" | "v2">();
+    expectTypeOf<DeletionMethod>().toEqualTypeOf<
+      "automatic" | "legacy_three_pass"
+    >();
+    expectTypeOf<WriteCheck>().toEqualTypeOf<"off" | "spot" | "full">();
+    expectTypeOf<WriteCheckOutcome>().toEqualTypeOf<
+      "not_run" | "passed" | "failed"
+    >();
+    expectTypeOf<OverwriteStatus>().toEqualTypeOf<
+      "not_started" | "partial" | "completed"
+    >();
+    expectTypeOf<ShredStatus>().toEqualTypeOf<
+      | { type: "Shredding" }
+      | { type: "Complete" }
+      | { type: "Warning"; message: string }
+      | { type: "Error"; message: string }
+    >();
   });
 
   it("round-trips every DTO fixture without changing its shape", () => {
@@ -56,8 +76,8 @@ describe("root execution contract", () => {
     const error: ChildErrorDto = {
       path: "C:\\selected\\root\\child",
       stage: "verify",
-      error_type: "verification_failed",
-      message: "verification failed",
+      error_type: "write_check_failed",
+      message: "write check did not pass",
       actionable: "Retry the operation",
     };
     const result: RootResultDto = {
@@ -69,6 +89,7 @@ describe("root execution contract", () => {
       files_destroyed: 1,
       directories_removed: 0,
       bytes_shredded: 42,
+      write_check: "failed",
       errors: [error],
     };
     const batch: BatchRootResult = { roots: [result] };

@@ -106,7 +106,7 @@ Its responsibilities include:
 * collecting user intent;
 * displaying selected targets;
 * presenting browser profiles;
-* configuring overwrite behavior;
+* configuring deletion method and write check;
 * requesting destructive confirmation;
 * requesting PIN authorization;
 * displaying progress and errors;
@@ -125,7 +125,7 @@ The current frontend separates major state areas into contexts.
 Tracks information including:
 
 * selected file/folder targets;
-* algorithm selection;
+* deletion method and write-check selection;
 * execution state;
 * operation logs;
 * progress;
@@ -160,10 +160,9 @@ The backend currently exposes command groups covering areas including:
 
 ### Shredding
 
-* execute selected roots;
+* execute selected roots with a deletion method and write check;
 * request cancellation;
 * recover interrupted cleanup;
-* return available overwrite modes;
 * validate paths and persisted targets;
 * obtain drive information;
 * open Windows file/folder pickers;
@@ -236,8 +235,8 @@ Contains the core destructive filesystem engine.
 Current submodules include:
 
 ```text
-algorithms
 cancel
+engine
 errors
 journal
 logging
@@ -379,32 +378,36 @@ validate
    ↓
 network-storage check
    ↓
-hard-link check
+hard-link block (preflight; rechecked on the open handle)
    ↓
-media detection
+media classification (Legacy 3-pass only, per distinct volume)
    ↓
 open target
    ↓
-overwrite pass(es)
+overwrite pass(es) — fixed per method
    ↓
 sync
    ↓
-optional read-back verification
+final write check (off / spot / full)
    ↓
 close destructive write handle
    ↓
-randomized rename
-   ↓
 journal pending cleanup
    ↓
-truncate
+randomized rename
    ↓
-TRIM/deallocation handling where applicable
+sync parent
    ↓
 delete
    ↓
+sync parent
+   ↓
 clear cleanup journal entry
 ```
+
+Zero-length files skip the overwrite, sync, and write-check stages and proceed from the journal step directly through rename and deletion.
+
+The v2 lifecycle contains no truncate step and issues no TRIM/deallocation requests.
 
 Exact platform behavior can differ.
 
@@ -420,7 +423,7 @@ Current validation concepts include:
 * application-path protection;
 * link/reparse handling;
 * network-filesystem rejection;
-* hard-link awareness;
+* hard-link blocking;
 * target existence/type validation.
 
 Validation must be repeated at security-sensitive boundaries when a race between validation and execution could otherwise change target identity.
@@ -448,60 +451,54 @@ Responsibilities include operations such as:
 * opening a target for destructive writes;
 * synchronizing writes;
 * randomized rename;
-* truncation;
 * deletion;
 * media detection;
-* TRIM/deallocation requests where supported.
+* hard-link count queries.
 
-Platform differences are intentionally isolated from higher-level algorithm selection.
+Platform differences are intentionally isolated from the higher-level deletion policy.
 
-## Overwrite Modes
+## Deletion Methods
 
-Overwrite behavior is implemented behind a common algorithm abstraction.
+Overwrite behavior is policy-driven. Each method fixes its pass sequence; no arbitrary pass counts, patterns, or pass repeats exist.
 
-Current modes include implementations historically named around:
+* **Automatic** — one pseudorandom logical overwrite pass before removal. No media classification is performed.
+* **Legacy 3-pass** — the fixed zeros → ones → random sequence, reflecting the historical DoD 5220.22-M three-pass practice. It is available only on confirmed magnetic HDD storage: preflight classifies one representative path per distinct volume and fails the whole batch before mutation if any volume is not confirmed HDD (classifier errors fail closed). It is a compatibility option, not a certification.
 
-* NIST Clear;
-* DoD 5220.22-M;
-* random-only overwrite.
-
-These names describe implemented pass/pattern behavior.
-
-They must not be interpreted as certification of whole-device sanitization.
+The application performs no mount-wide TRIM/fstrim; OS-level storage deallocation is independent.
 
 User-facing descriptions should follow [LIMITATIONS.md](LIMITATIONS.md).
 
-## Verification
+> KnockKnock's design is informed by modern media-sanitization guidance, including NIST SP 800-88 Rev. 2, but KnockKnock performs file-level local deletion and does not claim whole-device sanitization certification or compliance.
 
-Verification is separate from overwrite behavior.
+## Write Check
 
-Current verification levels are:
+The write check is separate from overwrite behavior and runs once, after the last pass, against the final logical file state.
 
-### None
+Current write-check modes are:
 
-No read-back check.
+### Off
 
-### Sample
+No read-back after the overwrite.
 
-Checks selected portions of the logical range, including the beginning, middle, and end.
+### Spot
+
+Deterministic distributed read-back of the final range; files up to 64 KiB are checked in full.
 
 ### Full
 
-Reads the complete logical overwritten range.
+Reads the complete final logical file range.
 
-For random overwrite data, the implementation can reproduce the expected ChaCha20 stream for deterministic comparison.
+Both methods end with a pseudorandom stream, so the implementation can reproduce the expected ChaCha20 stream for deterministic comparison.
 
-Verification checks logical read-back correctness.
+The write check verifies that the overwrite's write result can be read back through the same logical storage interface.
 
-It is not proof of physical-media sanitization.
+It is not proof of physical-media sanitization, and no mode is ranked as providing stronger assurance than another.
 
 ## Cancellation
 
-Cancellation is coordinated through a shared cancellation token.
+Cancellation is coordinated through a shared cancellation token observed at safe file and root boundaries.
 
-Cancellation stops additional overwrite work where possible.
-
-A target that has already entered destructive processing may still proceed through cleanup.
+Stop is stop-after-current-file: an active file completes its overwrite passes, optional final check, journal, rename, and deletion before Stop takes effect. No further file or target is started. On large files, cancellation latency is bounded by the time to finish the current file.
 
 The design intentionally does not present cancellation as data restoration.
 
@@ -512,15 +509,15 @@ The journal tracks destructive operations that have been renamed but not fully c
 A typical cleanup sequence is:
 
 ```text
-rename
-   ↓
 persist journal entry
    ↓
-truncate
+randomized rename
    ↓
-TRIM/deallocation handling
+sync parent
    ↓
 delete
+   ↓
+sync parent
    ↓
 remove journal entry
 ```
@@ -530,6 +527,8 @@ The journal exists so that interruption between rename and deletion does not sil
 The journal is a destructive-workflow recovery mechanism.
 
 It is not a deleted-file recovery system.
+
+The journal records the trusted parent path in plaintext — metadata required to locate and recover a renamed entry. It contains target metadata, not target file contents. On Unix, journal files are created with owner-only permissions (0600); on Windows, access control relies on the configured KnockKnock data directory ACLs.
 
 ## Browser Cleanup
 
@@ -545,7 +544,9 @@ explicit destructive confirmation
 backend browser-data processing
 ```
 
-Running browsers are detected and surfaced because concurrent browser writes can interfere with cleanup or recreate local data.
+Running browsers are detected and surfaced because concurrent browser writes can interfere with cleanup or recreate local data. Browser cleanup is blocked while the selected browser is running: the backend rechecks running state immediately before collection and refuses cleanup with no override — the destructive confirmation is consent to deletion, never consent to deleting browser data while the browser runs. Running state is also exposed through a lightweight `check_browser_running_states` command that reuses the same lock-file check without re-running installed-browser discovery or profile enumeration.
+
+Browser cleanup is confined to the selected profile: collection skips filesystem-link/reparse entries that it directly inspects, and a profile path that is itself a filesystem link is rejected. Inspection failures are surfaced rather than silently skipped. Collected candidates pass through the secure handle-relative root executor, which enforces component-level no-follow confinement before mutation; destructive cleanup requires explicit user consent (re-checked by the backend).
 
 Browser cleanup operates on local profile data and does not control remote browser-account synchronization.
 
@@ -558,6 +559,8 @@ Relevant categories include local magnetic and solid-state storage.
 Storage classification is advisory and platform-dependent.
 
 It does not provide proof about the physical storage device behind every virtual or layered filesystem.
+
+For the Legacy 3-pass method, backend preflight is authoritative: a volume not confirmed as a magnetic HDD fails the whole batch before any mutation.
 
 ## Progress and Errors
 
@@ -616,6 +619,8 @@ The architecture should preserve these invariants:
 8. Browser cleanup remains limited to selected local browser data.
 9. Elevation remains explicit and least-privilege by default.
 10. Destructive execution must not gain a hidden, remote, or unattended alternate path.
+11. Hard-linked targets are blocked: a target with a link count greater than one is refused at preflight and rechecked against the already-open handle before destructive writes; no override exists.
+12. The application performs no mount-wide TRIM/fstrim; OS-level storage deallocation is independent of KnockKnock.
 
 ## Build and Test Architecture
 

@@ -1,7 +1,6 @@
 // src-tauri/src/commands/shred.rs
 
 use crate::drive::{self, DriveInfo};
-use crate::shredder::algorithms::all_algorithms;
 use crate::shredder::cancel::CancellationToken;
 use crate::shredder::journal::JournalStore;
 use crate::shredder::logging::LogObfuscation;
@@ -13,7 +12,7 @@ use crate::shredder::types::*;
 use crate::shredder::validation::{
     classify_path, is_network_drive, validate_path, PathClassification,
 };
-use crate::shredder::{LegacyOpenFileShredder, ShredAlgorithm, VerificationLevel};
+use crate::shredder::PolicyFileShredder;
 use std::sync::Arc;
 use tauri::AppHandle;
 
@@ -21,51 +20,30 @@ use tauri::AppHandle;
 pub async fn execute_roots(
     app: AppHandle,
     request: ExecuteRootsRequest,
-    algorithm_index: usize,
-    passes: u32,
-    pattern: PatternType,
-    verification_level: VerificationLevel,
+    method: DeletionMethod,
+    write_check: WriteCheck,
     log_obfuscation: String,
 ) -> Result<BatchRootResult, String> {
+    let cancel = crate::shredder::cancel::get_global_token().ok_or_else(|| {
+        "No active shred operation; call begin_shred_operation before executing roots.".to_string()
+    })?;
+
     let obfuscation = match log_obfuscation.as_str() {
         "numbered" => LogObfuscation::Numbered,
         "partial_mask" => LogObfuscation::PartialMask,
         _ => LogObfuscation::None,
     };
-
-    let algorithms = all_algorithms();
-    let algorithm = algorithms
-        .get(algorithm_index)
-        .ok_or_else(|| format!("Invalid algorithm index: {}", algorithm_index))?
-        .clone();
-
-    if passes > algorithm.max_passes() {
-        return Err(format!(
-            "Passes {} exceeds maximum {}",
-            passes,
-            algorithm.max_passes()
-        ));
-    }
-
-    // Reset cancellation token for fresh operation
-    crate::shredder::cancel::reset_global();
-    let cancel = crate::shredder::cancel::get_global_token();
+    let policy = DeletionPolicy {
+        method,
+        write_check,
+    };
 
     let progress: Arc<dyn ProgressReporter> =
         Arc::new(TauriProgressReporter::new(app, obfuscation));
     let journal = JournalStore::portable().map_err(|error| error.to_string())?;
 
     tokio::task::spawn_blocking(move || {
-        execute_roots_core(
-            request,
-            algorithm,
-            passes,
-            pattern,
-            verification_level,
-            progress,
-            &cancel,
-            &journal,
-        )
+        execute_roots_core(request, policy, progress, &cancel, &journal)
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))
@@ -89,40 +67,49 @@ fn platform_adapter() -> Arc<dyn SecureTreeIo> {
 }
 
 /// Command core without the `AppHandle`: builds the platform adapter, the
-/// open-file shredder, and runs the `execute_roots` seam against the given
-/// journal and progress reporter. Kept separate so command behavior is
-/// covered by tests that never construct a Tauri runtime.
+/// policy-driven open-file shredder, and runs the `execute_roots` seam
+/// against the given policy, journal, and progress reporter. Kept separate
+/// so command behavior is covered by tests that never construct a Tauri
+/// runtime.
 pub(crate) fn execute_roots_core(
     request: ExecuteRootsRequest,
-    algorithm: Arc<dyn ShredAlgorithm>,
-    passes: u32,
-    pattern: PatternType,
-    verification_level: VerificationLevel,
+    policy: DeletionPolicy,
     progress: Arc<dyn ProgressReporter>,
     cancel: &CancellationToken,
     journal: &JournalStore,
 ) -> BatchRootResult {
     let adapter = platform_adapter();
-    let file_shredder = LegacyOpenFileShredder::new(
-        algorithm,
-        passes,
-        pattern,
-        verification_level,
-        Arc::clone(&progress),
-    );
+    let file_shredder = PolicyFileShredder::new(policy, Arc::clone(&progress));
+    // M7 classifier: plain media detection per path. Per-distinct-volume
+    // memoization lives in plan.rs's preflight (mount_id cache); the closure
+    // itself is the raw detect so the cache key stays authoritative.
+    let platform_io = crate::shredder::platform::create_platform_io();
+    let classify = move |path: &std::path::Path| platform_io.detect_media_type(path);
     run_roots(
         request,
+        policy,
         adapter.as_ref(),
         &file_shredder,
         journal,
         progress.as_ref(),
         cancel,
+        &classify,
     )
 }
 
 #[tauri::command]
 pub fn cancel_shred() {
     crate::shredder::cancel::cancel_global();
+}
+
+#[tauri::command]
+pub fn begin_shred_operation() {
+    crate::shredder::cancel::begin_global_operation();
+}
+
+#[tauri::command]
+pub fn is_shred_operation_cancelled() -> bool {
+    crate::shredder::cancel::is_global_operation_cancelled()
 }
 
 /// Re-launch the current executable with administrator privileges.
@@ -190,38 +177,6 @@ pub fn cleanup_orphans() -> Result<Vec<String>, String> {
         .iter()
         .map(|e| format!("Orphaned: {:?}", e.renamed_path))
         .collect())
-}
-
-#[derive(serde::Serialize)]
-pub struct AlgorithmInfo {
-    pub index: usize,
-    pub name: String,
-    pub description: String,
-    pub default_passes: u32,
-    pub max_passes: u32,
-    pub accepted_patterns: Vec<String>,
-    pub has_fixed_pattern_sequence: bool,
-}
-
-#[tauri::command]
-pub fn get_algorithms() -> Vec<AlgorithmInfo> {
-    all_algorithms()
-        .iter()
-        .enumerate()
-        .map(|(i, algo)| AlgorithmInfo {
-            index: i,
-            name: algo.name().to_string(),
-            description: algo.description().to_string(),
-            default_passes: algo.default_passes(),
-            max_passes: algo.max_passes(),
-            accepted_patterns: algo
-                .accepted_patterns()
-                .iter()
-                .map(|p| format!("{:?}", p))
-                .collect(),
-            has_fixed_pattern_sequence: algo.has_fixed_pattern_sequence(),
-        })
-        .collect()
 }
 
 /// Collect metadata for a single file path.
@@ -652,7 +607,6 @@ pub fn get_all_drive_info(paths: Vec<String>) -> Result<Vec<DriveInfo>, String> 
 mod tests {
     use super::execute_roots_core;
     use super::validate_targets;
-    use crate::shredder::algorithms::nist_clear::NistClear;
     use crate::shredder::cancel::CancellationToken;
     use crate::shredder::journal::JournalStore;
     use crate::shredder::progress::NoopProgressReporter;
@@ -660,7 +614,7 @@ mod tests {
         BatchRootResult, ExecuteRootRequest, ExecuteRootsRequest, ExecutionStage, RootStatus,
         TargetAvailability, TargetKind, VaultTarget,
     };
-    use crate::shredder::types::{PatternType, VerificationLevel};
+    use crate::shredder::types::{DeletionMethod, DeletionPolicy, WriteCheck};
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -716,10 +670,10 @@ mod tests {
         let journal = JournalStore::at(journal_directory.path().join("journal.json"));
         execute_roots_core(
             request,
-            Arc::new(NistClear),
-            1,
-            PatternType::Zeros,
-            VerificationLevel::None,
+            DeletionPolicy {
+                method: DeletionMethod::Automatic,
+                write_check: WriteCheck::Off,
+            },
             Arc::new(NoopProgressReporter),
             &CancellationToken::new(),
             &journal,
@@ -805,6 +759,14 @@ mod tests {
     }
 
     #[test]
+    /// A real file root destroyed through the real platform adapter.
+    ///
+    /// Incident note (ORACLE-2 SHOULD-FIX 2, deviation 6): a transient
+    /// NTSTATUS 0xC0000056 (STATUS_DELETE_PENDING) was observed ONCE on the
+    /// randomized rename in a parallel (non-gate) run of this test; it has
+    /// never reproduced serially or since, and is suspected to be antivirus
+    /// interference with the short-lived renamed file. If it reappears,
+    /// treat it as environmental rather than a lifecycle regression.
     fn execute_roots_core_destroys_a_file_root_on_the_real_adapter() {
         let home = temp_home();
         let file = home.inner().join("secret.txt");

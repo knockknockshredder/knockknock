@@ -1,7 +1,7 @@
 // src-tauri/src/shredder/errors.rs
 
+use crate::shredder::types::{DeletionMethod, MediaType};
 use serde::Serialize;
-use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -13,18 +13,33 @@ pub enum ShredError {
     #[error("Permission denied: {0}")]
     PermissionDenied(PathBuf),
 
-    #[error("File locked by process '{process}': {path}")]
-    FileLocked { path: PathBuf, process: String },
-
     #[error("I/O error at {path}: {kind}: {message}")]
     IoError {
         path: PathBuf,
         kind: String,
         message: String,
     },
+    // --- v2 variants (Phase 1, additive). Technical Display only, no UI
+    // prose (M11) — presentation copy belongs to the frontend. ---
+    // `HardLinkBlocked` is constructed by root-execution preflight (Phase 2);
+    // `UnsupportedStorageForMethod` by storage preflight (Phase 3).
+    // `BrowserCollectionFailed` is constructed by the browser collectors
+    // (Phase 3).
+    #[error("hard link blocked at {path}: link count {count}")]
+    HardLinkBlocked { path: PathBuf, count: u64 },
 
-    #[error("Verification failed at pass {pass}: {path}")]
-    VerificationFailed { path: PathBuf, pass: u32 },
+    #[error("unsupported storage for method {method:?} at {path}: media type {media:?}")]
+    UnsupportedStorageForMethod {
+        path: PathBuf,
+        method: DeletionMethod,
+        media: MediaType,
+    },
+
+    #[error("write check failed at {path}")]
+    WriteCheckFailed { path: PathBuf },
+
+    #[error("browser data collection failed at {path}: {detail}")]
+    BrowserCollectionFailed { path: PathBuf, detail: String },
 
     #[error("Network drive not supported: {0}")]
     NetworkDrive(PathBuf),
@@ -81,18 +96,4 @@ pub enum JournalError {
 
     #[error("journal record was not found while clearing: {path}")]
     RecordNotFound { path: PathBuf },
-}
-
-impl JournalError {
-    pub fn path(&self) -> Option<&Path> {
-        match self {
-            Self::Io { path, .. }
-            | Self::Decode { path, .. }
-            | Self::LegacyRecord { path }
-            | Self::IdentityMismatch { path, .. }
-            | Self::UnsafeParent { path, .. }
-            | Self::RecordNotFound { path } => Some(path),
-            Self::Serialize(_) => None,
-        }
-    }
 }

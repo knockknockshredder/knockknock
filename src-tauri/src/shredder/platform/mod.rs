@@ -1,7 +1,5 @@
 // src-tauri/src/shredder/platform/mod.rs
 
-pub mod common;
-
 #[cfg(target_os = "windows")]
 pub mod windows;
 
@@ -12,6 +10,18 @@ pub mod macos;
 pub mod linux;
 
 use crate::shredder::traits::PlatformIo;
+use crate::shredder::types::MediaType;
+
+/// Map drive detection's platform-specific categories to the shredder's
+/// storage policy categories. USB transport does not change the underlying
+/// rotational-versus-solid-state classification.
+pub(crate) fn map_drive_type(drive_type: crate::drive::DriveType) -> MediaType {
+    match drive_type {
+        crate::drive::DriveType::Hdd | crate::drive::DriveType::UsbHdd => MediaType::Hdd,
+        crate::drive::DriveType::Ssd | crate::drive::DriveType::UsbSsd => MediaType::Ssd,
+        crate::drive::DriveType::Network | crate::drive::DriveType::Unknown => MediaType::Unknown,
+    }
+}
 
 pub fn create_platform_io() -> Box<dyn PlatformIo> {
     #[cfg(target_os = "windows")]

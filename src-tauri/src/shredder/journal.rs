@@ -169,10 +169,19 @@ impl JournalIo for FsJournalIo {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // On Unix the journal is created owner-only (0o600) AT CREATION so the
+        // rename below carries the mode to the final journal without a
+        // world-readable window; `create_new` is already set, so there is no
+        // symlink-follow risk. On Windows the KnockKnock data directory ACLs
+        // restrict access to the owning user (documented in Phase 5).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
         file.write_all(contents)?;
         file.flush()?;
         Ok(temporary)
@@ -280,16 +289,6 @@ impl JournalStore {
         let previous = entries.clone();
         entries.push(entry);
         self.write_entries(&entries, &previous)
-    }
-
-    pub(crate) fn append_orphan(
-        &self,
-        original: &Path,
-        renamed: &Path,
-    ) -> Result<JournalEntry, JournalError> {
-        let entry = orphan_entry(original, renamed)?;
-        self.append(entry.clone())?;
-        Ok(entry)
     }
 
     pub fn read(&self) -> Result<Vec<JournalEntry>, JournalError> {
@@ -580,84 +579,8 @@ fn metadata_identity(path: &Path, metadata: &std::fs::Metadata) -> Option<Journa
     None
 }
 
-pub fn write_orphan(original: &Path, renamed: &Path) -> Result<(), JournalError> {
-    JournalStore::portable()?
-        .append_orphan(original, renamed)
-        .map(|_| ())
-}
-
-fn orphan_entry(original: &Path, renamed: &Path) -> Result<JournalEntry, JournalError> {
-    let parent = renamed.parent().ok_or_else(|| JournalError::UnsafeParent {
-        path: renamed.to_path_buf(),
-        reason: "renamed path has no parent".to_string(),
-    })?;
-    let parent_metadata = std::fs::symlink_metadata(parent)
-        .map_err(|error| io_error("inspect orphan parent", parent, error))?;
-    let node_metadata = std::fs::symlink_metadata(renamed)
-        .map_err(|error| io_error("inspect renamed orphan", renamed, error))?;
-    let parent_identity = metadata_identity(parent, &parent_metadata).ok_or_else(|| {
-        JournalError::IdentityMismatch {
-            path: parent.to_path_buf(),
-            reason: "trusted parent identity is unavailable".to_string(),
-        }
-    })?;
-    let node_identity = metadata_identity(renamed, &node_metadata).ok_or_else(|| {
-        JournalError::IdentityMismatch {
-            path: renamed.to_path_buf(),
-            reason: "renamed node identity is unavailable".to_string(),
-        }
-    })?;
-    let basename = renamed
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| JournalError::IdentityMismatch {
-            path: renamed.to_path_buf(),
-            reason: "renamed basename is not valid UTF-8".to_string(),
-        })?;
-    let mut entry = JournalEntry::identity_bound(
-        parent.to_path_buf(),
-        parent_identity,
-        basename,
-        node_identity,
-        metadata_kind(&node_metadata),
-    );
-    entry.original_path_hash = Some(hash_path(original));
-    entry.renamed_path = renamed.to_path_buf();
-    Ok(entry)
-}
-
-pub fn clear_orphan(renamed: &Path) -> Result<(), JournalError> {
-    clear_orphan_fallible(renamed)
-}
-
-fn clear_orphan_fallible(renamed: &Path) -> Result<(), JournalError> {
-    let store = JournalStore::portable()?;
-    let entries = store.read()?;
-    for entry in entries {
-        if entry.renamed_path == renamed {
-            if !entry.is_identity_bound() {
-                return Err(JournalError::LegacyRecord {
-                    path: renamed.to_path_buf(),
-                });
-            }
-            return store.clear(&entry);
-        }
-    }
-    Err(JournalError::RecordNotFound {
-        path: renamed.to_path_buf(),
-    })
-}
-
 pub fn cleanup_orphans() -> Result<Vec<JournalEntry>, JournalError> {
     JournalStore::portable()?.recover()
-}
-
-fn hash_path(path: &Path) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    path.to_string_lossy().hash(&mut hasher);
-    format!("{:x}", hasher.finish())
 }
 
 #[cfg(test)]
@@ -788,6 +711,32 @@ mod tests {
         assert_eq!(entries, vec![expected]);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn journal_files_are_created_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let journal_path = directory.path().join(".journal.json");
+        let store = JournalStore::at(&journal_path);
+
+        store.append(entry()).expect("journal append");
+
+        let mode = std::fs::metadata(&journal_path)
+            .expect("journal metadata")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "journal must not be group- or world-accessible"
+        );
+        assert!(
+            !journal_path.with_extension("tmp").exists(),
+            "temporary journal must not remain after the write"
+        );
+    }
+
     #[test]
     fn journal_write_fault_is_returned_and_does_not_create_a_record() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -902,24 +851,5 @@ mod tests {
             assert!(target.exists());
             assert!(!store.read().expect("journal read").is_empty());
         }
-    }
-
-    #[test]
-    fn journal_wrapper_failure_does_not_panic() {
-        let result = std::panic::catch_unwind(|| {
-            super::clear_orphan(Path::new("/definitely/missing/legacy-target"))
-        });
-
-        assert!(result.is_ok(), "legacy journal cleanup must not panic");
-        assert!(result.expect("journal wrapper did not panic").is_err());
-
-        let result = std::panic::catch_unwind(|| {
-            super::write_orphan(
-                Path::new("/definitely/missing/original"),
-                Path::new("/definitely/missing/renamed"),
-            )
-        });
-        assert!(result.is_ok(), "legacy journal write must not panic");
-        assert!(result.expect("journal wrapper did not panic").is_err());
     }
 }

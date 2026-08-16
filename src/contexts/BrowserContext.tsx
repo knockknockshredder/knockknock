@@ -1,8 +1,18 @@
 // src/contexts/BrowserContext.tsx
-import { createContext, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { DetectedBrowser } from "@/types";
+import type { BrowserRunningState, DetectedBrowser } from "@/types";
 import { useShred } from "@/contexts/ShredContext";
+
+/** Lightweight running-state poll cadence (running state only — no discovery). */
+const RUNNING_STATE_POLL_MS = 5000;
 
 interface BrowserState {
   browsers: DetectedBrowser[];
@@ -22,6 +32,79 @@ export function BrowserProvider({ children }: { children: ReactNode }) {
   const [browsers, setBrowsers] = useState<DetectedBrowser[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const { addLogEntry } = useShred();
+
+  // Latest browser list for the interval callback without restarting the
+  // interval on every state change (including running-state flips).
+  const browsersRef = useRef(browsers);
+  useEffect(() => {
+    browsersRef.current = browsers;
+  }, [browsers]);
+
+  const hasBrowsers = browsers.length > 0;
+
+  // Lightweight running-state watcher: while browsers are known, refresh
+  // ONLY their running state via the dedicated backend command. Never calls
+  // full installed-browser discovery, never logs routine polling, never
+  // lets requests overlap. A refresh failure or omitted requested browser
+  // makes a cached `closed` state `unknown`; `running` and `unknown` remain
+  // unchanged. Browser identities/profiles/selection are preserved — only
+  // `runningState` is updated.
+  useEffect(() => {
+    if (!hasBrowsers) return;
+    let disposed = false;
+    let inFlight = false;
+
+    const refreshRunningStates = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      const requestedBrowsers = browsersRef.current;
+      const requestedStateById = new Map(
+        requestedBrowsers.map((b) => [b.id, b.runningState])
+      );
+      const requests = requestedBrowsers.map((b) => ({
+        browserId: b.id,
+        profilePaths: b.profiles.map((p) => p.path),
+      }));
+      try {
+        const states = await invoke<BrowserRunningState[]>(
+          "check_browser_running_states",
+          { requests }
+        );
+        if (disposed) return;
+        const stateById = new Map(states.map((s) => [s.browserId, s.state]));
+        setBrowsers((prev) =>
+          prev.map((b) => {
+            if (stateById.has(b.id)) {
+              return { ...b, runningState: stateById.get(b.id)! };
+            }
+            return requestedStateById.get(b.id) === "closed"
+              ? { ...b, runningState: "unknown" }
+              : b;
+          })
+        );
+      } catch {
+        if (disposed) return;
+        // Transient failure: only requested browsers cached as closed become
+        // unknown; running and unknown remain unchanged. Never fall back to a
+        // full discovery scan and never spam the log.
+        setBrowsers((prev) =>
+          prev.map((b) =>
+            requestedStateById.get(b.id) === "closed"
+              ? { ...b, runningState: "unknown" }
+              : b
+          )
+        );
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const interval = setInterval(refreshRunningStates, RUNNING_STATE_POLL_MS);
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+    };
+  }, [hasBrowsers]);
 
   const toggleProfile = (browserId: string, profileId: string) => {
     setBrowsers((prev) =>

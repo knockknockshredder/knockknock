@@ -1,3 +1,4 @@
+use crate::shredder::types::WriteCheckOutcome;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
@@ -35,7 +36,6 @@ pub enum ExecutionStage {
     Overwrite,
     Verify,
     Rename,
-    Truncate,
     Delete,
     DirectoryRemove,
     Journal,
@@ -129,6 +129,9 @@ pub struct RootResultDto {
     pub files_destroyed: u64,
     pub directories_removed: u64,
     pub bytes_shredded: u64,
+    /// Aggregate final-state write check across the root's files: Failed if
+    /// any file failed, else Passed if any file passed, else NotRun.
+    pub write_check: WriteCheckOutcome,
     pub errors: Vec<ChildErrorDto>,
 }
 
@@ -206,7 +209,6 @@ mod tests {
             (ExecutionStage::Overwrite, "overwrite"),
             (ExecutionStage::Verify, "verify"),
             (ExecutionStage::Rename, "rename"),
-            (ExecutionStage::Truncate, "truncate"),
             (ExecutionStage::Delete, "delete"),
             (ExecutionStage::DirectoryRemove, "directory_remove"),
             (ExecutionStage::Journal, "journal"),
@@ -285,6 +287,7 @@ mod tests {
             files_destroyed: 1,
             directories_removed: 0,
             bytes_shredded: 42,
+            write_check: WriteCheckOutcome::Failed,
             errors: vec![error],
         };
         assert_eq!(round_trip(&result), result);

@@ -10,8 +10,8 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AlgorithmOption,
   ChildErrorDto,
+  DeletionMethod,
   ExecuteRootsRequest,
   FileMetadata,
   LogEntry,
@@ -22,6 +22,7 @@ import type {
   TargetKind,
   VaultSchemaSource,
   VaultTarget,
+  WriteCheck,
 } from "@/types";
 
 export type VaultState = "locked" | "loading" | "clean" | "dirty" | "saving" | "error";
@@ -51,10 +52,10 @@ interface WriterError {
 
 interface ShredState {
   files: ShredFile[];
-  algorithmIndex: number;
+  deletionMethod: DeletionMethod;
+  writeCheck: WriteCheck;
   isShredding: boolean;
   logEntries: LogEntry[];
-  algorithms: AlgorithmOption[];
   progress: ProgressState | null;
   vaultLoaded: boolean;
   vaultPin: string | null;
@@ -62,11 +63,11 @@ interface ShredState {
   addFiles: (files: FileMetadata[]) => void;
   removeFile: (id: string) => void;
   clearFiles: () => void;
-  setAlgorithmIndex: (index: number) => void;
+  setDeletionMethod: (method: DeletionMethod) => void;
+  setWriteCheck: (writeCheck: WriteCheck) => void;
   setIsShredding: (v: boolean) => void;
   addLogEntry: (level: LogEntry["level"], message: string) => void;
   clearLog: () => void;
-  setAlgorithms: (algorithms: AlgorithmOption[]) => void;
   setProgress: (progress: ProgressState | null) => void;
   updateFileStatus: (id: string, status: ShredFile["status"], error?: string) => void;
   setVaultPin: (pin: string | null) => void;
@@ -96,10 +97,12 @@ function readQueuedSnapshot(ref: { current: VaultSnapshot | null }): VaultSnapsh
 
 export function ShredProvider({ children }: { children: ReactNode }) {
   const [files, setFiles] = useState<ShredFile[]>([]);
-  const [algorithmIndex, setAlgorithmIndex] = useState(0);
+  // Deletion policy (v2). Not persisted — matches the pre-v2 behavior where
+  // overwrite settings were session-local.
+  const [deletionMethod, setDeletionMethod] = useState<DeletionMethod>("automatic");
+  const [writeCheck, setWriteCheck] = useState<WriteCheck>("spot");
   const [isShredding, setIsShredding] = useState(false);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
-  const [algorithms, setAlgorithms] = useState<AlgorithmOption[]>([]);
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [vaultLoaded, setVaultLoaded] = useState(false);
   const [vaultPin, setVaultPinState] = useState<string | null>(null);
@@ -629,6 +632,7 @@ export function ShredProvider({ children }: { children: ReactNode }) {
             status: "error" as const,
             error: formatRootResultError(result),
             root_status: result.status,
+            write_check: result.write_check,
             child_errors: result.errors as ChildErrorDto[],
           };
         })
@@ -657,13 +661,19 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         const error = toError(reason);
         const restored = previous
           .filter((file) => removedIds.has(file.id))
-          .map((file) => ({
-            ...file,
-            status: "error" as const,
-            error: `Destroyed but vault save failed: ${error.message}`,
-            root_status: "destroyed" as const,
-            child_errors: [] as ChildErrorDto[],
-          }));
+          .map((file) => {
+            const result = results.find(
+              (candidate) => candidate.target_id === file.id
+            );
+            return {
+              ...file,
+              status: "error" as const,
+              error: `Destroyed but vault save failed: ${error.message}`,
+              root_status: "destroyed" as const,
+              write_check: result?.write_check,
+              child_errors: [] as ChildErrorDto[],
+            };
+          });
         // The destroyed roots' kind entries were dropped above; restore them
         // so `targetKindsRef` and the visible model stay in agreement when
         // the rollback triggers the next snapshot.
@@ -713,10 +723,10 @@ export function ShredProvider({ children }: { children: ReactNode }) {
     <ShredContext.Provider
       value={{
         files,
-        algorithmIndex,
+        deletionMethod,
+        writeCheck,
         isShredding,
         logEntries,
-        algorithms,
         progress,
         vaultLoaded,
         vaultPin,
@@ -724,11 +734,11 @@ export function ShredProvider({ children }: { children: ReactNode }) {
         addFiles,
         removeFile,
         clearFiles,
-        setAlgorithmIndex,
+        setDeletionMethod,
+        setWriteCheck,
         setIsShredding,
         addLogEntry,
         clearLog,
-        setAlgorithms,
         setProgress,
         updateFileStatus,
         setVaultPin,
