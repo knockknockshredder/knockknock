@@ -2,7 +2,13 @@
 
 use crate::browser;
 use crate::browser::types::*;
-use crate::shredder::types::ShredReport;
+use crate::shredder::cancel::CancellationToken;
+use crate::shredder::journal::JournalStore;
+use crate::shredder::logging::LogObfuscation;
+use crate::shredder::progress::TauriProgressReporter;
+use crate::shredder::root_execution::types::{ExecuteRootRequest, ExecuteRootsRequest, TargetKind};
+use crate::shredder::traits::ProgressReporter;
+use crate::shredder::types::DeletionPolicy;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -20,45 +26,150 @@ pub async fn detect_browsers() -> Result<Vec<DetectedBrowser>, String> {
     Ok(result)
 }
 
+/// Tauri command wrapper around `shred_browser_core` (M8/M10-backend):
+/// browser cleanup now feeds candidates into the secure root execution
+/// pipeline (`execute_roots_core`) with the policy taken from the request.
 #[tauri::command]
 pub async fn shred_browser_data(
     app: AppHandle,
     request: BrowserShredRequest,
-) -> Result<ShredReport, String> {
-    use crate::shredder::algorithms::all_algorithms;
-    use crate::shredder::logging::LogObfuscation;
-    use crate::shredder::progress::TauriProgressReporter;
-
+) -> Result<crate::shredder::root_execution::types::BatchRootResult, String> {
     eprintln!(
         "[shred_browser_data] called for browser={}, profile={}",
         request.browser_name, request.profile_path
     );
 
+    let cancel = crate::shredder::cancel::get_global_token().ok_or_else(|| {
+        "No active shred operation; call begin_shred_operation before shredding browser data."
+            .to_string()
+    })?;
+
+    let progress: Arc<dyn ProgressReporter> =
+        Arc::new(TauriProgressReporter::new(app, LogObfuscation::None));
+    let journal = JournalStore::portable().map_err(|error| error.to_string())?;
+
+    tokio::task::spawn_blocking(move || shred_browser_core(request, progress, &cancel, &journal))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// Lightweight running-state check for already-known browsers/profiles.
+///
+/// No installed-browser discovery and no profile enumeration: only the
+/// provided profile paths are inspected, using the same lock-file logic as
+/// the destructive gate. A browser is reported running when any of its
+/// known profiles is currently running. An uninspectable profile, unsupported
+/// browser, or unknown browser ID is reported as `Unknown`, never as closed.
+pub(crate) fn browser_running_states(
+    requests: &[BrowserRunningCheck],
+) -> Vec<BrowserRunningState> {
+    let mut states = Vec::with_capacity(requests.len());
+    for request in requests {
+        let mut state = BrowserRunningStatus::Closed;
+        for profile_path in &request.profile_paths {
+            let profile_state = browser::paths::browser_running_state(
+                &request.browser_id,
+                std::path::Path::new(profile_path),
+            );
+            state = match (state, profile_state) {
+                (_, BrowserRunningStatus::Running) | (BrowserRunningStatus::Running, _) => {
+                    BrowserRunningStatus::Running
+                }
+                (_, BrowserRunningStatus::Unknown) | (BrowserRunningStatus::Unknown, _) => {
+                    BrowserRunningStatus::Unknown
+                }
+                _ => BrowserRunningStatus::Closed,
+            };
+            if state == BrowserRunningStatus::Running {
+                break;
+            }
+        }
+        if request.profile_paths.is_empty() {
+            state = BrowserRunningStatus::Unknown;
+        }
+        states.push(BrowserRunningState {
+            browser_id: request.browser_id.clone(),
+            state,
+        });
+    }
+    states
+}
+
+#[tauri::command]
+pub async fn check_browser_running_states(
+    requests: Vec<BrowserRunningCheck>,
+) -> Result<Vec<BrowserRunningState>, String> {
+    Ok(tokio::task::spawn_blocking(move || browser_running_states(&requests))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?)
+}
+
+/// Command core without the `AppHandle` (testable without a Tauri runtime).
+///
+/// Pipeline (Task 3.3):
+/// 1. profile exists AND is a real directory, not a filesystem link;
+/// 2. fresh running-browser lock check — fail-closed, no override;
+/// 3. collect candidates (Result-propagating, no-follow — M9);
+/// 4. feed candidates into `execute_roots_core` as File roots with the
+///    request's `DeletionPolicy`;
+/// 5. return the structured `BatchRootResult`.
+pub(crate) fn shred_browser_core(
+    request: BrowserShredRequest,
+    progress: Arc<dyn ProgressReporter>,
+    cancel: &CancellationToken,
+    journal: &JournalStore,
+) -> Result<crate::shredder::root_execution::types::BatchRootResult, String> {
     let profile_path = PathBuf::from(&request.profile_path);
-    if !profile_path.exists() {
+
+    // 1. The profile must exist and be a real directory. A profile path that
+    // is a filesystem link (Unix symlink / Windows reparse point) would let
+    // cleanup escape the selected profile — refuse it (M9).
+    let profile_metadata = std::fs::symlink_metadata(&profile_path).map_err(|error| {
+        format!(
+            "Profile path does not exist or cannot be inspected: {} ({error})",
+            request.profile_path
+        )
+    })?;
+    if browser::paths::is_link_metadata(&profile_metadata) {
+        return Err("Profile path is a filesystem link; cleanup is blocked".to_string());
+    }
+    if !profile_metadata.is_dir() {
         return Err(format!(
-            "Profile path does not exist: {}",
+            "Profile path is not a directory: {}",
             request.profile_path
         ));
     }
 
-    // Safety: refuse to shred browser data while the browser is running
-    // unless the user has explicitly acknowledged the warning.
-    if check_browser_lock_file(&profile_path) && !request.explicit_consent {
-        return Err(format!(
-            "Browser {} is currently running. Close it first or acknowledge the warning.",
-            request.browser_name
-        ));
+    // 2. Safety gate: refuse to shred browser data while the browser is
+    // running. There is no override — the destructive DELETE confirmation
+    // is consent to destructive deletion, not consent to deleting browser
+    // data while the browser is running. The check is fail-closed: if the
+    // running state cannot be inspected reliably, cleanup is blocked too.
+    match browser::paths::browser_running_state(&request.browser_id, &profile_path) {
+        BrowserRunningStatus::Closed => {}
+        BrowserRunningStatus::Running => {
+            return Err(format!(
+                "Browser {} is currently running. Close it before deleting browser data.",
+                request.browser_name
+            ));
+        }
+        BrowserRunningStatus::Unknown => {
+            return Err(format!(
+                "Could not confirm that {} is closed. Browser data deletion is unavailable.",
+                request.browser_name
+            ));
+        }
     }
 
-    // Collect files to shred based on selected data types
+    // 3. Collect files to shred based on selected data types. Collection
+    // failures are surfaced, never silently swallowed (M9).
     let mut files_to_shred = Vec::new();
-
     for data_type in &request.data_types {
-        let files = collect_browser_data_files(&profile_path, data_type);
-        files_to_shred.extend(files);
+        match collect_browser_data_files(&profile_path, data_type, &mut files_to_shred) {
+            Ok(()) => {}
+            Err(error) => return browser_collection_error_result(&request, error),
+        }
     }
-
     if files_to_shred.is_empty() {
         return Err("No browser data files found to shred".to_string());
     }
@@ -68,62 +179,52 @@ pub async fn shred_browser_data(
         files_to_shred.len()
     );
 
-    // Use the SAME algorithm settings as file shredding
-    let algorithms = all_algorithms();
-    let algorithm = algorithms
-        .get(request.algorithm_index)
-        .ok_or_else(|| format!("Invalid algorithm index: {}", request.algorithm_index))?
-        .clone();
-
-    if request.passes > algorithm.max_passes() {
-        return Err(format!(
-            "Passes {} exceeds maximum {}",
-            request.passes,
-            algorithm.max_passes()
-        ));
-    }
-
-    let progress: Arc<dyn crate::shredder::traits::ProgressReporter> =
-        Arc::new(TauriProgressReporter::new(app, LogObfuscation::None));
-
-    let report = tokio::task::spawn_blocking(move || {
-        // Browser profile data is plain files inside the profile directory;
-        // shortcuts are not expected there and we never want to follow them
-        // (a stray .lnk in a profile should not drag in user files outside it).
-        crate::shredder::shred_files(
-            files_to_shred,
-            algorithm,
-            request.passes,
-            request.pattern,
-            request.verification_level,
-            progress,
-        )
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?;
-
-    eprintln!(
-        "[shred_browser_data] complete: {} successful, {} failed",
-        report.successful, report.failed
-    );
-
-    Ok(report)
+    // 4. Secure root execution with the request's policy. Each candidate is
+    // an independent File root (the batch layer owns per-file lifecycles,
+    // journaling, and rename/unlink through the trusted adapters).
+    let roots = files_to_shred
+        .iter()
+        .enumerate()
+        .map(|(index, path)| ExecuteRootRequest {
+            target_id: format!("browser-{index}"),
+            path: path.to_string_lossy().into_owned(),
+            kind: TargetKind::File,
+        })
+        .collect();
+    let policy = DeletionPolicy {
+        method: request.method,
+        write_check: request.write_check,
+    };
+    Ok(crate::commands::shred::execute_roots_core(
+        ExecuteRootsRequest { roots },
+        policy,
+        progress,
+        cancel,
+        journal,
+    ))
 }
 
-/// Collect files for a specific browser data type
+/// Collect files for a specific browser data type into `files`.
+///
+/// Returns a fixed-path inspection failure separately so the command can
+/// preserve its structured context over IPC. Other collection failures remain
+/// command errors. Collection skips filesystem-link/reparse entries it directly
+/// inspects and rejects linked profile roots. Before mutation, collected
+/// candidates go through the secure handle-relative root executor, which
+/// enforces component-level no-follow confinement.
 fn collect_browser_data_files(
     profile_path: &std::path::Path,
     data_type: &BrowserDataType,
-) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-
+    files: &mut Vec<PathBuf>,
+) -> Result<(), BrowserCollectionError> {
     match data_type {
         BrowserDataType::Cache => {
             let cache_dirs = ["Cache", "cache2", "Code Cache", "GPUCache", "OfflineCache"];
             for dir in &cache_dirs {
                 let cache_path = profile_path.join(dir);
-                if cache_path.exists() {
-                    collect_files_recursive(&cache_path, &mut files);
+                if is_dir_nofollow(&cache_path).map_err(BrowserCollectionError::fixed_path)? {
+                    collect_files_recursive_nofollow(&cache_path, files)
+                        .map_err(BrowserCollectionError::other)?;
                 }
             }
         }
@@ -137,7 +238,7 @@ fn collect_browser_data_files(
             ];
             for name in &cookie_files {
                 let path = profile_path.join(name);
-                if path.exists() && path.is_file() {
+                if is_regular_file_nofollow(&path).map_err(BrowserCollectionError::fixed_path)? {
                     files.push(path);
                 }
             }
@@ -153,7 +254,7 @@ fn collect_browser_data_files(
             ];
             for name in &history_files {
                 let path = profile_path.join(name);
-                if path.exists() && path.is_file() {
+                if is_regular_file_nofollow(&path).map_err(BrowserCollectionError::fixed_path)? {
                     files.push(path);
                 }
             }
@@ -168,84 +269,863 @@ fn collect_browser_data_files(
             ];
             for name in &password_files {
                 let path = profile_path.join(name);
-                if path.exists() && path.is_file() {
+                if is_regular_file_nofollow(&path).map_err(BrowserCollectionError::fixed_path)? {
                     files.push(path);
                 }
             }
         }
         BrowserDataType::Extensions => {
             let ext_path = profile_path.join("Extensions");
-            if ext_path.exists() {
-                collect_files_recursive(&ext_path, &mut files);
+            if is_dir_nofollow(&ext_path).map_err(BrowserCollectionError::fixed_path)? {
+                collect_files_recursive_nofollow(&ext_path, files)
+                    .map_err(BrowserCollectionError::other)?;
             }
         }
         BrowserDataType::Profile => {
             // Shred entire profile (except Extensions which are re-downloadable)
-            collect_files_recursive_excluding(profile_path, &mut files, &["Extensions"]);
+            collect_files_recursive_excluding_nofollow(profile_path, files, &["Extensions"])
+                .map_err(BrowserCollectionError::other)?;
         }
     }
 
-    files
+    Ok(())
 }
 
-/// Recursively collect all files from a directory
-fn collect_files_recursive(dir: &std::path::Path, files: &mut Vec<PathBuf>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
+enum BrowserCollectionError {
+    FixedPath { path: PathBuf, detail: String },
+    Other(crate::shredder::ShredError),
+}
+
+impl BrowserCollectionError {
+    fn fixed_path(error: crate::shredder::ShredError) -> Self {
+        match error {
+            crate::shredder::ShredError::BrowserCollectionFailed { path, detail } => {
+                Self::FixedPath { path, detail }
+            }
+            error => Self::Other(error),
+        }
+    }
+
+    fn other(error: crate::shredder::ShredError) -> Self {
+        Self::Other(error)
+    }
+
+    fn into_shred_error(self) -> crate::shredder::ShredError {
+        match self {
+            Self::FixedPath { path, detail } => {
+                crate::shredder::ShredError::BrowserCollectionFailed { path, detail }
+            }
+            Self::Other(error) => error,
+        }
+    }
+}
+
+fn browser_collection_error_result(
+    request: &BrowserShredRequest,
+    error: BrowserCollectionError,
+) -> Result<crate::shredder::root_execution::types::BatchRootResult, String> {
+    match error {
+        BrowserCollectionError::FixedPath { path, detail } => {
+            Ok(failed_browser_profile_result(request, path, detail))
+        }
+        error => Err(error.into_shred_error().to_string()),
+    }
+}
+
+fn failed_browser_profile_result(
+    request: &BrowserShredRequest,
+    path: PathBuf,
+    detail: String,
+) -> crate::shredder::root_execution::types::BatchRootResult {
+    crate::shredder::root_execution::types::BatchRootResult {
+        roots: vec![crate::shredder::root_execution::types::RootResultDto {
+            target_id: "browser-profile".to_string(),
+            requested_path: request.profile_path.clone(),
+            kind: TargetKind::Directory,
+            status: crate::shredder::root_execution::types::RootStatus::Failed,
+            root_removed: false,
+            files_destroyed: 0,
+            directories_removed: 0,
+            bytes_shredded: 0,
+            write_check: crate::shredder::types::WriteCheckOutcome::NotRun,
+            errors: vec![crate::shredder::root_execution::types::ChildErrorDto {
+                path: path.to_string_lossy().into_owned(),
+                stage: crate::shredder::root_execution::types::ExecutionStage::Preflight,
+                error_type: "browser_collection_failed".to_string(),
+                message: format!(
+                    "browser data collection failed at {}: {detail}",
+                    path.display()
+                ),
+                actionable: "Fix the target validation errors and retry".to_string(),
+            }],
+        }],
+    }
+}
+
+/// Non-followed existence check for directory starts: the path exists,
+/// is a real directory, and is not a filesystem link.
+fn is_dir_nofollow(path: &std::path::Path) -> Result<bool, crate::shredder::ShredError> {
+    let Some(metadata) = fixed_metadata_from_result(path, std::fs::symlink_metadata(path))? else {
+        return Ok(false);
     };
+    if browser::paths::is_link_metadata(&metadata) {
+        return Ok(false);
+    }
+    Ok(metadata.is_dir())
+}
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() {
-            files.push(path);
-        } else if path.is_dir() {
-            collect_files_recursive(&path, files);
-        }
+/// Non-followed regular-file check for the fixed file-name patterns
+/// (Cookies/History/Passwords). A symlink pointing at a real file is NOT a
+/// collection candidate (M9).
+fn is_regular_file_nofollow(path: &std::path::Path) -> Result<bool, crate::shredder::ShredError> {
+    let Some(metadata) = fixed_metadata_from_result(path, std::fs::symlink_metadata(path))? else {
+        return Ok(false);
+    };
+    if browser::paths::is_link_metadata(&metadata) {
+        return Ok(false);
+    }
+    Ok(metadata.file_type().is_file())
+}
+
+fn fixed_metadata_from_result(
+    path: &std::path::Path,
+    metadata_result: Result<std::fs::Metadata, std::io::Error>,
+) -> Result<Option<std::fs::Metadata>, crate::shredder::ShredError> {
+    match metadata_result {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(collection_error(path, &error)),
     }
 }
 
-/// Recursively collect files excluding specified directories
-fn collect_files_recursive_excluding(
+/// Recursively collect regular files from a directory without following any
+/// filesystem link (M9).
+///
+/// Rules:
+/// - `read_dir` failure, `DirEntry` error, or metadata inspection failure →
+///   `Err(BrowserCollectionFailed)` — never a silent skip;
+/// - Unix symlink / Windows reparse point (junction) → skipped, never
+///   recursed into;
+/// - normal nested directory → recursed into;
+/// - regular file → collected.
+/// A root that does not exist yields an empty collection (callers gate the
+/// root with `is_dir_nofollow`).
+fn collect_files_recursive_nofollow(
+    dir: &std::path::Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), crate::shredder::ShredError> {
+    let root_metadata = match std::fs::symlink_metadata(dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(collection_error(dir, &error));
+        }
+    };
+    if browser::paths::is_link_metadata(&root_metadata) {
+        return Ok(());
+    }
+    if !root_metadata.is_dir() {
+        return Ok(());
+    }
+
+    let entries = std::fs::read_dir(dir).map_err(|error| collection_error(dir, &error))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| collection_error(dir, &error))?;
+        let path = entry.path();
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            // Entry vanished between enumeration and inspection — a benign
+            // race with the browser; treat it as absent.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(collection_error(&path, &error)),
+        };
+        if browser::paths::is_link_metadata(&metadata) {
+            continue;
+        }
+        if metadata.file_type().is_file() {
+            files.push(path);
+        } else if metadata.is_dir() {
+            collect_files_recursive_nofollow(&path, files)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Recursively collect files excluding specified directories, with the same
+/// no-follow and fail-loud rules as `collect_files_recursive_nofollow`.
+fn collect_files_recursive_excluding_nofollow(
     dir: &std::path::Path,
     files: &mut Vec<PathBuf>,
     exclude_dirs: &[&str],
-) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
+) -> Result<(), crate::shredder::ShredError> {
+    let root_metadata = match std::fs::symlink_metadata(dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(collection_error(dir, &error));
+        }
     };
+    if browser::paths::is_link_metadata(&root_metadata) {
+        return Ok(());
+    }
+    if !root_metadata.is_dir() {
+        return Ok(());
+    }
 
-    for entry in entries.flatten() {
+    let entries = std::fs::read_dir(dir).map_err(|error| collection_error(dir, &error))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| collection_error(dir, &error))?;
         let path = entry.path();
-        if path.is_file() {
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(collection_error(&path, &error)),
+        };
+        if browser::paths::is_link_metadata(&metadata) {
+            continue;
+        }
+        if metadata.file_type().is_file() {
             files.push(path);
-        } else if path.is_dir() {
+        } else if metadata.is_dir() {
             let dir_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
             if !exclude_dirs.contains(&dir_name.as_str()) {
-                collect_files_recursive_excluding(&path, files, exclude_dirs);
+                collect_files_recursive_excluding_nofollow(&path, files, exclude_dirs)?;
             }
         }
     }
+
+    Ok(())
 }
 
-/// Detect if a browser is running by looking for lock files in the profile directory.
-/// Chromium-based browsers create `SingletonLock` (or `lock`) while running;
-/// Firefox creates `.parentlock`. Returns true if any lock file is present.
-fn check_browser_lock_file(profile_path: &std::path::Path) -> bool {
-    const LOCK_FILES: &[&str] = &["SingletonLock", "lock", ".parentlock"];
-    for lock_name in LOCK_FILES {
-        if profile_path.join(lock_name).exists() {
-            return true;
+fn collection_error(path: &std::path::Path, error: &std::io::Error) -> crate::shredder::ShredError {
+    crate::shredder::ShredError::BrowserCollectionFailed {
+        path: path.to_path_buf(),
+        detail: error.to_string(),
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shredder::cancel::CancellationToken;
+    use crate::shredder::journal::JournalStore;
+    use crate::shredder::progress::NoopProgressReporter;
+    use crate::shredder::root_execution::types::{BatchRootResult, ExecutionStage, RootStatus};
+    use crate::shredder::types::{DeletionMethod, WriteCheck};
+    use std::path::Path;
+
+    /// Collects the given data types from `profile_path` into a sorted list.
+    fn collect(
+        profile_path: &Path,
+        data_types: &[BrowserDataType],
+    ) -> Result<Vec<PathBuf>, String> {
+        let mut files = Vec::new();
+        for data_type in data_types {
+            collect_browser_data_files(profile_path, data_type, &mut files)
+                .map_err(|error| error.into_shred_error().to_string())?;
+        }
+        files.sort();
+        Ok(files)
+    }
+
+    /// A fake browser profile on disk. `link_dir` (when created) points at
+    /// `outside`, which is intentionally NOT part of the profile.
+    fn profile_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let tmp = tempfile::tempdir().expect("temporary directory");
+        let profile = tmp.path().join("profile");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&profile).expect("create profile");
+        std::fs::create_dir_all(&outside).expect("create outside dir");
+        (tmp, profile, outside)
+    }
+
+    fn write(path: &Path, content: &[u8]) {
+        std::fs::write(path, content).expect("write fixture");
+    }
+
+    #[test]
+    fn collector_processes_nested_directories_and_skips_extensions() {
+        let (tmp, profile, _outside) = profile_fixture();
+        write(&profile.join("real.txt"), b"real");
+        std::fs::create_dir_all(profile.join("sub/deeper")).expect("create nested dirs");
+        write(&profile.join("sub/nested.txt"), b"nested");
+        write(&profile.join("sub/deeper/deep.txt"), b"deep");
+        std::fs::create_dir(profile.join("Extensions")).expect("create extensions dir");
+        write(&profile.join("Extensions/extension.txt"), b"extension");
+
+        let files = collect(&profile, &[BrowserDataType::Profile]).expect("collect");
+
+        let expected = [
+            profile.join("real.txt"),
+            profile.join("sub/deeper/deep.txt"),
+            profile.join("sub/nested.txt"),
+        ];
+        let mut expected = expected.to_vec();
+        expected.sort();
+        assert_eq!(files, expected);
+        drop(tmp);
+    }
+
+    #[test]
+    fn fixed_candidate_missing_is_absent() {
+        let (tmp, profile, _outside) = profile_fixture();
+        let missing = profile.join("Cookies");
+
+        assert!(
+            !is_regular_file_nofollow(&missing).expect("inspect missing fixed candidate"),
+            "a missing fixed candidate must be treated as absent"
+        );
+        drop(tmp);
+    }
+
+    #[test]
+    fn fixed_candidates_with_real_type_mismatches_are_absent() {
+        let (tmp, profile, _outside) = profile_fixture();
+        let directory = profile.join("Cookies");
+        let file = profile.join("Cache");
+        std::fs::create_dir(&directory).expect("create fixed-name directory");
+        write(&file, b"not a directory");
+
+        assert!(
+            !is_regular_file_nofollow(&directory).expect("inspect fixed-name directory"),
+            "a directory is not a fixed file candidate"
+        );
+        assert!(
+            !is_dir_nofollow(&file).expect("inspect fixed-name file"),
+            "a file is not a fixed directory candidate"
+        );
+        drop(tmp);
+    }
+
+    #[test]
+    fn fixed_candidate_metadata_error_is_propagated() {
+        let (tmp, profile, _outside) = profile_fixture();
+        let readable_candidate = profile.join("Cookies");
+        let path = profile.join("cookies.sqlite");
+        write(&readable_candidate, b"readable cookies");
+
+        let error = fixed_metadata_from_result(
+            &path,
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected metadata failure",
+            )),
+        )
+        .expect_err("metadata failure must surface");
+
+        let result = browser_collection_error_result(
+            &request(&profile, vec![BrowserDataType::Cookies]),
+            BrowserCollectionError::fixed_path(error),
+        )
+        .expect("fixed-path error must be reported in-band");
+
+        assert_eq!(result.roots.len(), 1);
+        let root = &result.roots[0];
+        assert_eq!(root.status, RootStatus::Failed);
+        assert_eq!(root.requested_path, profile.to_string_lossy());
+        assert_eq!(root.errors.len(), 1);
+        let collection_error = &root.errors[0];
+        assert_eq!(collection_error.path, path.to_string_lossy());
+        assert_eq!(collection_error.stage, ExecutionStage::Preflight);
+        assert_eq!(collection_error.error_type, "browser_collection_failed");
+        assert!(collection_error
+            .message
+            .contains("injected metadata failure"));
+        assert_eq!(
+            std::fs::read(&readable_candidate).expect("readable candidate remains"),
+            b"readable cookies"
+        );
+        drop(tmp);
+    }
+
+    /// M9: a symlink directory inside the profile must not be traversed, and
+    /// its target content must not be collected.
+    #[cfg(unix)]
+    #[test]
+    fn collector_never_escapes_profile_through_link_dirs() {
+        let (tmp, profile, outside) = profile_fixture();
+        write(&profile.join("real.txt"), b"real");
+        write(&outside.join("secret.txt"), b"secret payload");
+        std::os::unix::fs::symlink(&outside, profile.join("link_dir")).expect("create symlink");
+
+        let files = collect(&profile, &[BrowserDataType::Profile]).expect("collect");
+
+        assert_eq!(files, vec![profile.join("real.txt")]);
+        assert!(
+            profile.join("link_dir").symlink_metadata().is_ok(),
+            "the link itself must remain"
+        );
+        assert_eq!(
+            std::fs::read(&outside.join("secret.txt")).expect("outside readable"),
+            b"secret payload",
+            "the link target must be untouched"
+        );
+        drop(tmp);
+    }
+
+    /// M9: an unreadable directory inside the profile surfaces as a
+    /// `BrowserCollectionFailed` error — never a silent skip.
+    #[cfg(unix)]
+    #[test]
+    fn collector_surfaces_inspection_errors_instead_of_skipping() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (tmp, profile, _outside) = profile_fixture();
+        write(&profile.join("readable.txt"), b"readable");
+        let locked = profile.join("locked");
+        std::fs::create_dir(&locked).expect("create locked dir");
+        write(&locked.join("inside.txt"), b"inside");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod 0");
+
+        let error = collect(&profile, &[BrowserDataType::Profile]).expect_err("must fail");
+        assert!(
+            error.contains("browser data collection failed"),
+            "unexpected error: {error}"
+        );
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+            .expect("restore permissions");
+        drop(tmp);
+    }
+
+    /// M9: fixed file-name patterns (Cookies/History/Passwords) require a
+    /// non-followed regular file — a symlink pointing at a real file is not
+    /// a candidate.
+    #[cfg(unix)]
+    #[test]
+    fn collector_requires_non_link_regular_files_for_pattern_names() {
+        let (tmp, profile, outside) = profile_fixture();
+        write(&profile.join("Cookies"), b"real cookies");
+        std::fs::create_dir_all(profile.join("Network")).expect("create network dir");
+        write(&profile.join("Network/Cookies"), b"network cookies");
+        write(&outside.join("secret.txt"), b"secret payload");
+        let linked_candidate = profile.join("cookies.txt");
+        std::os::unix::fs::symlink(&outside.join("secret.txt"), &linked_candidate)
+            .expect("create file symlink");
+
+        assert!(
+            !is_regular_file_nofollow(&linked_candidate).expect("inspect fixed-name symlink"),
+            "the fixed-name symlink must be skipped"
+        );
+
+        let files = collect(&profile, &[BrowserDataType::Cookies]).expect("collect");
+
+        let mut expected = vec![profile.join("Cookies"), profile.join("Network/Cookies")];
+        expected.sort();
+        assert_eq!(
+            files, expected,
+            "the cookies.txt symlink must not be collected"
+        );
+        assert_eq!(
+            std::fs::read(&outside.join("secret.txt")).expect("outside readable"),
+            b"secret payload",
+            "the link target must be untouched"
+        );
+        drop(tmp);
+    }
+
+    /// M9: profile discovery must not accept symlink/reparse profile
+    /// directories.
+    #[cfg(unix)]
+    #[test]
+    fn find_browser_profiles_skips_link_profiles() {
+        use crate::browser::paths::find_browser_profiles;
+
+        let tmp = tempfile::tempdir().expect("temporary directory");
+        let base = tmp.path().join("user-data");
+        std::fs::create_dir_all(base.join("Default")).expect("create default profile");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).expect("create elsewhere dir");
+        std::os::unix::fs::symlink(&elsewhere, base.join("Profile 1")).expect("create symlink");
+
+        let chrome = crate::browser::paths::browser_by_id("chrome")
+            .expect("Chrome browser configuration");
+        let profiles = find_browser_profiles(&base, chrome);
+
+        assert_eq!(profiles, vec![base.join("Default")]);
+        drop(tmp);
+    }
+
+    // --- Command-level destructive tests (Task 3.3) ---------------------
+    //
+    // Root execution confines roots to the home directory, so destructive
+    // fixtures live under a `.knockknock-browser-*` child of the real home
+    // directory and are removed on drop (same pattern as commands/shred.rs).
+
+    struct TempHome(PathBuf);
+
+    impl TempHome {
+        fn profile(&self) -> PathBuf {
+            self.0.join("profile")
         }
     }
-    if let Some(parent) = profile_path.parent() {
-        if parent.join("SingletonLock").exists() {
-            return true;
+
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    false
+
+    fn temp_home() -> TempHome {
+        let home = std::env::home_dir().expect("home directory");
+        let unique = format!(
+            ".knockknock-browser-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        );
+        let unique_dir = home.join(unique);
+        std::fs::create_dir_all(unique_dir.join("profile")).expect("create fixture profile");
+        TempHome(unique_dir)
+    }
+
+    fn request(profile_path: &Path, data_types: Vec<BrowserDataType>) -> BrowserShredRequest {
+        BrowserShredRequest {
+            browser_id: "chrome".to_string(),
+            browser_name: "TestBrowser".to_string(),
+            profile_path: profile_path.to_string_lossy().into_owned(),
+            data_types,
+            method: DeletionMethod::Automatic,
+            write_check: WriteCheck::Off,
+        }
+    }
+
+    fn run(request: BrowserShredRequest) -> Result<BatchRootResult, String> {
+        let journal_directory = tempfile::tempdir().expect("temporary journal directory");
+        let journal = JournalStore::at(journal_directory.path().join("journal.json"));
+        shred_browser_core(
+            request,
+            Arc::new(NoopProgressReporter),
+            &CancellationToken::new(),
+            &journal,
+        )
+    }
+
+    #[test]
+    fn browser_cleanup_processes_nested_directories() {
+        let home = temp_home();
+        let profile = home.profile();
+        write(&profile.join("top.txt"), b"top");
+        std::fs::create_dir_all(profile.join("a/b")).expect("create nested dirs");
+        write(&profile.join("a/b/deep.txt"), b"deep");
+
+        let result =
+            run(request(&profile, vec![BrowserDataType::Profile])).expect("cleanup must succeed");
+
+        assert_eq!(result.roots.len(), 2);
+        assert!(result
+            .roots
+            .iter()
+            .all(|root| root.status == RootStatus::Destroyed));
+        assert!(
+            !profile.join("top.txt").exists(),
+            "top file must be removed"
+        );
+        assert!(
+            !profile.join("a/b/deep.txt").exists(),
+            "nested file must be removed"
+        );
+    }
+
+    #[test]
+    fn browser_non_target_neighbor_unchanged() {
+        let home = temp_home();
+        let profile = home.profile();
+        write(&profile.join("Cookies"), b"cookies payload");
+        write(&profile.join("neighbor.txt"), b"neighbor payload");
+
+        let result =
+            run(request(&profile, vec![BrowserDataType::Cookies])).expect("cleanup must succeed");
+
+        assert_eq!(result.roots.len(), 1);
+        assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+        assert!(!profile.join("Cookies").exists(), "Cookies must be removed");
+        assert_eq!(
+            std::fs::read(profile.join("neighbor.txt")).expect("neighbor readable"),
+            b"neighbor payload",
+            "non-target neighbor must be byte-for-byte unchanged"
+        );
+    }
+
+    /// M9: cleanup must never escape the profile through a link directory —
+    /// the link is skipped, the outside target is byte-for-byte untouched.
+    #[cfg(unix)]
+    #[test]
+    fn browser_cleanup_never_escapes_profile_through_links() {
+        let home = temp_home();
+        let profile = home.profile();
+        let outside = home.0.join("outside");
+        std::fs::create_dir(&outside).expect("create outside dir");
+        write(&profile.join("real.txt"), b"real payload");
+        write(&outside.join("secret.txt"), b"secret payload");
+        std::os::unix::fs::symlink(&outside, profile.join("link_dir")).expect("create symlink");
+
+        let result =
+            run(request(&profile, vec![BrowserDataType::Profile])).expect("cleanup must succeed");
+
+        assert_eq!(result.roots.len(), 1, "the link must not be collected");
+        assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+        assert!(
+            !profile.join("real.txt").exists(),
+            "real file must be removed"
+        );
+        assert!(
+            profile.join("link_dir").symlink_metadata().is_ok(),
+            "the link itself must remain"
+        );
+        assert_eq!(
+            std::fs::read(&outside.join("secret.txt")).expect("outside readable"),
+            b"secret payload",
+            "the link target must be byte-for-byte unchanged"
+        );
+    }
+
+    /// M9: an unreadable profile subdirectory fails the cleanup with an
+    /// explicit error instead of silently shredding the readable subset.
+    #[cfg(unix)]
+    #[test]
+    fn browser_inspection_error_is_surfaced_not_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = temp_home();
+        let profile = home.profile();
+        write(&profile.join("readable.txt"), b"readable");
+        let locked = profile.join("locked");
+        std::fs::create_dir(&locked).expect("create locked dir");
+        write(&locked.join("inside.txt"), b"inside");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod 0");
+
+        let error =
+            run(request(&profile, vec![BrowserDataType::Profile])).expect_err("cleanup must fail");
+        assert!(
+            error.contains("browser data collection failed"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            profile.join("readable.txt").exists(),
+            "nothing may be shredded when collection fails"
+        );
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+            .expect("restore permissions");
+    }
+
+    /// M9: a profile path that is itself a link is rejected before any
+    /// collection or mutation.
+    #[cfg(unix)]
+    #[test]
+    fn browser_profile_that_is_a_link_is_rejected() {
+        let home = temp_home();
+        let real_profile = home.profile();
+        write(&real_profile.join("data.txt"), b"data");
+        let link_profile = home.0.join("profile-link");
+        std::os::unix::fs::symlink(&real_profile, &link_profile).expect("create symlink");
+
+        let error = run(request(&link_profile, vec![BrowserDataType::Profile]))
+            .expect_err("cleanup must be blocked");
+        assert!(
+            error.contains("filesystem link; cleanup is blocked"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            std::fs::read(real_profile.join("data.txt")).expect("data readable"),
+            b"data",
+            "nothing may be shredded through the link"
+        );
+    }
+
+    /// Running-state safety gate: a running browser (lock file present)
+    /// always blocks cleanup. There is no request flag or consent field
+    /// that bypasses this — the DELETE confirmation never means "delete
+    /// browser data while the browser is running".
+    #[test]
+    fn browser_running_always_blocks_cleanup() {
+        let home = temp_home();
+        let profile = home.profile();
+        write(&profile.join("Cookies"), b"cookies payload");
+        #[cfg(not(windows))]
+        write(&profile.join("SingletonLock"), b"lock");
+        #[cfg(windows)]
+        let _lock = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .share_mode(0)
+                .open(profile.join("lockfile"))
+                .expect("create exclusive Chromium lock")
+        };
+
+        let error =
+            run(request(&profile, vec![BrowserDataType::Cookies])).expect_err("must reject");
+        assert!(
+            error.contains("is currently running"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            profile.join("Cookies").exists(),
+            "nothing may be shredded while the browser is running"
+        );
+    }
+
+    #[test]
+    fn tor_parent_lock_reports_running() {
+        let (tmp, profile, _outside) = profile_fixture();
+        #[cfg(not(windows))]
+        write(&profile.join("parent.lock"), b"lock");
+        #[cfg(windows)]
+        let _lock = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .share_mode(0)
+                .open(profile.join("parent.lock"))
+                .expect("create exclusive Tor lock")
+        };
+
+        let states = browser_running_states(&[BrowserRunningCheck {
+            browser_id: "tor browser".to_string(),
+            profile_paths: vec![profile.to_string_lossy().into_owned()],
+        }]);
+
+        assert_eq!(
+            states[0].state,
+            BrowserRunningStatus::Running,
+            "Tor parent.lock must block cleanup"
+        );
+        drop(tmp);
+    }
+
+    /// The lightweight running-state check inspects only the provided
+    /// profile paths (no installed-browser discovery): a known profile with
+    /// a lock file reports running, a known profile without one reports
+    /// closed, and a missing profile is unknown rather than closed.
+    #[test]
+    fn running_state_check_uses_known_profile_paths() {
+        let (tmp, running_profile, _outside) = profile_fixture();
+        let closed_profile = tmp.path().join("closed-profile");
+        std::fs::create_dir_all(&closed_profile).expect("create closed profile");
+        #[cfg(not(windows))]
+        write(&running_profile.join("SingletonLock"), b"lock");
+        #[cfg(windows)]
+        let _lock = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .share_mode(0)
+                .open(running_profile.join("lockfile"))
+                .expect("create exclusive Chromium lock")
+        };
+
+        let states = browser_running_states(&[
+            BrowserRunningCheck {
+                browser_id: "chrome".to_string(),
+                profile_paths: vec![running_profile.to_string_lossy().into_owned()],
+            },
+            BrowserRunningCheck {
+                browser_id: "firefox".to_string(),
+                profile_paths: vec![closed_profile.to_string_lossy().into_owned()],
+            },
+            BrowserRunningCheck {
+                browser_id: "edge".to_string(),
+                profile_paths: vec![tmp.path().join("missing").to_string_lossy().into_owned()],
+            },
+        ]);
+
+        assert_eq!(states.len(), 3);
+        assert_eq!(states[0].browser_id, "chrome");
+        assert_eq!(
+            states[0].state,
+            BrowserRunningStatus::Running,
+            "chrome must be running (lock present)"
+        );
+        assert_eq!(states[1].browser_id, "firefox");
+        assert_eq!(states[1].state, BrowserRunningStatus::Closed);
+        assert_eq!(states[2].browser_id, "edge");
+        assert_eq!(states[2].state, BrowserRunningStatus::Unknown);
+        drop(tmp);
+    }
+
+    /// Fail-closed: a profile path that cannot be inspected as a browser
+    /// profile (it is not a real directory) is unknown — never a silent
+    /// "not running" that would weaken the safety gate.
+    #[test]
+    fn running_state_check_fails_loud_on_uninspectable_path() {
+        let (tmp, _profile, _outside) = profile_fixture();
+        let file_path = tmp.path().join("not-a-profile");
+        write(&file_path, b"i am a file, not a profile");
+
+        let states = browser_running_states(&[BrowserRunningCheck {
+            browser_id: "chrome".to_string(),
+            profile_paths: vec![file_path.to_string_lossy().into_owned()],
+        }]);
+        assert_eq!(states[0].state, BrowserRunningStatus::Unknown);
+        drop(tmp);
+    }
+
+    /// Fail-closed: a profile path that is a filesystem link is unknown,
+    /// never a silent "not running".
+    #[cfg(unix)]
+    #[test]
+    fn running_state_check_rejects_link_profile() {
+        let (tmp, profile, outside) = profile_fixture();
+        std::os::unix::fs::symlink(&outside, profile.join("linked")).expect("create symlink");
+
+        let states = browser_running_states(&[BrowserRunningCheck {
+            browser_id: "chrome".to_string(),
+            profile_paths: vec![profile.join("linked").to_string_lossy().into_owned()],
+        }]);
+        assert_eq!(states[0].state, BrowserRunningStatus::Unknown);
+        drop(tmp);
+    }
+
+    /// The running-state gate must not block a profile that is actually
+    /// closed: the lightweight check reports it closed and cleanup proceeds.
+    #[test]
+    fn closed_browser_profile_remains_eligible_for_cleanup() {
+        let home = temp_home();
+        let profile = home.profile();
+        write(&profile.join("Cookies"), b"cookies payload");
+
+        assert_eq!(
+            browser::paths::browser_running_state("chrome", &profile),
+            BrowserRunningStatus::Closed,
+            "profile without a lock file must report closed"
+        );
+
+        let result = run(request(&profile, vec![BrowserDataType::Cookies]))
+            .expect("cleanup must succeed for a closed browser");
+        assert_eq!(result.roots.len(), 1);
+        assert_eq!(result.roots[0].status, RootStatus::Destroyed);
+        assert!(!profile.join("Cookies").exists(), "Cookies must be removed");
+    }
+
+    #[test]
+    fn unknown_browser_identifier_blocks_cleanup() {
+        let home = temp_home();
+        let profile = home.profile();
+        write(&profile.join("Cookies"), b"cookies payload");
+        let mut browser_request = request(&profile, vec![BrowserDataType::Cookies]);
+        browser_request.browser_id = "unrecognized-browser".to_string();
+
+        let error = run(browser_request).expect_err("unknown browser must be blocked");
+
+        assert!(
+            error.contains("Could not confirm that TestBrowser is closed"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            profile.join("Cookies").exists(),
+            "nothing may be shredded for an unrecognized browser"
+        );
+    }
 }

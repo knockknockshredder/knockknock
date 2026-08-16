@@ -5,32 +5,8 @@ import { useShred } from "@/contexts/ShredContext";
 import { DriveGroupHeader } from "./DriveGroupHeader";
 import { FileListItem } from "./FileListItem";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { getDriveKey } from "@/lib/utils";
 import type { DriveInfo, ShredFile } from "@/types";
-
-/**
- * Extract the platform-appropriate drive / mount key from a path.
- *
- * Windows: drive letter (`"C:"`, `"D:"`) or `"Network"` for UNC paths.
- * Unix: first path segment (`"/Users"`, `"/var"`), or `"/"` for the
- * filesystem root.
- *
- * This intentionally mirrors the keys produced by the Rust
- * `detect_drive_info` so the frontend can match a `DriveInfo` to the
- * correct group without a separate lookup table.
- */
-function getDriveKey(path: string): string {
-  if (path.length >= 2 && path[1] === ":") {
-    return path.substring(0, 2).toUpperCase();
-  }
-  if (path.startsWith("\\\\") || path.startsWith("//")) {
-    return "Network";
-  }
-  if (path.startsWith("/")) {
-    const parts = path.split("/").filter(Boolean);
-    return parts.length > 0 ? `/${parts[0]}` : "/";
-  }
-  return "Unknown";
-}
 
 interface Group {
   key: string;

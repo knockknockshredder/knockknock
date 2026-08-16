@@ -1,18 +1,24 @@
 // src/components/browser/BrowserCard.tsx
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ProfileItem } from "./ProfileItem";
+import { Warning } from "@phosphor-icons/react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { DetectedBrowser } from "@/types";
 import {
   siGooglechrome,
   siFirefoxbrowser,
   siBrave,
   siOpera,
-  siSafari,
   siVivaldi,
   siTorbrowser,
 } from "simple-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faEdge, faInternetExplorer } from "@fortawesome/free-brands-svg-icons";
+import { faEdge } from "@fortawesome/free-brands-svg-icons";
 
 // Simple Icons SVG path extraction
 function siPath(icon: { svg: string }): string {
@@ -26,18 +32,16 @@ const SI_BROWSERS: Record<string, string> = {
   Firefox: siPath(siFirefoxbrowser),
   Brave: siPath(siBrave),
   Opera: siPath(siOpera),
-  Safari: siPath(siSafari),
   Vivaldi: siPath(siVivaldi),
   "Tor Browser": siPath(siTorbrowser),
 };
 
 function BrowserIcon({ name }: { name: string }) {
   // FontAwesome icons — wrapped in 20px container, scaled up to strip padding
-  if (name === "Edge" || name === "Internet Explorer") {
-    const icon = name === "Edge" ? faEdge : faInternetExplorer;
+  if (name === "Edge") {
     return (
       <div className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden">
-        <FontAwesomeIcon icon={icon} className="h-[25px] w-[25px] text-white" />
+        <FontAwesomeIcon icon={faEdge} className="h-[25px] w-[25px] text-white" />
       </div>
     );
   }
@@ -72,10 +76,28 @@ export function BrowserCard({ browser }: { browser: DetectedBrowser }) {
         <div className="flex items-center gap-2">
           <BrowserIcon name={browser.name} />
           <CardTitle className="font-mono text-sm">{browser.name}</CardTitle>
+          {browser.runningState !== "closed" && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger
+                  aria-label={
+                    browser.runningState === "running"
+                      ? `${browser.name} is currently running`
+                      : `Could not confirm that ${browser.name} is closed`
+                  }
+                  className="inline-flex items-center text-amber-500"
+                >
+                  <Warning size={14} weight="fill" />
+                </TooltipTrigger>
+                <TooltipContent>
+                  {browser.runningState === "running"
+                    ? `${browser.name} is currently running. Close it before deleting browser data.`
+                    : `KnockKnock could not confirm that ${browser.name} is closed. Browser data deletion is unavailable.`}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
         </div>
-        {browser.isRunning && (
-          <p className="text-xs text-amber-500">Browser is currently running</p>
-        )}
       </CardHeader>
       <CardContent>
         {browser.profiles.map((profile) => (

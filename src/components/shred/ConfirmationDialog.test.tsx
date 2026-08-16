@@ -7,13 +7,16 @@ function renderDialog(overrides: {
   fileCount?: number;
   folderCount?: number;
   profileCount?: number;
-  runningBrowsers?: string[];
+  blockedSelectedBrowsers?: Array<{
+    name: string;
+    state: "closed" | "running" | "unknown";
+  }>;
 } = {}) {
   const {
     fileCount = 0,
     folderCount = 0,
     profileCount = 0,
-    runningBrowsers = [],
+    blockedSelectedBrowsers = [],
   } = overrides;
   return render(
     <ConfirmationDialog
@@ -22,7 +25,7 @@ function renderDialog(overrides: {
       fileCount={fileCount}
       folderCount={folderCount}
       profileCount={profileCount}
-      runningBrowsers={runningBrowsers}
+      blockedSelectedBrowsers={blockedSelectedBrowsers}
       onConfirm={vi.fn()}
     />
   );
@@ -38,21 +41,21 @@ describe("ConfirmationDialog counts", () => {
   it("states files and folders together", () => {
     renderDialog({ fileCount: 2, folderCount: 1 });
     expect(descriptionText()).toBe(
-      "This will overwrite and delete 2 files and 1 folder. KnockKnock has no Undo. File and folder targets will be processed using the currently selected overwrite and verification settings."
+      "This will overwrite and delete 2 files and 1 folder. KnockKnock has no Undo. File and folder targets will be processed using the currently selected deletion method and write-check settings."
     );
   });
 
   it("states files, folders, and browser profiles together", () => {
     renderDialog({ fileCount: 2, folderCount: 1, profileCount: 3 });
     expect(descriptionText()).toBe(
-      "This will overwrite and delete 2 files and 1 folder and selected local data from 3 browser profiles. KnockKnock has no Undo. File and folder targets will be processed using the currently selected overwrite and verification settings."
+      "This will overwrite and delete 2 files and 1 folder and selected local data from 3 browser profiles. KnockKnock has no Undo. File and folder targets will be processed using the currently selected deletion method and write-check settings."
     );
   });
 
   it("states a folder-only selection", () => {
     renderDialog({ folderCount: 1 });
     expect(descriptionText()).toBe(
-      "This will overwrite and delete 1 folder. KnockKnock has no Undo. File and folder targets will be processed using the currently selected overwrite and verification settings."
+      "This will overwrite and delete 1 folder. KnockKnock has no Undo. File and folder targets will be processed using the currently selected deletion method and write-check settings."
     );
   });
 
@@ -68,15 +71,38 @@ describe("ConfirmationDialog counts", () => {
     expect(descriptionText()).toBe("Nothing selected.");
   });
 
-  it("keeps the running-browser warning and DELETE action", () => {
-    renderDialog({ fileCount: 1, runningBrowsers: ["Chrome"] });
+  it("warns about a selected running browser and disables DELETE", () => {
+    renderDialog({
+      fileCount: 1,
+      blockedSelectedBrowsers: [{ name: "Chrome", state: "running" }],
+    });
     expect(
       screen.getByText(
-        "Chrome is currently running. Close it before continuing; otherwise cleanup may fail or the browser may recreate local data."
+        "Chrome is currently running. Close it before deleting browser data."
       )
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "DELETE" })
+    ).toBeDisabled();
+  });
+
+  it("keeps DELETE enabled when no selected browser is running", () => {
+    renderDialog({ fileCount: 1, blockedSelectedBrowsers: [] });
+    expect(
+      screen.getByRole("button", { name: "DELETE" })
+    ).toBeEnabled();
+  });
+
+  it("blocks DELETE when a selected browser state is unknown", () => {
+    renderDialog({
+      fileCount: 1,
+      blockedSelectedBrowsers: [{ name: "Unknown Browser", state: "unknown" }],
+    });
+    expect(
+      screen.getByText(
+        "KnockKnock could not confirm that Unknown Browser is closed. Browser data deletion is unavailable."
+      )
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "DELETE" })).toBeDisabled();
   });
 });

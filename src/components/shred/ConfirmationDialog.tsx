@@ -1,5 +1,6 @@
 // src/components/shred/ConfirmationDialog.tsx
 import type { ReactNode } from "react";
+import type { BrowserRunningStatus } from "@/types";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,7 +18,10 @@ interface ConfirmationDialogProps {
   fileCount: number;
   folderCount: number;
   profileCount: number;
-  runningBrowsers: string[];
+  /** Selected browsers whose cached state is not reliably closed. DELETE is
+   * disabled while non-empty; the fresh backend pre-delete check remains the
+   * final decision either way. */
+  blockedSelectedBrowsers: Array<{ name: string; state: BrowserRunningStatus }>;
   onConfirm: () => void;
 }
 
@@ -27,7 +31,7 @@ export function ConfirmationDialog({
   fileCount,
   folderCount,
   profileCount,
-  runningBrowsers,
+  blockedSelectedBrowsers,
   onConfirm,
 }: ConfirmationDialogProps) {
   const hasFiles = fileCount > 0;
@@ -81,7 +85,7 @@ export function ConfirmationDialog({
           <> and selected local data from {profilePart}</>
         ) : null}
         . KnockKnock has no Undo. File and folder targets will be processed
-        using the currently selected overwrite and verification settings.
+        using the currently selected deletion method and write-check settings.
       </>
     );
   } else if (hasProfiles) {
@@ -104,9 +108,15 @@ export function ConfirmationDialog({
             Confirm Deletion
           </AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
-          {runningBrowsers.length > 0 && (
-            <p className="mt-2 text-amber-500 font-mono text-xs">
-              {runningBrowsers.join(", ")} {runningBrowsers.length === 1 ? "is" : "are"} currently running. Close {runningBrowsers.length === 1 ? "it" : "them"} before continuing; otherwise cleanup may fail or the browser may recreate local data.
+          {blockedSelectedBrowsers.length > 0 && (
+            <p className="mt-2 text-amber-500 font-mono text-xs" role="alert">
+              {blockedSelectedBrowsers
+                .map(({ name, state }) =>
+                  state === "running"
+                    ? `${name} is currently running. Close it before deleting browser data.`
+                    : `KnockKnock could not confirm that ${name} is closed. Browser data deletion is unavailable.`
+                )
+                .join(" ")}
             </p>
           )}
         </AlertDialogHeader>
@@ -117,6 +127,7 @@ export function ConfirmationDialog({
               onConfirm();
               onOpenChange(false);
             }}
+            disabled={blockedSelectedBrowsers.length > 0}
             className="bg-red-600 text-white hover:bg-red-700"
           >
             DELETE

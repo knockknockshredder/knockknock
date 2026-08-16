@@ -134,6 +134,60 @@ describe("FileListItem", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders the write-check warning for a root whose final write check failed", () => {
+    const childError: ChildErrorDto = {
+      path: "C:\\a.txt",
+      stage: "verify",
+      error_type: "write_check_failed",
+      message: "write check did not pass",
+      actionable: "Inspect the target before retrying",
+    };
+    render(
+      <FileListItem
+        file={makeFile({
+          status: "error",
+          error: "failed: verify: write check did not pass",
+          root_status: "failed",
+          write_check: "failed",
+          child_errors: [childError],
+        })}
+      />
+    );
+
+    expect(
+      screen.getByText(
+        "Deletion completed, but the requested write check did not pass."
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Inspect the target before retrying")
+    ).toBeInTheDocument();
+    // Rendered as a warning, not as a red execution-error line.
+    expect(
+      screen.queryByText(/failed: write check did not pass/)
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the write-check warning for a destroyed root with a failed outcome", () => {
+    render(
+      <FileListItem
+        file={makeFile({
+          status: "error",
+          error: "Destroyed but vault save failed: boom",
+          root_status: "destroyed",
+          write_check: "failed",
+          child_errors: [],
+        })}
+      />
+    );
+
+    expect(
+      screen.getByText(
+        "Deletion completed, but the requested write check did not pass."
+      )
+    ).toBeInTheDocument();
+  });
+
   it("shows the generic error when a retained root has no child errors", () => {
     render(
       <FileListItem

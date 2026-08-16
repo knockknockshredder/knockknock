@@ -21,7 +21,9 @@ A complete storage-device sanitization procedure operates at a different layer a
 * physical destruction;
 * organizational verification procedures.
 
-Do not interpret a KnockKnock overwrite mode as certification that an entire device has been sanitized.
+Do not interpret a KnockKnock deletion method as certification that an entire device has been sanitized.
+
+> KnockKnock's design is informed by modern media-sanitization guidance, including NIST SP 800-88 Rev. 2, but KnockKnock performs file-level local deletion and does not claim whole-device sanitization certification or compliance.
 
 ## HDDs
 
@@ -63,11 +65,13 @@ Multi-pass overwrite should therefore not be interpreted as increasing physical-
 
 ### TRIM / deallocation
 
-Where supported, KnockKnock may request TRIM/deallocation as part of its SSD handling.
+KnockKnock performs no mount-wide TRIM/fstrim and issues no storage-deallocation requests.
+
+Storage deallocation, where the operating system performs it, is independent of KnockKnock.
 
 TRIM is a request through the storage stack indicating that logical blocks are no longer needed.
 
-It does not provide KnockKnock with proof that:
+It does not provide proof that:
 
 * the flash was erased immediately;
 * every historical copy disappeared;
@@ -166,21 +170,25 @@ Data may also exist in:
 * application caches;
 * browser-managed recovery/session data.
 
-A running browser may recreate or rewrite profile data during cleanup.
+KnockKnock blocks browser cleanup while the browser is detected as running by its configured platform policy, with no override. If running state cannot be detected — for example a browser variant that holds no recognizable lock file — cleanup is blocked rather than proceeding on an uncertain state.
 
 Close the browser before performing browser cleanup whenever possible.
 
 KnockKnock's browser cleanup affects selected local data only. It does not represent deletion from an online account or another device.
 
+Browser cleanup is confined to the selected profile: collection skips filesystem-link/reparse entries that it directly inspects, and a profile path that is itself a filesystem link is rejected. Inspection failures are surfaced rather than silently skipped. Collected candidates pass through the secure handle-relative root executor, which enforces component-level no-follow confinement before mutation. On Linux, profile paths are resolved from the home directory or from `XDG_CONFIG_HOME`; execution roots must be inside the home directory, so profile paths resolved from an `XDG_CONFIG_HOME` outside the home directory are blocked by root confinement.
+
+Firefox discovery currently supports conventional default profile roots only. Parsing `profiles.ini` for custom profiles and supporting Microsoft Store/MSIX Firefox profile locations are explicitly deferred; those locations are not currently discovered or cleaned by KnockKnock.
+
 ## Hard Links
 
 Multiple directory entries may refer to the same underlying file data.
 
-KnockKnock detects hard-link situations and warns the user.
+KnockKnock blocks hard-linked targets: a file with more than one directory entry (link count greater than one) is refused at preflight, and the already-open handle is rechecked before any destructive write. There is no override.
 
-Hard links complicate the meaning of path-level deletion because deleting one directory entry does not necessarily remove every other entry referring to the same underlying object.
+Deleting one directory entry does not remove every other entry referring to the same underlying object, so shredding one name of a multi-link file would silently leave the data reachable through the sibling.
 
-Review hard-link warnings carefully.
+A residual race remains: another process could create an additional hard link after the final check but before deletion. No user-space application can fully close that window without filesystem cooperation.
 
 ## Symlinks, Junctions, Reparse Points, and Shortcuts
 
@@ -210,23 +218,23 @@ Virtual disks, storage pools, RAID systems, encrypted containers, filesystem ove
 
 Media-type detection describes what KnockKnock can determine from the operating system; it is not a hardware attestation.
 
-## Verification
+## Write Check
 
-KnockKnock's verification modes read back data from the logical file range exposed by the operating system.
+KnockKnock's write check reads back data from the final logical file range after the last overwrite pass. It runs once, at the end of the overwrite.
 
-### None
+### Off
 
-No read-back verification.
+No read-back after the overwrite.
 
-### Sample
+### Spot
 
-Checks selected portions of the logical file range.
+Checks the final overwrite at deterministic distributed locations; files up to 64 KiB are checked in full.
 
 ### Full
 
-Reads back the complete logical file range.
+Reads back the complete final logical file range.
 
-A successful verification means that KnockKnock could read back the expected data through the same logical storage interface.
+A successful write check means that KnockKnock could read back the expected data through the same logical storage interface after the overwrite. It checks the write result, not physical-media erasure.
 
 It does **not** prove that:
 
@@ -241,11 +249,13 @@ It does **not** prove that:
 
 Cancellation is not Undo.
 
+Cancellation is stop-after-current-file: the file currently being processed completes its destructive lifecycle — including its cleanup — and no further file or target is started. On large files, the stop takes effect only after the current file completes, so cancellation latency can be significant.
+
 Once a target has begun destructive processing:
 
 * some data may already have been overwritten;
-* cleanup may continue;
-* the target may still be renamed, truncated, and deleted.
+* the file in progress finishes its destructive lifecycle (rename and deletion included);
+* files not yet started are not touched.
 
 KnockKnock cannot restore already processed data.
 

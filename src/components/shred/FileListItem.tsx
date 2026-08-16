@@ -55,6 +55,14 @@ export function FileListItem({ file }: { file: ShredFile }) {
 
   const firstChildError = file.child_errors?.[0];
 
+  // A root whose final write check did not pass is not a clean success: it
+  // was removed, so this is a warning — never a plain "Success" and never an
+  // execution error (M3).
+  const writeCheckFailed =
+    hasExecutionResult &&
+    (file.write_check === "failed" ||
+      file.child_errors?.some((error) => error.stage === "verify"));
+
   return (
     <div className="flex items-center gap-3 border-b border-border bg-surface px-4 py-2 hover:bg-elevated">
       <StatusIcon status={file.status} />
@@ -96,7 +104,18 @@ export function FileListItem({ file }: { file: ShredFile }) {
           )}
           {file.status === "error" &&
             hasExecutionResult &&
-            (firstChildError ? (
+            (writeCheckFailed ? (
+              <>
+                <p className="truncate text-xs font-medium text-amber-500">
+                  Deletion completed, but the requested write check did not pass.
+                </p>
+                {firstChildError?.actionable && (
+                  <p className="truncate text-xs text-amber-500/80">
+                    {firstChildError.actionable}
+                  </p>
+                )}
+              </>
+            ) : firstChildError ? (
               <>
                 <p className="truncate text-xs text-red-500">
                   <span className="font-medium uppercase">{file.root_status}</span>
